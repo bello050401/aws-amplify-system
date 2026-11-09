@@ -1,6 +1,7 @@
+import {persistInventoryWithCategories} from "./categoryPersistence";
 import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
-import { unwrapList, unwrapWrite } from "@/lib/amplify/listAll";
+import { unwrapList } from "@/lib/amplify/listAll";
 
 /**
  * 第六ラウンドP0-5: 真のサーバー側cursor pagination用GSI
@@ -76,13 +77,7 @@ export async function advanceListingPartitionBackfill(nextToken: string | null):
     // 不具合を再現してしまう(このファイル冒頭コメント参照)。
     // 書き込みの失敗も握りつぶさない。失敗を数えないと backfilled が
     // 実際より多く出て、やはり「完了した」ことになってしまう。
-    unwrapWrite(
-      await serverDataClient.models.Inventory.update(
-        { id: item.id, listingPartition: "ACTIVE", listUpdatedAt: item.updatedAt },
-        inventoryAuthMode,
-      ),
-      "listingPartitionのバックフィル",
-    );
+    await persistInventoryWithCategories({id:item.id,listingPartition:"ACTIVE",listUpdatedAt:item.updatedAt},item.updatedAt,{history:{source:"検索索引の補完"}});
     backfilled++;
   }
 

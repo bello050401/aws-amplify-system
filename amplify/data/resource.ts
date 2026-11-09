@@ -432,6 +432,8 @@ const schema = a.schema({
       name: a.string().required(),
       categoryId: a.string(), // → Category.id, application-level reference (see note above)
       categoryIds: a.string().array(), // Read projection of InventoryCategory; updated with its links.
+      revision: a.integer(), // Monotonically increasing business edit revision; legacy rows start at zero.
+      editHistory: a.json(), // At most two reversible field deltas and a cursor; no complete record copies.
       outboundArrivalBatchId: a.string(), // Dispatched stock awaiting manual arrival confirmation.
       outboundBatchId: a.string(), // Reservation until the outbound document is sent or cancelled.
       statusId: a.string(), // → StatusMaster.id
@@ -581,8 +583,10 @@ const schema = a.schema({
       index("listingPartition").sortKeys(["listUpdatedAt"]),
     ])
     .authorization((allow) => [
-      allow.group("ADMIN"), // full CRUD, including hard delete (完全削除)
-      allow.group("EDITOR").to(["read", "create", "update", "delete"]), // Staff may delete inventory after explicit confirmation (2026-10-17).
+      // Writes use the authorized server transaction boundary, so categories,
+      // revisions and reversible history cannot be bypassed by a raw mutation.
+      allow.group("ADMIN").to(["read"]),
+      allow.group("EDITOR").to(["read"]),
       allow.group("VIEWER").to(["read"]),
     ]),
 

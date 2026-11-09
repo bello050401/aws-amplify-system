@@ -1,3 +1,4 @@
+import {sendInventoryHistoryCommand} from "@/lib/inventory/historyTransaction";
 import {GetCommand,QueryCommand,PutCommand,UpdateCommand,TransactWriteCommand,type DynamoDBDocumentClient} from '@aws-sdk/lib-dynamodb';
 import {createInventoryPersistence} from '../inventory/categoryPersistenceCore';
 import {inventoryCategoryIds} from '../inventory/categories';
@@ -45,7 +46,7 @@ export function createYahooPaymentReconciler(db:DynamoDBDocumentClient,candidate
   const changes={categoryId:after[0],categoryIds:after,saleEndDate:paymentDate(payment.paidAt!),updatedAt:now,listUpdatedAt:now,updatedBy:'ヤフオク入金確認'};
   const values={...changes,customFields:stringifyCustomFields({...withHumanEdits(item,changes,custom,custom??undefined),__belloYahooPayment:{...marker,state:'APPLIED',paidAt:payment.paidAt,appliedAt:now}})};
   const entries=Object.entries(values),historyId='YAHOO_PAYMENT:'+candidate.id;
-  await db.send(new TransactWriteCommand({TransactItems:[
+  await sendInventoryHistoryCommand(db, new TransactWriteCommand({TransactItems:[
    {Update:{TableName:table('Inventory'),Key:{id:item.id},UpdateExpression:'SET '+entries.map((_,i)=>`#f${i}=:v${i}`).join(','),ConditionExpression:'updatedAt=:version AND quantity=:quantity AND attribute_not_exists(outboundBatchId) AND attribute_not_exists(outboundArrivalBatchId)',ExpressionAttributeNames:Object.fromEntries(entries.map(([k],i)=>['#f'+i,k])),ExpressionAttributeValues:{...Object.fromEntries(entries.map(([,v],i)=>[':v'+i,v])),':version':item.updatedAt,':quantity':queue.soldQuantity}}},
    ...persistence.categoryLinkChanges(item.id,before,after,now),
    {Put:{TableName:table('InventoryHistory'),Item:{id:historyId,inventoryId:item.id,fieldName:'ヤフオク入金確認',oldValue:JSON.stringify({categoryIds:before,saleEndDate:null}),newValue:JSON.stringify({categoryIds:after,saleEndDate:changes.saleEndDate,candidateId:candidate.id,auctionId:queue.auctionId,mailReceivedAt:payment.paidAt}),changedBy:'ヤフオク入金確認',changedAt:now,createdAt:now,updatedAt:now,__typename:'InventoryHistory'},ConditionExpression:'attribute_not_exists(id)'}},

@@ -49,6 +49,7 @@ const STRUCTURAL_FIELDS = [
   // 並び順(compareByUpdatedAtDesc)と作成日時の表示。
   "createdAt",
   "updatedAt",
+  "revision",
   "listUpdatedAt",
   // 論理削除の除外。
   "deletedAt",

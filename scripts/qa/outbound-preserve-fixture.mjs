@@ -12,8 +12,9 @@ import * as split from '../../lib/outbound/splitInventory.ts';
 import * as categories from '../../lib/inventory/categories.ts';
 import * as custom from '../../lib/inventory/customFieldsCodec.ts';
 import * as human from '../../lib/inventory/humanEdits.ts';
+import * as transactionRetry from '../../lib/outbound/transactionRetry.ts';
 
-export function createOutboundFixture({templateType='KAWAGOE_V1',sender='EMAIL',locationId='office',database,onError=()=>{}}={}) {
+export function createOutboundFixture({templateType='KAWAGOE_V1',sender='EMAIL',locationId='office',database,realHistory=false,onError=()=>{}}={}) {
   const itemId='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',destinationId='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
   const tables=new Map(),effects={emails:[],copies:[],merges:0,mergeReads:0,categoryWrites:[],failEmail:false,failCompletion:false,failArrivalFor:null,failArrivalFinal:false,transactions:[]};
   const rows=model=>{if(!tables.has(model))tables.set(model,new Map());return tables.get(model);};
@@ -78,7 +79,7 @@ export function createOutboundFixture({templateType='KAWAGOE_V1',sender='EMAIL',
   }};
   const stubs={
     'server-only':{},'node:crypto':crypto,'@aws-sdk/lib-dynamodb':commands,
-    './transactionRetry':{sendOutboundTransaction:(db,c)=>db.send(c)},
+    './transactionRetry':realHistory?transactionRetry:{sendOutboundTransaction:(db,c)=>db.send(c)},
     '@/lib/inventory/categoryPersistence':{inventoryDdb:db,inventoryTable:n=>n,getInventoryRaw:async id=>(await db.send(new commands.GetCommand({TableName:'Inventory',Key:{id},ConsistentRead:true}))).Item,categoryLinkChanges:(id,before,after,now)=>{effects.categoryWrites.push({id,before,after});return [...before.filter(c=>!after.includes(c)).map(c=>({Delete:{TableName:'InventoryCategory',Key:{id:id+':'+c}}})),...after.map(c=>({Put:{TableName:'InventoryCategory',Item:{id:id+':'+c,inventoryId:id,categoryId:c,createdAt:now}}}))];}},
     '@/lib/inventory/categories':categories,'@/lib/inventory/humanEdits':human,'@/lib/inventory/customFieldsCodec':custom,
     '@/lib/inventory/inventoryPage':{clearInventoryCountCache(){}},'@/lib/mobile/inventoryThumbnails':{inventoryThumbnails:async items=>items.map(r=>({id:r.id,thumbnailUrl:null}))},

@@ -1,3 +1,4 @@
+import { InventorySelectionProvider } from "./InventorySelectionProvider";
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { getInventorySessionStatus } from "@/lib/amplify/requireInventoryUser";
@@ -44,7 +45,7 @@ export default async function ProtectedInventoryLayout({ children }: { children:
     // must share exactly one instance of this context (see that file's
     // own comment). children stays a Server Component tree; wrapping it
     // in this Client Component provider doesn't change that.
-    <UnsavedChangesProvider>
+    <UnsavedChangesProvider><InventorySelectionProvider editable={status.role!=="VIEWER"}>
       <div className="flex h-screen bg-white text-gray-900">
         <InventoryNavRail canIssueDocuments={status.role==="ADMIN"} />
         {/* Each page renders its own InventoryHeader (spec O/P/Q — see
@@ -55,9 +56,9 @@ export default async function ProtectedInventoryLayout({ children }: { children:
             幅専用のMobileBottomNav(固定・高さ約56px)の下に、ページ末尾
             のコンテンツが隠れないための余白 — `md:`以上ではrail側に
             戻るのでボトムナビ自体が無く、この余白も不要(md:pb-0)。 */}
-        <div className="flex min-w-0 flex-1 flex-col overflow-hidden pb-14 md:pb-0">{children}</div>
+        <div className="flex min-w-0 flex-1 flex-col overflow-hidden pb-[calc(3.5rem+var(--inventory-selection-space))] md:pb-[var(--inventory-selection-space)]">{children}</div>
         <MobileBottomNav canIssueDocuments={status.role==="ADMIN"} />
       </div>
-    </UnsavedChangesProvider>
+    </InventorySelectionProvider></UnsavedChangesProvider>
   );
 }

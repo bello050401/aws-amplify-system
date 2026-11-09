@@ -1,6 +1,6 @@
 import "server-only";
 import { cookies } from "next/headers";
-import { copy, getUrl, remove, uploadData } from "aws-amplify/storage/server";
+import { copy, getUrl, uploadData } from "aws-amplify/storage/server";
 import { runWithAmplifyServerContext } from "@/lib/amplify/serverUtils";
 import { generateThumbnailFromBytes, INVENTORY_IMAGE_CACHE_CONTROL } from "./thumbnail";
 import { newInventoryImageKey } from "./imageKeys";
@@ -198,14 +198,10 @@ export async function downloadAndImportInventoryImage(sourceUrl: string): Promis
  * after its seven-day observation period, including abandoned uploads.
  */
 export async function removeInventoryImage(path: string): Promise<void> {
-  try {
-    await runWithAmplifyServerContext({
-      nextServerContext: { cookies },
-      operation: (contextSpec) => remove(contextSpec, { path }),
-    });
-  } catch (err) {
-    console.error(`[removeInventoryImage] failed to delete "${path}":`, err);
-  }
+  // A saved image can still be referenced by either of the two reversible edits
+  // or by another product. The existing collector scans these references twice
+  // seven days apart before deleting immutable keys. No image is copied here.
+  void path;
 }
 
 /**

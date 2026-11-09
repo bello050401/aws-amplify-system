@@ -38,6 +38,7 @@ import {
 } from "@/lib/inventory/advancedSearch";
 import { resolveDisplayInventoryId } from "@/lib/inventory/inventoryId";
 import { ensureConversationTableName } from "./lib/resolveStagingTables";
+import {SEARCH_SCALAR_FIELDS} from '../lib/inventory/searchProjection';
 
 const REGION = process.env.AWS_REGION || "us-west-2";
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({ region: REGION }));
@@ -98,9 +99,11 @@ function stableJson(value: unknown): string {
   return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableJson(v)}`).join(",")}}`;
 }
 
-function compareByUpdatedAtDesc(a: { id: string; updatedAt: string }, b: { id: string; updatedAt: string }): number {
-  if (a.updatedAt !== b.updatedAt) return a.updatedAt < b.updatedAt ? 1 : -1;
-  return a.id < b.id ? 1 : -1;
+function compareByUpdatedAtDesc(a: RawItem & {id:string;updatedAt:string}, b: RawItem & {id:string;updatedAt:string}): number {
+  // The current published date contract uses the product update date; database
+  // maintenance timestamps do not move a product to the top of the list.
+  const time=(row:RawItem)=>Date.parse(typeof row.listUpdatedAt==='string'&&Number.isFinite(Date.parse(row.listUpdatedAt))?row.listUpdatedAt:String(row.updatedAt));
+  return time(b)-time(a)||String(b.sourceInventoryId??b.id).localeCompare(String(a.sourceInventoryId??a.id),'en',{numeric:true})||a.id.localeCompare(b.id);
 }
 
 /** 旧経路の再現: 非削除の在庫を全列読む。 */
@@ -136,7 +139,7 @@ async function main() {
   console.log(`[verify-inventory-search-fast] ${inventoryTable} (env経由: ${table})`);
 
   const t0 = Date.now();
-  const allRaw = await scanAllFullColumns(inventoryTable);
+  const allRaw = (await scanAllFullColumns(inventoryTable)).filter(row=>row.listingPartition!=='MERGED');
   const allRecords = allRaw.map(toReferenceRecord);
   const rawById = new Map(allRaw.map((r) => [r.id as string, r]));
   console.log(`[verify-inventory-search-fast] 参照用の全列走査: ${allRecords.length}件 / ${Date.now() - t0}ms\n`);
@@ -273,7 +276,8 @@ async function main() {
     const f = c.input.filters ?? {};
     const referenceFiltered = allRecords
       .filter((r) => {
-        if (f.categoryIds && f.categoryIds.length > 0 && !f.categoryIds.includes(r.categoryId as string)) return false;
+        const categories=Array.isArray(r.categoryIds)?r.categoryIds:[r.categoryId];
+        if (f.categoryIds && f.categoryIds.length > 0 && !categories.some(id=>f.categoryIds!.includes(String(id)))) return false;
         if (f.locationId && r.locationId !== f.locationId) return false;
         if (f.statusId && r.statusId !== f.statusId) return false;
         if (c.input.advanced && !evaluateQuery(r, c.input.advanced.query, c.input.advanced.fieldsByKey)) return false;
@@ -294,9 +298,11 @@ async function main() {
     const actualIds = fast.rawItems.map((r) => r.id as string);
     const sameTotal = fast.total === referenceFiltered.length;
     const sameIds = JSON.stringify(actualIds) === JSON.stringify(expectedIds);
-    // 行の中身: BatchGetItem で取り直した項目が全列走査のものと一致するか。
+    // Every display/search field must match the original full row. Internal
+    // histories and unused payloads are intentionally not sent to the list.
+    const expectedProjection=(row:RawItem|undefined)=>Object.fromEntries([...new Set([...SEARCH_SCALAR_FIELDS,'images','listingPartition'])].flatMap(key=>row&&Object.hasOwn(row,key)?[[key,row[key]]]:[]));
     const contentMismatch = fast.rawItems.find(
-      (item) => stableJson(item) !== stableJson(rawById.get(item.id as string)),
+      (item) => stableJson(item) !== stableJson(expectedProjection(rawById.get(item.id as string))),
     );
 
     check(

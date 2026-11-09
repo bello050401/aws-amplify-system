@@ -1,4 +1,5 @@
 import {NOT_MERGED_FILTER} from "@/lib/outbound/mergeInventory";
+import {MAX_SEARCH_CANDIDATES as SEARCH_MAX_SCAN_ITEMS} from './searchBounds';
 import {inventoryCategoryIds,categoryFilter} from "./categories";
 import { inventoryComparator, type InventorySort } from "./searchSort";
 import {compareInventoryDateDesc} from './productDates';
@@ -70,6 +71,7 @@ export interface InventoryListRow {
   imageCount: number;
   createdAt: string;
   updatedAt: string;
+  revision?: number;
   /** Business update date; updatedAt is still used for optimistic editing. */
   listUpdatedAt?: string | null;
   // Additional optional list columns (統合改善指示書 §10) — the same
@@ -137,6 +139,7 @@ export function toListRow(item: InventoryModel): InventoryListRow {
     })(),
     createdAt: item.createdAt,
     updatedAt: item.updatedAt,
+    revision: item.revision ?? 0,
     listUpdatedAt: item.listUpdatedAt ?? null,
     barcode: item.barcode ?? null,
     saleCommission: item.saleCommission ?? null,
@@ -281,7 +284,7 @@ function toSearchRecord(item: InventoryModel): InventorySearchRecord {
 }
 
 /** 想定規模を大きく超える件数の走査を続けて詰まらせないための安全弁(lib/inventory/inventoryImport.tsのIMPORT_MAX_ROWSと同じ考え方)。将来的にもっと大きな規模が必要になった場合はOpenSearch等の全文検索基盤への切り替えが必要になる旨を完了報告に明記する。 */
-export const SEARCH_MAX_SCAN_ITEMS = 20000;
+export {MAX_SEARCH_CANDIDATES as SEARCH_MAX_SCAN_ITEMS} from './searchBounds';
 
 /**
  * BELLO統合改修 master指示書(2026-08-29統合改修版) §9: 一覧デフォルト
@@ -391,7 +394,7 @@ async function fetchAllInventoryRecords(extraConditions: Record<string, unknown>
       if (errors) throw new Error(`在庫データの取得に失敗しました: ${JSON.stringify(errors)}`);
       items.push(...data.map(toSearchRecord));
       nextToken = nt;
-      if (items.length >= SEARCH_MAX_SCAN_ITEMS) break;
+      if (items.length >= SEARCH_MAX_SCAN_ITEMS && nextToken) throw new Error('検索対象が処理上限を超えています。カテゴリなどの条件を追加してください。途中までの結果は表示していません。');
     } while (nextToken);
     return items;
   }

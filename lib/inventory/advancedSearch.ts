@@ -312,17 +312,33 @@ export function matchesQuickSearch(record: SearchableRecord, q: string): boolean
   return createQuickSearchMatcher(q)(record);
 }
 
+// Normalized keys belong to the lifetime of the source record. WeakMap does not
+// retain discarded catalogues, and exact source comparisons avoid stale keys if
+// a screen edits a record object in place. Never cache authorization or results.
+const quickSearchKeys = new WeakMap<SearchableRecord, {
+  name: string; sku: string; display: string;
+  normalizedName: string; normalizedSku: string; normalizedDisplay: string;
+}>();
+function keysForQuickSearch(record: SearchableRecord) {
+  const name = toStr(record.name), sku = toStr(record.sku), display = toStr(record.displayId);
+  const existing = quickSearchKeys.get(record);
+  if (existing?.name === name && existing.sku === sku && existing.display === display) return existing;
+  const keys = {name, sku, display, normalizedName: normalizeNameSearch(name), normalizedSku: searchText(sku), normalizedDisplay: searchText(display)};
+  quickSearchKeys.set(record, keys);
+  return keys;
+}
+
 /** Normalize the query once per search, not three times for every inventory row.
  * Keep each field separate so a match cannot cross an ID/name boundary. */
 export function createQuickSearchMatcher(q: string, nameOnly = false): (record: SearchableRecord) => boolean {
   const needle = searchText(q.trim());
   if (!needle) return () => true;
   const matchesName = createNameSearchMatcher(q);
-  return nameOnly
-    ? record => matchesName(normalizeNameSearch(toStr(record.name)))
-    : record => searchText(toStr(record.displayId)).includes(needle)
-      || searchText(toStr(record.sku)).includes(needle)
-      || matchesName(normalizeNameSearch(toStr(record.name)));
+  return record => {
+    const keys = keysForQuickSearch(record);
+    return (!nameOnly && (keys.normalizedDisplay.includes(needle) || keys.normalizedSku.includes(needle)))
+      || matchesName(keys.normalizedName);
+  };
 }
 
 /** Staff app's text box searches product names; code scanning uses a separate barcode condition. */

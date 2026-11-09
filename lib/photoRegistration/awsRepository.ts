@@ -1,3 +1,4 @@
+import {sendInventoryHistoryCommand} from "@/lib/inventory/historyTransaction";
 /**
  * 画像登録基盤 Phase 1 — DynamoDBアダプター (実行可能、未デプロイ)。
  *
@@ -414,8 +415,7 @@ export class DynamoPhotoRegistrationRepository implements PhotoRegistrationRepos
       ...batchStatusIndexKey("CREATED", now, batchId),
     };
     try {
-      await this.ddb.send(
-        new TransactWriteCommand({
+      await sendInventoryHistoryCommand(this.ddb, new TransactWriteCommand({
           TransactItems: [
             {
               Put: {
@@ -535,7 +535,7 @@ export class DynamoPhotoRegistrationRepository implements PhotoRegistrationRepos
     });
 
     try {
-      await this.ddb.send(new TransactWriteCommand({ TransactItems: transactItems }));
+      await sendInventoryHistoryCommand(this.ddb, new TransactWriteCommand({ TransactItems: transactItems }));
     } catch (error) {
       if (isConditionFailure(error)) throw conditionErrorFor(decision.conditions, "CONFLICT", "requestPhotoAssetUploads condition race");
       throw error;
@@ -553,8 +553,7 @@ export class DynamoPhotoRegistrationRepository implements PhotoRegistrationRepos
     const sk = await this.findAssetSk(batchId, decision.photoAssetId);
     if (!sk) throw new Error(`asset ${decision.photoAssetId} not found`);
     try {
-      await this.ddb.send(
-        new TransactWriteCommand({
+      await sendInventoryHistoryCommand(this.ddb, new TransactWriteCommand({
           TransactItems: [
             {
               Update: {
@@ -611,8 +610,7 @@ export class DynamoPhotoRegistrationRepository implements PhotoRegistrationRepos
     const now = this.now().toISOString();
 
     try {
-      await this.ddb.send(
-        new TransactWriteCommand({
+      await sendInventoryHistoryCommand(this.ddb, new TransactWriteCommand({
           TransactItems: [
             {
               Update: {
@@ -649,8 +647,7 @@ export class DynamoPhotoRegistrationRepository implements PhotoRegistrationRepos
     const batchCondition = decision.conditions.find((c) => c.target.startsWith("PhotoBatch#"));
     const inventoryCondition = decision.conditions.find((c) => c.target.startsWith("Inventory#"));
     try {
-      await this.ddb.send(
-        new TransactWriteCommand({
+      await sendInventoryHistoryCommand(this.ddb, new TransactWriteCommand({
           TransactItems: [
             {
               Update: {
@@ -698,8 +695,7 @@ export class DynamoPhotoRegistrationRepository implements PhotoRegistrationRepos
     const sk = await this.findAssetSk(batchId, decision.photoAssetId);
     if (!sk) throw new Error(`asset ${decision.photoAssetId} not found`);
     try {
-      await this.ddb.send(
-        new TransactWriteCommand({
+      await sendInventoryHistoryCommand(this.ddb, new TransactWriteCommand({
           TransactItems: [
             {
               Update: {
@@ -748,8 +744,7 @@ export class DynamoPhotoRegistrationRepository implements PhotoRegistrationRepos
     const sk = await this.findAssetSk(batchId, decision.photoAssetId);
     if (!sk) throw new Error(`asset ${decision.photoAssetId} not found`);
     try {
-      await this.ddb.send(
-        new TransactWriteCommand({
+      await sendInventoryHistoryCommand(this.ddb, new TransactWriteCommand({
           TransactItems: [
             {
               Update: {
@@ -825,7 +820,7 @@ export class DynamoPhotoRegistrationRepository implements PhotoRegistrationRepos
     }
 
     try {
-      await this.ddb.send(new TransactWriteCommand({ TransactItems: transactItems }));
+      await sendInventoryHistoryCommand(this.ddb, new TransactWriteCommand({ TransactItems: transactItems }));
     } catch (error) {
       if (isConditionFailure(error)) throw conditionErrorFor(decision.conditions, "CONFLICT", "setListingImageSelection condition race");
       throw error;

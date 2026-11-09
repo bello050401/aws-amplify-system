@@ -1,3 +1,4 @@
+import {persistInventoryWithCategories,deleteInventoryWithCategories} from "./categoryPersistence";
 import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { unwrapList, unwrapWrite } from "@/lib/amplify/listAll";
@@ -345,7 +346,7 @@ export async function mergeZaicoDuplicate(sourceInventoryId: string, canonicalIn
   const duplicateHasImages = Boolean(duplicateInv?.images && duplicateInv.images.length > 0);
   let imagesCopiedFromDuplicate = false;
   if (canonicalHasNoImages && duplicateHasImages && duplicateInv) {
-    await serverDataClient.models.Inventory.update({ id: canonical.id, images: duplicateInv.images, updatedBy: who ?? undefined }, inventoryAuthMode);
+    await persistInventoryWithCategories({ id: canonical.id, images: duplicateInv.images, updatedBy: who ?? undefined }, canonicalInv!.updatedAt, {history:{source:"在庫重複の整理"}});
     imagesCopiedFromDuplicate = true;
   }
 
@@ -369,10 +370,8 @@ export async function mergeZaicoDuplicate(sourceInventoryId: string, canonicalIn
     },
   ]);
 
-  const { errors: deleteErrors } = await serverDataClient.models.Inventory.delete({ id: duplicate.id }, inventoryAuthMode);
-  if (deleteErrors) {
-    throw new Error(`重複レコードの削除に失敗しました(関連データの付け替えは完了済みです): ${JSON.stringify(deleteErrors)}`);
-  }
+  if(!duplicateInv)throw Error('重複商品の最新状態を確認できません。');
+  await deleteInventoryWithCategories(duplicate.id,duplicateInv.updatedAt,who??'重複整理');
   // 在庫が1件減った。総件数のキャッシュを捨てる(PHASE 6)。
   clearInventoryCountCache();
 

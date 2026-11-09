@@ -1,3 +1,4 @@
+import {persistInventoryWithCategories} from "./categoryPersistence";
 import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { unwrapList } from "@/lib/amplify/listAll";
@@ -147,7 +148,7 @@ export async function advanceThumbnailBackfill(nextToken: string | null): Promis
       // Amplify自動updatedAtとは独立した明示フィールドなので、ここで
       // 触れない限り既存のlistUpdatedAt値がそのまま保たれ、バックフィル
       // によって一覧の並び順が乱れることはない。
-      await serverDataClient.models.Inventory.update({ id: item.id, images: updatedImages }, inventoryAuthMode);
+      await persistInventoryWithCategories({ id: item.id, images: updatedImages },item.updatedAt,{history:{source:"画像情報の補完"}});
     }
   }
 

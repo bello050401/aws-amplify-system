@@ -1,10 +1,11 @@
+import {sendInventoryHistoryCommand} from "@/lib/inventory/historyTransaction";
 import {createHash,randomUUID} from 'node:crypto';
 import {GetCommand,TransactWriteCommand,type DynamoDBDocumentClient} from '@aws-sdk/lib-dynamodb';
 import {createInventoryPersistence,type InventoryTransaction} from './categoryPersistenceCore';
 import {inventoryCategoryIds} from './categories';
 import {ALL_EXTENDED_FIELDS} from './extendedFields';
 import {withHumanEdits,productCustomFields} from './humanEdits';
-import {parseCustomFields,stringifyCustomFields} from './customFieldsCodec';
+import {parseCustomFields,stringifyCustomFields} from './customFieldsCodecCore';
 import {StockSplitError,validateStockSplit,type StockSplitRequest,type StockSplitResult} from './stockSplitInput';
 import {managedStockTitleChange} from './managedStockTitle';
 type Row=Record<string,unknown>;
@@ -55,7 +56,7 @@ export function createStockSplitService(p:StockSplitPorts) {
    {Put:{TableName:p.table('InventoryHistory'),Item:{id:receiptId,inventoryId:source.id,fieldName:'在庫分け',oldValue:JSON.stringify({quantity:source.quantity,name:source.name}),newValue:JSON.stringify({hash,result,name:values.name??source.name,splitName:child.name}),changedBy:actor,changedAt:now,createdAt:now,updatedAt:now,__typename:'InventoryHistory'},ConditionExpression:'attribute_not_exists(id)'}},
    {Put:{TableName:p.table('InventoryHistory'),Item:{id:receiptId+':SPLIT',inventoryId:id,fieldName:'在庫分け',newValue:JSON.stringify({sourceInventoryId:source.id,quantity:r.quantity,name:child.name}),changedBy:actor,changedAt:now,createdAt:now,updatedAt:now,__typename:'InventoryHistory'}}}
   ];
-  try{await p.db.send(new TransactWriteCommand({TransactItems:writes,ClientRequestToken:randomUUID()}));}
+  try{await sendInventoryHistoryCommand(p.db, new TransactWriteCommand({TransactItems:writes,ClientRequestToken:randomUUID()}));}
   catch(error){
    const committed=await receipt().catch(()=>null);
    if(committed){if(committed.splitId!==id)await p.discardPhotos(inheritedPhotos);return committed;}

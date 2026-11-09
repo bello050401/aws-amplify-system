@@ -1,6 +1,7 @@
 "use client";
 
 import { useDirectEdit } from "./DirectEditProvider";
+import { useUnsavedChanges } from "../UnsavedChangesProvider";
 
 /**
  * The 直接編集 toolbar controls (統合改善指示書 §11/§12) — rendered
@@ -18,6 +19,7 @@ import { useDirectEdit } from "./DirectEditProvider";
  */
 export function DirectEditControls() {
   const { enabled, toggleEnabled, dirtyCount, saving, lastResult, saveError, saveDirty, saveAndExit, discardAndExit } = useDirectEdit();
+  const {guardedAction} = useUnsavedChanges();
 
   if (!enabled) {
     return (
@@ -35,6 +37,7 @@ export function DirectEditControls() {
             {lastResult.successCount}件保存{lastResult.failCount > 0 ? `・${lastResult.failCount}件失敗` : ""}
           </span>
         )}
+        {!!lastResult?.ids.length && <button type="button" className="text-xs font-medium text-teal-800 underline" onClick={() => window.dispatchEvent(new CustomEvent('bello:inventory-history-request',{detail:{ids:lastResult.ids,operationId:lastResult.operationId,mode:'undo'}}))}>この保存を戻す</button>}
         <button type="button" onClick={toggleEnabled} className="whitespace-nowrap border border-gray-300 px-2 py-1.5 text-[12px] text-gray-700 hover:bg-gray-50">
           直接編集を終了
         </button>
@@ -44,6 +47,7 @@ export function DirectEditControls() {
 
   return (
     <div className="flex flex-wrap items-center gap-2">
+      <span className="w-full text-xs text-gray-500">戻した後に新しく保存する場合、そこから先の「進む」履歴は消えます。</span>
       {saveError && (
         // QA-004 P2: bulkUpdateInventoryListFieldsの呼び出しそのものが
         // 例外で落ちた(通信エラー・読み取り専用proxyのPOST拒否など、
@@ -80,7 +84,7 @@ export function DirectEditControls() {
         type="button"
         disabled={saving}
         onClick={() => {
-          if (window.confirm(`${dirtyCount}件の未保存の変更を破棄します。よろしいですか？`)) discardAndExit();
+          guardedAction(discardAndExit);
         }}
         className="text-[12px] text-red-500 hover:text-red-700 disabled:opacity-50"
       >

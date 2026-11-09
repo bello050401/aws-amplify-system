@@ -61,6 +61,24 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
   // 操作(詳細検索トグル・ページング・サイドバーの絞り込み、いずれも
   // 既存のLink/guardedNavigate経由)と同じ経路に揃える。
   const [isSearchPending, startSearchTransition] = useTransition();
+  const [searchText,setSearchText]=useState(q??'');
+  const composing=useRef(false),searchTimer=useRef<ReturnType<typeof setTimeout>|null>(null),typing=useRef(false);
+  const requestedText=useRef<string|null>(null);
+  const latestSearch=useRef<(value:string,automatic:boolean)=>void>(()=>{});
+  useEffect(()=>{
+    // An older navigation must not replace text entered for the next search.
+    if(!typing.current&&(requestedText.current===null||requestedText.current===(q??'')))setSearchText(q??'');
+    if(requestedText.current===(q??''))requestedText.current=null;
+  },[q]);
+  useEffect(()=>{
+    const pop=()=>{if(searchTimer.current)clearTimeout(searchTimer.current);typing.current=false;requestedText.current=null;setSearchText(new URLSearchParams(window.location.search).get('q')??'');};
+    window.addEventListener('popstate',pop);return()=>{window.removeEventListener('popstate',pop);if(searchTimer.current)clearTimeout(searchTimer.current);};
+  },[]);
+  function scheduleSearch(value:string){
+    if(searchTimer.current)clearTimeout(searchTimer.current);
+    if(composing.current||isDirty)return;
+    searchTimer.current=setTimeout(()=>latestSearch.current(value,true),250);
+  }
   // Enter連打などで同一の検索先が処理中に重ねて送られても、
   // 進行中の遷移を使い回す(重複でrouter.pushを積まない)。
   const pendingSearchHrefRef = useRef<string | null>(null);
@@ -97,11 +115,17 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
     // native送信を許していたのは「未保存変更が無い間だけ」で、それが
     // 検索のたびにドキュメント全体を読み直す原因だった。
     e.preventDefault();
-    const fd = new FormData(e.currentTarget);
+    if(composing.current)return;
+    if(searchTimer.current)clearTimeout(searchTimer.current);
+    executeSearch(searchText,false);
+  }
+  function executeSearch(value:string,automatic:boolean){
+    if(composing.current||automatic&&isDirty)return;
     const sp = new URLSearchParams();
-    for (const [key, value] of fd.entries()) {
-      if (typeof value === "string" && value) sp.set(key, value);
-    }
+    if(value)sp.set('q',value);
+    if(categoryIds.length)sp.set('categoryIds',categoryIds.join(','));
+    if(locationId)sp.set('locationId',locationId);
+    if(statusId)sp.set('statusId',statusId);
     const qs = sp.toString();
     const href = qs ? `/inventory?${qs}` : "/inventory";
 
@@ -114,11 +138,16 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
       return;
     }
     if (isSearchPending && pendingSearchHrefRef.current === href) return; // 同一検索の連打で遷移を重ねない
+    typing.current=false;
+    requestedText.current=value;
     pendingSearchHrefRef.current = href;
+    // App Router discards an older navigation when a new navigation is queued.
+    // Each input sequence replaces the pending destination; Enter remains immediate.
     startSearchTransition(() => {
-      router.push(href);
+      if(automatic)router.replace(href,{scroll:false});else router.push(href,{scroll:false});
     });
   }
+  latestSearch.current=executeSearch;
 
   return (
     <div className="flex w-full flex-wrap items-center justify-between gap-4">
@@ -168,17 +197,19 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
               // 期待挙動: 戻る/進むでも整合する)。ユーザーの入力中は
               // qが変わらないのでkeyも変わらず、キー入力やIME変換を
               // 妨げない。
-              key={q ?? ""}
               id="inventory-search-q"
               type="text"
               name="q"
-              defaultValue={q}
+              value={searchText}
+              onChange={e=>{typing.current=true;setSearchText(e.target.value);scheduleSearch(e.target.value);}}
+              onCompositionStart={()=>{composing.current=true;if(searchTimer.current)clearTimeout(searchTimer.current);}}
+              onCompositionEnd={e=>{composing.current=false;setSearchText(e.currentTarget.value);scheduleSearch(e.currentTarget.value);}}
+              onKeyDown={e=>{if(e.key==='Enter'&&(composing.current||e.nativeEvent.isComposing||e.keyCode===229))e.preventDefault();}}
               placeholder="商品を検索"
               className="w-28 border-none px-1.5 py-1 text-[13px] outline-none placeholder:text-gray-400 md:w-48"
             />
             <button
               type="submit"
-              disabled={isSearchPending}
               className="min-h-8 shrink-0 border-l border-gray-300 bg-gray-900 px-3 py-1.5 text-[13px] font-semibold text-white hover:bg-gray-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-900 disabled:cursor-wait disabled:opacity-60"
             >
               検索

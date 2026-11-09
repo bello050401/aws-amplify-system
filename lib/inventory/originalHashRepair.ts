@@ -1,3 +1,4 @@
+import {persistInventoryWithCategories} from "./categoryPersistence";
 import "server-only";
 import { cookies } from "next/headers";
 import { getUrl } from "aws-amplify/storage/server";
@@ -112,12 +113,7 @@ async function persistOriginalHash(inventoryId: string, storageKey: string, hash
     return { ...img, originalHash: hash };
   });
   if (!changed) return;
-  const { errors } = await serverDataClient.models.Inventory.update({ id: inventoryId, images: next as never }, inventoryAuthMode);
-  if (errors) {
-    // 保存に失敗しても、算出済みのhashで今回の予約自体は続行できる
-    // (次回また修復を試みるだけ)。予約を巻き添えで失敗させない。
-    console.error(`[originalHashRepair] failed to persist hash for inventory=${inventoryId}:`, JSON.stringify(errors));
-  }
+  await persistInventoryWithCategories({ id: inventoryId, images: next },current.updatedAt,{history:{source:"元画像の識別情報補完"}});
 }
 
 /**

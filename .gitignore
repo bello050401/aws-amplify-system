@@ -57,3 +57,4 @@ lib/listing/mercari/csv/generated/
 
 # Staff app web bundle is rebuilt in CI from mobile/.
 public/staff-app/
+.npm-edit-cache/

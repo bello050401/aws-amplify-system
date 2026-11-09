@@ -1,7 +1,8 @@
+import {applyInventoryUpdateExpression} from "../lib/inventory/historyTransaction";
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {randomUUID} from 'node:crypto';
-import {GetCommand,TransactWriteCommand,type DynamoDBDocumentClient} from '@aws-sdk/lib-dynamodb';
+import {GetCommand,BatchGetCommand,TransactWriteCommand,type DynamoDBDocumentClient} from '@aws-sdk/lib-dynamodb';
 import {createStockSplitService} from '../lib/inventory/stockSplitCore';
 import type {StockSplitRequest} from '../lib/inventory/stockSplitInput';
 
@@ -12,12 +13,13 @@ function fixture(quantity=5) {
  const state={fail:false,lost:false,copyFailure:false,copies:0,deleted:0,transactions:0};
  const db={send:async(c:any)=>{
   const p=c.input;if(c instanceof GetCommand)return {Item:structuredClone(rows.get(p.TableName+'/'+p.Key.id))};
+  if(c instanceof BatchGetCommand)return {Responses:Object.fromEntries(Object.entries(p.RequestItems).map(([table,request]:[string,any])=>[table,request.Keys.map((key:any)=>structuredClone(rows.get(`${table}/${key.id}`))).filter(Boolean)]))};
   assert.ok(c instanceof TransactWriteCommand);state.transactions++;const staged=new Map(rows);
   const reject=()=>{throw Object.assign(Error('conflict'),{name:'TransactionCanceledException'});};
   for(const op of p.TransactItems){
    if(op.Update){const u=op.Update,key=u.TableName+'/'+u.Key.id,r=staged.get(key),v=u.ExpressionAttributeValues;
     if(!r||r.updatedAt!==v[':version']||r.quantity!==v[':quantity']||r.deletedAt||r.outboundBatchId||r.outboundArrivalBatchId)reject();
-    const next={...r};for(const [alias,key] of Object.entries(u.ExpressionAttributeNames))next[key as string]=v[alias.replace('#f',':v')];staged.set(key,next);
+    const next=applyInventoryUpdateExpression(r,u);staged.set(key,next);
    }else if(op.Put){const key=op.Put.TableName+'/'+op.Put.Item.id;if(op.Put.ConditionExpression&&staged.has(key))reject();staged.set(key,structuredClone(op.Put.Item));}
    else if(op.Delete)staged.delete(op.Delete.TableName+'/'+op.Delete.Key.id);
   }

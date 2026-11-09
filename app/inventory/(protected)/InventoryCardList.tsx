@@ -1,5 +1,6 @@
 "use client";
 
+import {useInventorySelection} from "./InventorySelectionProvider";
 import Link from "next/link";
 import type { InventoryListRow, MasterOption, StatusOption } from "@/lib/inventory/queries";
 import { InventoryThumbnail } from "../InventoryThumbnail";
@@ -34,6 +35,7 @@ function formatYen(value: number | null): string {
  * 現実的な操作性にならないため、意図的なスコープ外)。
  */
 export function InventoryCardList({ rows, categoriesById, locationsById, statusesById, listReturnQuery, photoThumbnails = {} }: InventoryCardListProps) {
+  const selection=useInventorySelection();
   if (rows.length === 0) {
     return <p className="p-6 text-sm text-gray-400">該当する在庫がありません。</p>;
   }
@@ -45,12 +47,13 @@ export function InventoryCardList({ rows, categoriesById, locationsById, statuse
         const location = row.locationId ? locationsById[row.locationId] : undefined;
         const status = row.statusId ? statusesById[row.statusId] : undefined;
         return (
-          <li key={row.id}>
+          <li key={row.id} className={"flex items-center "+(selection.selected.has(row.id)?"bg-teal-50":"")}>
+            {selection.editable&&<label className="flex min-h-11 min-w-11 items-center justify-center"><input type="checkbox" aria-label={`${row.name}を選択`} checked={selection.selected.has(row.id)} onChange={()=>selection.toggle(row.id)} className="h-5 w-5 accent-teal-700"/></label>}
             {/* 第六ラウンド§17-18(P0-4): ZAICO級density実測に合わせ
                 thumbnail 56px→40px(spec目標36〜44px)、行の縦padding
                 を詰め(spec目標: 行高48〜58px)、leading-tightで行間を
                 詰める——「above-the-fold 4〜6行以上」を達成する。 */}
-            <Link href={buildDetailHref(row.id, listReturnQuery)} prefetch={false} className="flex items-center gap-2.5 px-3 py-1.5 active:bg-gray-50">
+            <Link href={buildDetailHref(row.id, listReturnQuery)} prefetch={false} className="flex min-w-0 flex-1 items-center gap-2.5 px-3 py-1.5 active:bg-gray-50">
               <div className="h-10 w-10 shrink-0">
                 <InventoryThumbnail storageKey={row.mainImageThumbnailKey} directUrl={resolveListPhotoUrl(row.mainImageIsPrimary, photoThumbnails[row.id]) ?? row.mainImageSignedUrl} alt={row.name} size="small" loading="lazy" />
               </div>

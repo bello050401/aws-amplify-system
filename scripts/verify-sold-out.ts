@@ -1,7 +1,8 @@
+import {applyInventoryUpdateExpression} from "../lib/inventory/historyTransaction";
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {randomUUID} from 'node:crypto';
-import {GetCommand,TransactWriteCommand,type DynamoDBDocumentClient} from '@aws-sdk/lib-dynamodb';
+import {GetCommand,BatchGetCommand,TransactWriteCommand,type DynamoDBDocumentClient} from '@aws-sdk/lib-dynamodb';
 import {createSoldOutService} from '../lib/inventory/soldOutCore';
 import {japanToday,type SoldOutRequest} from '../lib/inventory/soldOutInput';
 import {createCandidateStore} from '../lib/saleCandidates/storeCore';
@@ -18,10 +19,15 @@ function fixture(quantity=5,withCandidate=false) {
   const candidate={id:'a'.repeat(64),state:'PENDING',updatedAt:time} as SaleCandidate;
   if(withCandidate)rows.set('Candidates/'+candidate.id,structuredClone(candidate));
   const state={fail:false,lost:false,copies:0,deleted:0,transactions:0,photoFailure:false};
+  const committedTokens=new Map<string,string>();
   const db={send:async(command:any)=>{
     const input=command.input;
     if(command instanceof GetCommand)return {Item:structuredClone(rows.get(`${input.TableName}/${input.Key.id}`))};
-    assert.ok(command instanceof TransactWriteCommand);state.transactions++;
+    if(command instanceof BatchGetCommand)return {Responses:Object.fromEntries(Object.entries(input.RequestItems).map(([table,request]:[string,any])=>[table,request.Keys.map((key:any)=>structuredClone(rows.get(`${table}/${key.id}`))).filter(Boolean)]))};
+    assert.ok(command instanceof TransactWriteCommand);
+    const token=input.ClientRequestToken,payload=JSON.stringify(input.TransactItems);
+    if(token&&committedTokens.has(token)){assert.equal(committedTokens.get(token),payload);return {};}
+    state.transactions++;
     const staged=new Map(rows);
     // DynamoDB's transaction evaluates all conditions before exposing any writes.
     for(const op of input.TransactItems) {
@@ -31,12 +37,13 @@ function fixture(quantity=5,withCandidate=false) {
           staged.set(`${u.TableName}/${u.Key.id}`,{...current,state:v[':done'],result:v[':result'],updatedAt:v[':now']});continue;
         }
         if(!current||current.updatedAt!==v[':version']||current.quantity!==v[':quantity']||current.outboundBatchId||current.outboundArrivalBatchId)throw Object.assign(Error('conditional'),{name:'TransactionCanceledException'});
-        const updated={...current};for(const [alias,key] of Object.entries(u.ExpressionAttributeNames))updated[key as string]=v[alias.replace('#f',':v')];staged.set(`${u.TableName}/${u.Key.id}`,updated);
+        const updated=applyInventoryUpdateExpression(current,u);staged.set(`${u.TableName}/${u.Key.id}`,updated);
       }else if(op.Put){if(op.Put.ConditionExpression&&staged.has(`${op.Put.TableName}/${op.Put.Item.id}`))throw Object.assign(Error('conditional'),{name:'TransactionCanceledException'});staged.set(`${op.Put.TableName}/${op.Put.Item.id}`,structuredClone(op.Put.Item));}
       else if(op.Delete)staged.delete(`${op.Delete.TableName}/${op.Delete.Key.id}`);
     }
     if(state.fail)throw Object.assign(Error('injected failure'),{name:'TransactionCanceledException'});
     rows=staged;
+    if(token)committedTokens.set(token,payload);
     if(state.lost)throw Object.assign(Error('lost response'),{name:'TimeoutError'});
     return {};
   }} as unknown as DynamoDBDocumentClient;

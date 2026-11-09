@@ -5,6 +5,7 @@ import { bulkUpdateInventoryListFields, type BulkInventoryEditItemResult } from 
 import type { InlineEditChanges, InlineEditFieldKey } from "@/lib/inventory/inlineEdit";
 import type { InventoryListRow } from "@/lib/inventory/queries";
 import { useUnsavedChanges } from "../UnsavedChangesProvider";
+import { inventoryCategoryIds } from "@/lib/inventory/categories";
 
 /**
  * 一覧直接編集 (統合改善指示書 §11-13) の状態を、ヘッダー内の「直接編
@@ -30,7 +31,7 @@ interface DirectEditContextValue {
   isRowDirty: (rowId: string) => boolean;
   dirtyCount: number;
   saving: boolean;
-  lastResult: { successCount: number; failCount: number; errors: { id: string; name: string; error: string }[] } | null;
+  lastResult: { successCount: number; failCount: number; ids: string[]; operationId: string; errors: { id: string; name: string; error: string }[] } | null;
   /**
    * QA-004: bulkUpdateInventoryListFields自体の呼び出しが例外で落ちた場合
    * (読み取り専用proxyのPOST拒否など、個々の商品の処理まで届かない通信
@@ -52,7 +53,7 @@ const COLUMN_TO_FIELD: Record<InlineEditFieldKey, keyof InlineEditChanges> = {
   name: "name",
   quantity: "quantity",
   location: "locationId",
-  category: "categoryId",
+  category: "categoryIds",
   plannedSalePrice: "plannedSalePrice",
   salePrice: "salePrice",
   purchasePrice: "purchasePrice",
@@ -70,7 +71,9 @@ export function DirectEditProvider({ rows, children }: { rows: InventoryListRow[
   const [lastResult, setLastResult] = useState<DirectEditContextValue["lastResult"]>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const editVersions = useRef<Record<string, string>>({});
+  const editRevisions = useRef<Record<string, number>>({});
   const saveInFlight = useRef(false);
+  const saveAttempt=useRef<{signature:string;id:string}|null>(null);
 
   const rowsById = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
 
@@ -83,8 +86,8 @@ export function DirectEditProvider({ rows, children }: { rows: InventoryListRow[
         return value !== row.quantity;
       case "locationId":
         return (value ?? null) !== row.locationId;
-      case "categoryId":
-        return (value ?? null) !== row.categoryId;
+      case "categoryIds":
+        return JSON.stringify(value) !== JSON.stringify(inventoryCategoryIds(row));
       case "plannedSalePrice":
         return (value ?? null) !== row.plannedSalePrice;
       case "salePrice":
@@ -115,6 +118,7 @@ export function DirectEditProvider({ rows, children }: { rows: InventoryListRow[
         if (isFieldChanged(row, field, value)) {
           // Keep the version at the first edit, even if another row's save refreshes the list.
           editVersions.current[rowId] ??= row.updatedAt;
+          editRevisions.current[rowId] ??= row.revision ?? 0;
           (rowEdits as Record<string, FieldValue>)[field] = value;
         } else {
           delete (rowEdits as Record<string, FieldValue>)[field];
@@ -123,6 +127,7 @@ export function DirectEditProvider({ rows, children }: { rows: InventoryListRow[
         if (Object.keys(rowEdits).length === 0) {
           delete next[rowId];
           delete editVersions.current[rowId];
+          delete editRevisions.current[rowId];
         } else {
           next[rowId] = rowEdits;
         }
@@ -144,14 +149,16 @@ export function DirectEditProvider({ rows, children }: { rows: InventoryListRow[
 
   async function performSave(): Promise<{ success: boolean }> {
     if (saveInFlight.current) return { success: false };
-    const items = Object.entries(edits).map(([id, changes]) => ({ id, changes, expectedUpdatedAt: editVersions.current[id] ?? "" }));
+    const items = Object.entries(edits).map(([id, changes]) => ({ id, changes, expectedUpdatedAt: editVersions.current[id] ?? "", expectedRevision: editRevisions.current[id] ?? 0 }));
     if (items.length === 0) return { success: true };
 
     saveInFlight.current = true;
     setSaving(true);
     setSaveError(null);
     try {
-      const results: BulkInventoryEditItemResult[] = await bulkUpdateInventoryListFields(items);
+      const signature=JSON.stringify(items);
+      if(saveAttempt.current?.signature!==signature)saveAttempt.current={signature,id:crypto.randomUUID()};
+      const results: BulkInventoryEditItemResult[] = await bulkUpdateInventoryListFields(items,saveAttempt.current.id);
       const failed = results.filter((r) => !r.success);
       const succeededIds = new Set(results.filter((r) => r.success).map((r) => r.id));
 
@@ -161,6 +168,7 @@ export function DirectEditProvider({ rows, children }: { rows: InventoryListRow[
         for (const id of succeededIds) {
           delete next[id];
           delete editVersions.current[id];
+          delete editRevisions.current[id];
         }
         return next;
       });
@@ -168,6 +176,8 @@ export function DirectEditProvider({ rows, children }: { rows: InventoryListRow[
       setLastResult({
         successCount: succeededIds.size,
         failCount: failed.length,
+        ids: results.filter(r => r.success && r.changed).map(r => r.id),
+        operationId: saveAttempt.current.id,
         errors: failed.map((f) => ({ id: f.id, name: rowsById.get(f.id)?.name ?? f.id, error: f.error ?? "更新に失敗しました。" })),
       });
 
@@ -207,6 +217,7 @@ export function DirectEditProvider({ rows, children }: { rows: InventoryListRow[
 
   function discardAndExit() {
     editVersions.current = {};
+    editRevisions.current = {};
     setEdits({});
     setLastResult(null);
     setSaveError(null);
@@ -235,6 +246,7 @@ export function DirectEditProvider({ rows, children }: { rows: InventoryListRow[
     registerSaveHandler(async () => performSave());
     registerDiscardHandler(() => {
       editVersions.current = {};
+      editRevisions.current = {};
       setEdits({});
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps

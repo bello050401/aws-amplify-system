@@ -22,7 +22,9 @@ import {inventoryCategoryIds} from './categories';
 import { recordQuery } from "@/lib/perf/queryTiming";
 import { readSearchCandidates, invalidateSearchCandidates } from './searchCandidateCache';
 import { readCompactSearch } from './readCompactSearch';
+import {SEARCH_SCALAR_FIELDS} from "./searchProjection";
 import { readInventoryBatch } from './batchRead';
+import {MAX_SEARCH_CANDIDATES} from './searchBounds';
 
 /**
  * 検索を「巨大な在庫本体の全件転送」から切り離す
@@ -84,7 +86,7 @@ const REGION = process.env.AWS_REGION || process.env.BEDROCK_REGION || "us-west-
  */
 const SCAN_SEGMENTS = 8;
 /** queries.ts の SEARCH_MAX_SCAN_ITEMS と同じ安全弁。超えたら従来経路へ返す。 */
-const MAX_SCAN_ITEMS = 20000;
+const MAX_SCAN_ITEMS = MAX_SEARCH_CANDIDATES;
 
 let cachedClient: DynamoDBDocumentClient | null = null;
 function ddb(): DynamoDBDocumentClient {
@@ -120,8 +122,12 @@ function parseCustomFieldsValue(raw: unknown): Record<string, unknown> | null {
 }
 
 /** 判定にかけられる形へ整える。列を絞っている以外は従来の行と同じ意味になるようにする。 */
-function toCandidate(raw: RawItem): SearchableRecord & CategoryRecord & { id: string; updatedAt: string } {
-  return {
+type Candidate = SearchableRecord & CategoryRecord & { id: string; updatedAt: string };
+const candidateObjects = new WeakMap<RawItem, Candidate>();
+function toCandidate(raw: RawItem): Candidate {
+  const cached = candidateObjects.get(raw);
+  if (cached) return cached;
+  const candidate = {
     ...raw,
     // 表示用の在庫IDは保存列ではなく導出値。従来経路(toListRow)と同じ関数を使う。
     displayId: resolveDisplayInventoryId({
@@ -136,6 +142,8 @@ function toCandidate(raw: RawItem): SearchableRecord & CategoryRecord & { id: st
     id: raw.id as string,
     updatedAt: raw.updatedAt as string,
   };
+  candidateObjects.set(raw, candidate);
+  return candidate;
 }
 
 /** 従来と同じ並び(updatedAt DESC、同点はidで安定化)。 */
@@ -179,7 +187,7 @@ async function scanSegment(
  * requests. The exact inventory-table BatchGetItem grant is managed in backend.ts. */
 async function hydrate(table: string, ids: string[]): Promise<Map<string, RawItem>> {
   const startedAt = Date.now();
-  const byId = await readInventoryBatch(ddb(), table, ids);
+  const byId = await readInventoryBatch(ddb(), table, ids, undefined, [...SEARCH_SCALAR_FIELDS,'images','listingPartition']);
   recordQuery({model: 'Inventory', op: 'search-hydrate-batch', ms: Date.now()-startedAt, items: byId.size});
   return byId;
 }

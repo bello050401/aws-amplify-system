@@ -9,5 +9,6 @@ export function productDateValue(row: Record<string, unknown>, key: string): unk
 /** Stable ordering across pages, including imported products with the same second. */
 export function compareInventoryDateDesc(a: {id:string;updatedAt:string;listUpdatedAt?:string|null;sourceInventoryId?:string|null}, b: {id:string;updatedAt:string;listUpdatedAt?:string|null;sourceInventoryId?:string|null}): number {
   return Date.parse(productUpdatedAt(b)) - Date.parse(productUpdatedAt(a)) ||
-    String(b.sourceInventoryId ?? b.id).localeCompare(String(a.sourceInventoryId ?? a.id), 'en', {numeric:true});
+    String(b.sourceInventoryId ?? b.id).localeCompare(String(a.sourceInventoryId ?? a.id), 'en', {numeric:true}) ||
+    a.id.localeCompare(b.id);
 }

@@ -1,4 +1,6 @@
 "use client";
+import { useInventorySelection } from "./InventorySelectionProvider";
+import { CategoryMultiSelect } from "../CategoryMultiSelect";
 import {productUpdatedAt} from "@/lib/inventory/productDates";
 import {inventoryCategoryIds} from "@/lib/inventory/categories";
 
@@ -260,17 +262,11 @@ function renderEditableCell(
       );
     }
     case "category": {
-      const pending = getValue(row, "categoryId");
-      const value = pending === undefined ? row.categoryId : pending;
+      const pending = getValue(row, "categoryIds");
+      const value = pending === undefined ? inventoryCategoryIds(row) : pending;
       return (
-        <select disabled={saving} value={value ?? ""} onChange={(e) => setValue(row.id, column, e.target.value || null)} className={inputClass}>
-          <option value="">未選択</option>
-          {categories.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name}
-            </option>
-          ))}
-        </select>
+        <CategoryMultiSelect compact disabled={saving} value={value} options={categories}
+          onChange={ids => setValue(row.id, column, ids)} />
       );
     }
     case "plannedSalePrice":
@@ -341,6 +337,7 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
   const columnByKey = new Map([...INVENTORY_LIST_COLUMNS, ...dynamicColumns].map((c) => [c.key, c]));
   const visibleColumns = order.map((key) => columnByKey.get(key)).filter((c): c is NonNullable<typeof c> => Boolean(c) && visibility[c!.key]);
 
+  const selection=useInventorySelection();
   const { enabled: directEditEnabled, getValue, setValue, isRowDirty, saving } = useDirectEdit();
 
   // 列幅はlib/inventory/listColumns.tsのdefaultWidth(表示設定の「初期
@@ -359,7 +356,7 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
     return <p className="p-6 text-sm text-gray-400">該当する在庫がありません。</p>;
   }
 
-  const totalWidth = visibleColumns.reduce((sum, col) => sum + widthFor(col.key), 0);
+  const totalWidth = (selection.editable?44:0)+visibleColumns.reduce((sum, col) => sum + widthFor(col.key), 0);
 
   return (
     <>
@@ -375,6 +372,7 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
       <table className="border-collapse border-r border-gray-200 text-[13px]" style={{ tableLayout: "fixed", width: "100%", minWidth: totalWidth }}>
         <thead className="sticky top-0 z-10 bg-gray-50 text-[11px] text-gray-500">
           <tr className="border-b border-gray-200">
+            {selection.editable&&<th style={{width:44}} className="px-3"><input type="checkbox" aria-label="このページを選択" checked={rows.every(row=>selection.selected.has(row.id))} ref={element=>{if(element)element.indeterminate=rows.some(row=>selection.selected.has(row.id))&&!rows.every(row=>selection.selected.has(row.id));}} onChange={()=>selection.toggleAll(rows.map(row=>row.id))} className="h-4 w-4 accent-teal-700" /></th>}
             {visibleColumns.map((col) => {
               const w = widthFor(col.key);
               const align = RIGHT_ALIGN_COLUMNS.has(col.key) ? "text-right" : "text-left";
@@ -393,7 +391,8 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
             const href = buildDetailHref(row.id, listReturnQuery);
             const dirty = directEditEnabled && isRowDirty(row.id);
             return (
-              <tr key={row.id} className={`border-b border-gray-100 ${dirty ? "bg-amber-50" : directEditEnabled ? "" : "hover:bg-gray-50"}`}>
+              <tr key={row.id} className={`border-b border-gray-100 ${selection.selected.has(row.id)?"bg-teal-50":dirty ? "bg-amber-50" : directEditEnabled ? "" : "hover:bg-gray-50"}`}>
+                {selection.editable&&<td className="px-3"><input type="checkbox" aria-label={`${row.name}を選択`} checked={selection.selected.has(row.id)} onChange={()=>selection.toggle(row.id)} className="h-4 w-4 accent-teal-700" /></td>}
                 {visibleColumns.map((col) => {
                   const editable = directEditEnabled && isInlineEditableColumn(col.key);
                   const w = widthFor(col.key);

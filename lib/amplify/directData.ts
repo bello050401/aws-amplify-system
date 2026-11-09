@@ -1,6 +1,7 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { normalizeDirectStructuredJson } from "./structuredJson";
+import {createInventoryPersistence} from '../inventory/categoryPersistenceCore';
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, GetCommand, PutCommand, UpdateCommand, DeleteCommand, ScanCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
 
@@ -428,6 +429,16 @@ async function modelUpdate(model: string, input: Record<string, unknown>): Promi
   const idField = identifierFor(model);
   const { [idField]: id, ...rest } = input;
   if (typeof id !== "string") throw new Error(`${model}.update には ${idField} が必要です。`);
+
+  if(model==='Inventory'){
+    const persistence=createInventoryPersistence(ddb(),tableFor),current=await persistence.getInventoryRaw(id);
+    if(!current)return {data:null};
+    const expected=typeof input.updatedAt==='string'?input.updatedAt:String(current.updatedAt);
+    const {revision:ignoredRevision,editHistory:ignoredHistory,...patch}=input;
+    if(ignoredRevision!==undefined||ignoredHistory!==undefined)throw Error('在庫の履歴を直接書き換えることはできません。');
+    const saved=await persistence.persistInventoryWithCategories(patch,expected,{current,history:{source:'バックグラウンド更新'}});
+    return {data:{...current,...patch,updatedAt:saved.updatedAt,revision:saved.revision}};
+  }
 
   const { expression: expr, names, values } = buildUpdateExpression(normalizeDirectStructuredJson(model, rest), nowIso());
 

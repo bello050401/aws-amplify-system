@@ -1,3 +1,4 @@
+import {sendInventoryHistoryCommand} from "@/lib/inventory/historyTransaction";
 import { createHash, randomUUID } from 'node:crypto';
 import { GetCommand, TransactWriteCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { createInventoryPersistence, type InventoryTransaction } from './categoryPersistenceCore';
@@ -83,7 +84,7 @@ export function createSoldOutService(ports: SoldOutPorts) {
       const values={...changes,customFields:stringifyCustomFields({...withHumanEdits(source,changes,sourceCustom,sourceCustom??undefined),__belloYahooPayment:marker})};
       const entries=Object.entries(values);
       const writes:InventoryTransaction=[{Update:{TableName:table('Inventory'),Key:{id:source.id},UpdateExpression:'SET '+entries.map((_,i)=>`#f${i}=:v${i}`).join(','),ConditionExpression:'updatedAt=:version AND quantity=:quantity AND attribute_not_exists(outboundBatchId) AND attribute_not_exists(outboundArrivalBatchId)',ExpressionAttributeNames:Object.fromEntries(entries.map(([k],i)=>['#f'+i,k])),ExpressionAttributeValues:{...Object.fromEntries(entries.map(([,v],i)=>[':v'+i,v])),':version':source.updatedAt,':quantity':source.quantity}}},...persistence.categoryLinkChanges(source.id,currentCategories,waitingCategories,now),{Put:{TableName:table('InventoryHistory'),Item:{id:receiptId,inventoryId:source.id,fieldName:'ヤフオク入金待ち登録',oldValue:JSON.stringify({quantity:source.quantity,categoryIds:before}),newValue:JSON.stringify({requestHash:digest,result}),changedBy:actor,changedAt:now,createdAt:now,updatedAt:now,__typename:'InventoryHistory'},ConditionExpression:'attribute_not_exists(id)'}},...(ports.saleCommit?.(result,now)??[])];
-      try {await db.send(new TransactWriteCommand({TransactItems:writes}));}
+      try {await sendInventoryHistoryCommand(db, new TransactWriteCommand({TransactItems:writes}));}
       catch(error){const committed=await readReceipt().catch(()=>null);if(committed)return committed;if((error as Error).name==='TransactionCanceledException')throw new SoldOutError('CONFLICT','同時に商品または入金情報が変更されました。通知を開き直してください。');throw new SoldOutError('UNCONFIRMED','登録結果を確認できません。同じ内容で結果を再確認してください。');}
       return result;
     }
@@ -127,7 +128,7 @@ export function createSoldOutService(ports: SoldOutPorts) {
     writes.push({Put:{TableName:table('InventoryHistory'),Item:{...history,id:receiptId},ConditionExpression:'attribute_not_exists(id)'}});
     if(split) writes.push({Put:{TableName:table('InventoryHistory'),Item:{...history,id:`${receiptId}:SPLIT`,inventoryId:soldId,fieldName:'売却分を分割'}}});
     if(ports.saleCommit)writes.push(...ports.saleCommit(result,now));
-    try { await db.send(new TransactWriteCommand({TransactItems:writes,ClientRequestToken:randomUUID()})); }
+    try { await sendInventoryHistoryCommand(db, new TransactWriteCommand({TransactItems:writes,ClientRequestToken:randomUUID()})); }
     catch(error) {
       // A lost response is not evidence of rollback. Check the durable receipt first.
       const committed = await readReceipt().catch(()=>null);

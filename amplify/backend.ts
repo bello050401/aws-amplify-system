@@ -12,6 +12,7 @@ import { Runtime, LayerVersion, StartingPosition, FilterCriteria } from 'aws-cdk
 import { DynamoEventSource, SqsDlq, SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import { Queue } from 'aws-cdk-lib/aws-sqs';
 import path from 'node:path';
+import {Construct} from 'constructs';
 import { COMPACT_SEARCH_INDEX, COMPACT_SEARCH_FIELDS } from './compactSearchIndex';
 import { Secret } from "aws-cdk-lib/aws-secretsmanager";
 import { Effect, ManagedPolicy, Policy, PolicyStatement, Role } from "aws-cdk-lib/aws-iam";
@@ -63,13 +64,51 @@ const backend = defineBackend({
   yahooPaymentReconciler,
 });
 
+// Inventory edit results are separate from inventory data. Only field deltas are
+// retained on each Inventory item; preview/results expire after seven days.
+// Keep the transaction participants and their writers in the Inventory nested
+// stack; mutual IAM references across separate stacks would form a CFN cycle.
+const inventoryEditsStack=new Construct(backend.data.resources.tables.Inventory,'InventoryEdits');
+const inventoryEditsTable=new Table(inventoryEditsStack,'Jobs',{partitionKey:{name:'pk',type:AttributeType.STRING},sortKey:{name:'sk',type:AttributeType.STRING},billingMode:BillingMode.PAY_PER_REQUEST,encryption:TableEncryption.AWS_MANAGED,timeToLiveAttribute:'ttl',removalPolicy:RemovalPolicy.RETAIN,pointInTimeRecoverySpecification:{pointInTimeRecoveryEnabled:true}});
+inventoryEditsTable.addGlobalSecondaryIndex({indexName:'ByKind',partitionKey:{name:'kind',type:AttributeType.STRING},sortKey:{name:'createdAt',type:AttributeType.STRING}});
+const inventoryEditCleanup=new NodejsFunction(inventoryEditsStack,'Cleanup',{entry:path.resolve('amplify/functions/inventory-edit-worker/cleanup.ts'),handler:'handler',runtime:Runtime.NODEJS_22_X,timeout:Duration.seconds(90),memorySize:256,logRetention:RetentionDays.ONE_MONTH,bundling:{minify:true,sourceMap:false},environment:{INVENTORY_EDIT_JOBS_TABLE:inventoryEditsTable.tableName}});
+inventoryEditsTable.grantReadWriteData(inventoryEditCleanup);
+new Rule(inventoryEditsStack,'CleanupSchedule',{schedule:Schedule.rate(Duration.days(1)),targets:[new LambdaFunction(inventoryEditCleanup,{retryAttempts:1})]});
+const inventoryEditsFailed=new Queue(inventoryEditsStack,'Failed',{retentionPeriod:Duration.days(14),enforceSSL:true});
+const inventoryEditsQueue=new Queue(inventoryEditsStack,'Queue',{visibilityTimeout:Duration.seconds(1080),retentionPeriod:Duration.days(7),enforceSSL:true,deadLetterQueue:{queue:inventoryEditsFailed,maxReceiveCount:4}});
+const inventoryEditWorker=new NodejsFunction(inventoryEditsStack,'Worker',{entry:path.resolve('amplify/functions/inventory-edit-worker/handler.ts'),handler:'handler',runtime:Runtime.NODEJS_22_X,timeout:Duration.seconds(180),memorySize:512,logRetention:RetentionDays.ONE_MONTH,bundling:{minify:true,sourceMap:false},environment:{INVENTORY_EDIT_JOBS_TABLE:inventoryEditsTable.tableName,USER_POOL_ID:backend.auth.resources.userPool.userPoolId,...Object.fromEntries(['Inventory','InventoryCategory','Category'].map(name=>[name+'_TABLE',backend.data.resources.tables[name].tableName]))}});
+inventoryEditsTable.grantReadWriteData(inventoryEditWorker);
+inventoryEditWorker.addEnvironment('INVENTORY_EDIT_QUEUE_URL',inventoryEditsQueue.queueUrl);
+inventoryEditsQueue.grantSendMessages(inventoryEditWorker);
+inventoryEditWorker.addEnvironment('INVENTORY_BUCKET',backend.storage.resources.bucket.bucketName);
+backend.storage.resources.bucket.grantRead(inventoryEditWorker,'inventory/*');
+for(const name of ['Inventory','InventoryCategory'])backend.data.resources.tables[name].grantReadWriteData(inventoryEditWorker);
+backend.data.resources.tables.Category.grantReadData(inventoryEditWorker);
+inventoryEditWorker.addToRolePolicy(new PolicyStatement({actions:['cognito-idp:AdminGetUser','cognito-idp:AdminListGroupsForUser'],resources:[backend.auth.resources.userPool.userPoolArn]}));
+inventoryEditWorker.addEventSource(new SqsEventSource(inventoryEditsQueue,{batchSize:1,reportBatchItemFailures:true,maxConcurrency:2}));
+new Alarm(inventoryEditsStack,'FailedJobs',{metric:inventoryEditsFailed.metricApproximateNumberOfMessagesVisible({period:Duration.minutes(5)}),threshold:1,evaluationPeriods:1,treatMissingData:TreatMissingData.NOT_BREACHING});
+const inventoryEditsWeb=Role.fromRoleName(inventoryEditsStack,'Web','BelloAmplifyStagingComputeRole');
+inventoryEditsTable.grantReadWriteData(inventoryEditsWeb);inventoryEditsQueue.grantSendMessages(inventoryEditsWeb);
+backend.addOutput({custom:{inventoryEdits:{table:inventoryEditsTable.tableName,inventoryTable:backend.data.resources.tables.Inventory.tableName,queueUrl:inventoryEditsQueue.queueUrl,region:Stack.of(inventoryEditsStack).region}}});
+function grantInventoryHistoryReferences(fn:NodejsFunction){
+ fn.addEnvironment('INVENTORY_EDIT_JOBS_TABLE',inventoryEditsTable.tableName);
+ fn.addEnvironment('INVENTORY_HISTORY_TABLE',backend.data.resources.tables.Inventory.tableName);
+ fn.addToRolePolicy(new PolicyStatement({actions:['dynamodb:PutItem','dynamodb:DeleteItem'],resources:[inventoryEditsTable.tableArn]}));
+}
+grantInventoryHistoryReferences(inventoryEditWorker);
+for(const fn of [backend.zaicoSyncWorker,backend.yahooPaymentReconciler]){
+ fn.addEnvironment('INVENTORY_EDIT_JOBS_TABLE',inventoryEditsTable.tableName);
+ fn.addEnvironment('INVENTORY_HISTORY_TABLE',backend.data.resources.tables.Inventory.tableName);
+ fn.resources.lambda.addToRolePolicy(new PolicyStatement({actions:['dynamodb:PutItem','dynamodb:DeleteItem'],resources:[inventoryEditsTable.tableArn]}));
+}
+
 const purchaseStack=backend.createStack('PurchaseNotifications');
 const purchaseTable=new Table(purchaseStack,'Candidates',{partitionKey:{name:'id',type:AttributeType.STRING},billingMode:BillingMode.PAY_PER_REQUEST,encryption:TableEncryption.AWS_MANAGED,timeToLiveAttribute:'ttl',removalPolicy:RemovalPolicy.RETAIN,pointInTimeRecoverySpecification:{pointInTimeRecoveryEnabled:true}});
 purchaseTable.addGlobalSecondaryIndex({indexName:'ByState',partitionKey:{name:'state',type:AttributeType.STRING},sortKey:{name:'receivedAt',type:AttributeType.STRING}});
 // The mail reader cannot edit inventory. Payment reconciliation has no mail/EC credentials.
 backend.yahooPaymentReconciler.addEnvironment('SALE_CANDIDATES_TABLE',purchaseTable.tableName);
 backend.yahooPaymentReconciler.resources.lambda.addToRolePolicy(new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:Query','dynamodb:PutItem','dynamodb:UpdateItem','dynamodb:DeleteItem'],resources:[purchaseTable.tableArn,purchaseTable.tableArn+'/index/ByState']}));
-for(const [model,actions] of Object.entries({Inventory:['dynamodb:GetItem','dynamodb:UpdateItem','dynamodb:PutItem'],Category:['dynamodb:GetItem','dynamodb:Scan'],InventoryCategory:['dynamodb:PutItem','dynamodb:DeleteItem'],InventoryHistory:['dynamodb:GetItem','dynamodb:PutItem']})){
+for(const [model,actions] of Object.entries({Inventory:['dynamodb:GetItem','dynamodb:UpdateItem','dynamodb:PutItem'],Category:['dynamodb:GetItem','dynamodb:BatchGetItem','dynamodb:Scan','dynamodb:ConditionCheckItem'],InventoryCategory:['dynamodb:PutItem','dynamodb:DeleteItem'],InventoryHistory:['dynamodb:GetItem','dynamodb:PutItem']})){
  const modelTable=backend.data.resources.tables[model];
  backend.yahooPaymentReconciler.addEnvironment(model+'_TABLE',modelTable.tableName);
  backend.yahooPaymentReconciler.resources.lambda.addToRolePolicy(new PolicyStatement({actions,resources:[modelTable.tableArn]}));
@@ -130,6 +169,7 @@ const saleAutomation=new NodejsFunction(saleStack,'SaleAutomation',{
   BASE_MANUAL_LISTING_ENABLED:'1',EXTERNAL_WRITES_ENABLED:'BASE',BASE_REQUEST_READ_ORDERS:'1',BASE_REQUEST_WRITE_ITEMS:'1',
  }});
 purchaseTable.grantReadWriteData(saleAutomation);
+grantInventoryHistoryReferences(saleAutomation);
 backend.generateSku.resources.lambda.grantInvoke(saleAutomation);
 for(const name of ['Inventory','InventoryCategory','InventoryHistory','ChannelListing','BaseOAuthToken']){
  const t=backend.data.resources.tables[name];t.grantReadWriteData(saleAutomation);
@@ -1035,10 +1075,10 @@ if (process.env.AWS_APP_ID === 'd4hkkg7dty2du' && process.env.AWS_BRANCH === 'cl
   const writable = ['Inventory','InventoryCategory','BarcodeClaim','OutboundDestination','OutboundBatch','OutboundItem','OutboundSequence','InventoryHistory','ImageProcessingVersion','ZaicoTransitionRecord'].map(name=>backend.data.resources.tables[name].tableArn);
   const readable = ['Category','Location'].map(name=>backend.data.resources.tables[name].tableArn);
   new ManagedPolicy(outboundStack,'RuntimeAccess',{roles:[role],statements:[
-    new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:Scan','dynamodb:Query','dynamodb:PutItem','dynamodb:UpdateItem','dynamodb:DeleteItem','dynamodb:ConditionCheckItem'],resources:writable}),
+    new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:BatchGetItem','dynamodb:Scan','dynamodb:Query','dynamodb:PutItem','dynamodb:UpdateItem','dynamodb:DeleteItem','dynamodb:ConditionCheckItem'],resources:writable}),
     // Arrival transactions check that the selected masters are still active.
     // ConditionCheckItem is required even though these tables are never edited.
-    new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:Scan','dynamodb:Query','dynamodb:ConditionCheckItem'],resources:readable}),
+    new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:BatchGetItem','dynamodb:Scan','dynamodb:Query','dynamodb:ConditionCheckItem'],resources:readable}),
     new PolicyStatement({actions:['ses:GetEmailIdentity'],resources:['*']}),
     new PolicyStatement({actions:['ses:SendEmail','ses:SendRawEmail'],resources:[`arn:aws:ses:us-west-2:${outboundStack.account}:identity/bello050401@gmail.com`],conditions:{StringEquals:{'ses:FromAddress':'bello050401@gmail.com'},'ForAllValues:StringEquals':{'ses:Recipients':['bello050401@gmail.com']}}}),
     new PolicyStatement({actions:['s3:GetObject','s3:PutObject','s3:DeleteObject'],resources:[backend.storage.resources.bucket.arnForObjects('inventory/*')]}),

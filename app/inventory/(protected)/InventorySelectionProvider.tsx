@@ -1,21 +1,13 @@
 "use client";
 
-import { createContext, useCallback, useContext, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { createContext, useCallback, useContext, useMemo, useState, useEffect } from "react";
 
-/**
- * 不具合修正・ZAICO同期重複根絶・EC出品UI改善・画像自動加工 完全自律
- * 実装指示書(2026-08-30) §7: 在庫一覧のチェックボックスへ実際の用途を
- * 与えるための選択状態——ヘッダー内のツールバー(InventoryToolbar、
- * InventoryHeaderのcenterスロット)とテーブル本体(InventoryTable)の
- * 間で共有する必要があるため、DirectEditProvider.tsxと全く同じ理由
- * (page.tsxの中で別々の位置に描画される)でContextにする。
- *
- * 選択は「現在ページに表示中の行」に閉じたローカル状態(ページ遷移・
- * フィルタ変更で自然にリセットされる、URLやDBに永続化しない)——
- * ListingsOverviewTable.tsx/EC出品一覧の一括選択と同じ設計判断。
- */
+/** Selection is keyed by immutable product IDs and survives pagination. Only filter changes clear it. */
 interface InventorySelectionContextValue {
   selected: Set<string>;
+  editable: boolean;
+  remove: (ids:string[]) => void;
   isSelected: (id: string) => boolean;
   toggle: (id: string) => void;
   toggleAll: (ids: string[]) => void;
@@ -24,9 +16,13 @@ interface InventorySelectionContextValue {
 
 const InventorySelectionContext = createContext<InventorySelectionContextValue | null>(null);
 
-export function InventorySelectionProvider({ children }: { children: React.ReactNode }) {
+export function InventorySelectionProvider({ children, editable }: { children: React.ReactNode; editable:boolean }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
+  const params=useSearchParams();
+  const filterKey=JSON.stringify([params.get("q"),params.get("categoryIds"),params.get("locationId"),params.get("statusId"),params.get("adv")]);
+  useEffect(()=>{setSelected(new Set());},[filterKey]);
+  const remove=useCallback((ids:string[])=>setSelected(prev=>new Set([...prev].filter(id=>!ids.includes(id)))),[]);
   const isSelected = useCallback((id: string) => selected.has(id), [selected]);
 
   const toggle = useCallback((id: string) => {
@@ -41,15 +37,15 @@ export function InventorySelectionProvider({ children }: { children: React.React
   const toggleAll = useCallback((ids: string[]) => {
     setSelected((prev) => {
       const allSelected = ids.length > 0 && ids.every((id) => prev.has(id));
-      return allSelected ? new Set() : new Set(ids);
+      const next=new Set(prev); for(const id of ids){if(allSelected)next.delete(id);else next.add(id);} return next;
     });
   }, []);
 
   const clear = useCallback(() => setSelected(new Set()), []);
 
-  const value = useMemo(() => ({ selected, isSelected, toggle, toggleAll, clear }), [selected, isSelected, toggle, toggleAll, clear]);
+  const value = useMemo(() => ({ selected, isSelected, toggle, toggleAll, clear, remove, editable }), [selected, isSelected, toggle, toggleAll, clear, remove, editable]);
 
-  return <InventorySelectionContext.Provider value={value}>{children}</InventorySelectionContext.Provider>;
+  return <InventorySelectionContext.Provider value={value}><div className="contents" style={{"--inventory-selection-space": selected.size?"76px":"0px"} as React.CSSProperties}>{children}</div></InventorySelectionContext.Provider>;
 }
 
 export function useInventorySelection(): InventorySelectionContextValue {

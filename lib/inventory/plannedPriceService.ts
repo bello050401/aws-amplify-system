@@ -1,3 +1,4 @@
+import {sendInventoryHistoryCommand} from "@/lib/inventory/historyTransaction";
 import 'server-only';
 import {priceEntryWriteItems} from './plannedPriceWrite';
 import {TransactWriteCommand} from '@aws-sdk/lib-dynamodb';
@@ -22,7 +23,7 @@ export async function listPriceEntry(){
 }
 export async function updatePriceEntry(raw:unknown,actor:string){
  const row=await savePlannedPrice({get:async id=>await getInventoryRaw(id) as PriceEntryRecord|undefined,categories:listCategories,save:async(before,patch,who)=>{
-  try{await inventoryDdb.send(new TransactWriteCommand({TransactItems:priceEntryWriteItems(before,patch,who,inventoryTable)}));}
+  try{await sendInventoryHistoryCommand(inventoryDdb, new TransactWriteCommand({TransactItems:priceEntryWriteItems(before,patch,who,inventoryTable)}));}
   catch(error){throw new InventorySaveError(error instanceof Error&&error.name==='TransactionCanceledException'?'CONFLICT':'UNCONFIRMED');}
  }},raw,actor);
  clearInventoryCountCache();return view(row);

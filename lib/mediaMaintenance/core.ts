@@ -106,7 +106,7 @@ export function liveMediaReferenceRows(
   const liveImages = new Map(
     (tables.Inventory || []).map((row) => [
       String(row.id),
-      collectReferencedKeys(row.images),
+      collectReferencedKeys([row.images,row.editHistory]),
     ]),
   );
   return Object.entries(tables).flatMap(([model, rows]) =>

@@ -1,3 +1,4 @@
+import {persistInventoryWithCategories} from "./categoryPersistence";
 import "server-only";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { listAllMasterEntries, normalizeMasterName, type MasterEntry, type MasterModelName } from "./masters";
@@ -36,7 +37,7 @@ async function reassignInventoryReferences(model: MasterModelName, fromId: strin
       // なので、一覧の並び順(listUpdatedAt)も更新対象とする。
       await Promise.all(
         data.map((item) =>
-          serverDataClient.models.Inventory.update({ id: item.id, categoryId: toId, listUpdatedAt: new Date().toISOString() }, inventoryAuthMode),
+          persistInventoryWithCategories({ id: item.id, categoryId: toId, listUpdatedAt: new Date().toISOString() }, item.updatedAt, {history:{source:"カテゴリ統合"}}),
         ),
       );
       total += data.length;
@@ -48,7 +49,7 @@ async function reassignInventoryReferences(model: MasterModelName, fromId: strin
       );
       await Promise.all(
         data.map((item) =>
-          serverDataClient.models.Inventory.update({ id: item.id, locationId: toId, listUpdatedAt: new Date().toISOString() }, inventoryAuthMode),
+          persistInventoryWithCategories({ id: item.id, locationId: toId, listUpdatedAt: new Date().toISOString() }, item.updatedAt, {history:{source:"保管場所統合"}}),
         ),
       );
       total += data.length;

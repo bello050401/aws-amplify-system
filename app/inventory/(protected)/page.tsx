@@ -1,3 +1,4 @@
+import {InventoryBulkControls} from "./InventoryBulkPanel";
 import {withListImageUrls} from '@/lib/inventory/listImageUrls';
 import {selectableLocations} from "@/lib/inventory/locationChoices";
 import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
@@ -245,6 +246,7 @@ export default async function InventoryListPage(props: InventoryListPageProps) {
             />
           }
         />
+        <InventoryBulkControls categories={categories} />
         {role === "ADMIN" && inventorySpeedProbeEnabled() && (
           <InventorySpeedProbeLink href={`/inventory/${SPEED_PROBE_INVENTORY_ID}`}
             endAt={process.env.INVENTORY_SPEED_PROBE_END_AT!} />

@@ -38,7 +38,7 @@ export async function createAwsOutboundFixture(){
  }
  try{
   await Promise.all(models.map(async model=>{const name=names.get(model);await client.send(new CreateTableCommand({TableName:name,AttributeDefinitions:[{AttributeName:'id',AttributeType:'S'}],KeySchema:[{AttributeName:'id',KeyType:'HASH'}],BillingMode:'PAY_PER_REQUEST',Tags:[{Key:'Purpose',Value:'temporary-outbound-regression-test'}]}));created.push(name);await waitUntilTableExists({client,maxWaitTime:60,minDelay:1,maxDelay:3},{TableName:name});}));
-  const fixture=createOutboundFixture({database,onError:(...args)=>console.error(...args)});
+  const fixture=createOutboundFixture({database,realHistory:true,onError:(...args)=>console.error(...args)});
   await fixture.seed();
   return {...fixture,database,cleanup,prefix,failNextDispatch(){failDispatchOnce=true;},readCloud:async(model,id)=>(await database.send(new GetCommand({TableName:model,Key:{id},ConsistentRead:true}))).Item,scanCloud:async model=>(await database.send(new ScanCommand({TableName:model,ConsistentRead:true}))).Items??[]};
  }catch(error){await cleanup();throw error;}

@@ -1,6 +1,7 @@
 import 'server-only';
 import { ScanCommand, type ScanCommandInput, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { COMPACT_SEARCH_INDEX, supportsCompactSearch } from './compactSearchIndex';
+import {MAX_SEARCH_CANDIDATES} from './searchBounds';
 
 /** Call only after the existing request-level role/device checks. No auth cache.
  * An index is eventually consistent: mutations still read the original item
@@ -23,12 +24,12 @@ export async function readCompactSearch(
         }));
         rows.push(...(result.Items ?? []));
         key = result.LastEvaluatedKey;
-        if (++pages > 60 || rows.length >= 20000) throw new Error('SEARCH_LIMIT');
+        if (++pages > 60 || rows.length > MAX_SEARCH_CANDIDATES) throw new Error('SEARCH_LIMIT');
       } while (key);
       return rows;
     }));
     const rows = parts.flat();
-    return rows.length >= 20000 ? null : rows;
+    return rows.length > MAX_SEARCH_CANDIDATES ? null : rows;
   } catch {
     // Missing/backfilling index, denied IAM, throttling or partial reads: the
     // existing authoritative scan is the fallback, never a partial catalogue.

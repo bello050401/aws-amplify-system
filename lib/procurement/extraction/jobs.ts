@@ -1,3 +1,4 @@
+import {sendInventoryHistoryCommand} from "@/lib/inventory/historyTransaction";
 import {randomUUID} from 'node:crypto';
 import {DynamoDBClient} from '@aws-sdk/client-dynamodb';
 import {DynamoDBDocumentClient,GetCommand,PutCommand,UpdateCommand,TransactWriteCommand} from '@aws-sdk/lib-dynamodb';
@@ -43,7 +44,7 @@ export class ExtractionRepository {
  }
  async putObject(key:string,body:Buffer,mime:string){if(!key.startsWith('procurement-sources/')||body.length>26_000_000)throw Error('SOURCE_OBJECT_INVALID');try{await this.s3.send(new PutObjectCommand({Bucket:this.config.bucket,Key:key,Body:body,ContentType:mime,CacheControl:'private, no-store',ServerSideEncryption:'AES256',IfNoneMatch:'*',ChecksumSHA256:Buffer.from(sha(body),'hex').toString('base64')}));}catch(e){if((e as Error).name!=='PreconditionFailed')throw e;}}
  async cached(identity:SourceIdentity,hash:string){return(await this.db.send(new GetCommand({TableName:this.config.table,Key:{pk:'SOURCE#'+identityKey(identity),sk:EXTRACTION_VERSION+'#'+hash},ConsistentRead:true}))).Item?.resultKey as string|undefined;}
- async cache(job:ExtractionJob,hash:string,resultKey:string){await this.db.send(new TransactWriteCommand({TransactItems:[
+ async cache(job:ExtractionJob,hash:string,resultKey:string){await sendInventoryHistoryCommand(this.db, new TransactWriteCommand({TransactItems:[
   {ConditionCheck:{TableName:this.config.table,Key:extractionKey(job.identity.inventoryId),ConditionExpression:'revision=:r AND #s=:s',ExpressionAttributeNames:{'#s':'state'},ExpressionAttributeValues:{':r':job.revision,':s':'PROCESSING'}}},
   {Put:{TableName:this.config.table,Item:{pk:'SOURCE#'+identityKey(job.identity),sk:EXTRACTION_VERSION+'#'+hash,resultKey,revision:job.revision}}}
  ]}));}
@@ -61,7 +62,7 @@ export class ExtractionRepository {
   const hasReview=plan.held.length>0||result.dimensions.some(d=>d.disposition==='REVIEW')||(result.remarks||[]).some(d=>d.disposition==='REVIEW')||result.defects.some(d=>d.disposition==='REVIEW');
   // Stock, job revision and the audit trail commit atomically. A delayed worker
   // or staff edit cannot roll back a newer value, and a retry cannot double apply.
-  await this.db.send(new TransactWriteCommand({TransactItems:[
+  await sendInventoryHistoryCommand(this.db, new TransactWriteCommand({TransactItems:[
    {Update:{TableName:this.config.inventoryTable,Key:{id:row.id},ConditionExpression:'attribute_exists(id) AND updatedAt=:old AND attribute_not_exists(deletedAt) AND attribute_not_exists(outboundBatchId)',UpdateExpression:'SET '+entries.map((_,i)=>`#f${i}=:v${i}`).join(', '),ExpressionAttributeNames:Object.fromEntries(entries.map(([k],i)=>['#f'+i,k])),ExpressionAttributeValues:{':old':expectedUpdatedAt,...Object.fromEntries(entries.map(([,v],i)=>[':v'+i,v]))}}},
    {Update:{TableName:this.config.table,Key:extractionKey(job.identity.inventoryId),ConditionExpression:'revision=:r AND #s=:old',UpdateExpression:'SET #s=:new, revision=:next, appliedAt=:at, confirmedBy=:by, updatedAt=:at',ExpressionAttributeNames:{'#s':'state'},ExpressionAttributeValues:{':r':job.revision,':next':randomUUID(),':old':job.state,':new':hasReview?'PARTIAL':'APPLIED',':at':at,':by':by}}},
    {Put:{TableName:this.config.table,Item:{pk:job.pk,sk:'CONFIRM#'+job.revision,identity:job.identity,sourceHash:result.source.hash,resultKey:job.resultKey,changes:plan.patch,confirmedAt:at,confirmedBy:by},ConditionExpression:'attribute_not_exists(pk)'}},

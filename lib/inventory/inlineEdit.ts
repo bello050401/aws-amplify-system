@@ -65,7 +65,7 @@ export interface InlineEditChanges {
   name?: string;
   quantity?: number | null;
   locationId?: string | null;
-  categoryId?: string | null;
+  categoryIds?: string[];
   plannedSalePrice?: number | null;
   salePrice?: number | null;
   purchasePrice?: number | null;

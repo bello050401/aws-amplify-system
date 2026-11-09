@@ -9,6 +9,10 @@ try{
  assert.equal(sent.status,'COMPLETED');assert.equal(arrivalStatus(sent),'WAITING');
  const childId=sent.rows[0].splitInventoryId;
  assert.equal((await f.readCloud('Inventory',f.itemId)).quantity,2);
+ const sourceAfter=await f.readCloud('Inventory',f.itemId);
+ assert.equal(sourceAfter.revision,1);
+ assert.equal(sourceAfter.editHistory.entries.length,1);
+ assert.ok(sourceAfter.editHistory.entries[0].blockedReason);
  const child=await f.readCloud('Inventory',childId);
  assert.equal(child.quantity,3);assert.equal(child.locationId,'office');assert.deepEqual(child.categoryIds,['sale','move']);
  assert.equal(JSON.parse(child.customFields).outboundName,sent.rows[0].snapshot.exportName);
