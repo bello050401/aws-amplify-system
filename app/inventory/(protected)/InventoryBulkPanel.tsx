@@ -1,4 +1,5 @@
 "use client";
+import {inventoryEditErrorMessage} from '@/lib/inventory/editErrorMessage';
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
@@ -225,7 +226,7 @@ export function InventoryBulkControls({
       .catch((cause) => {
         if (!stale)
           setError(
-            cause instanceof Error ? cause.message : "対象を確認できません。",
+            inventoryEditErrorMessage(cause, "対象を確認できません。"),
           );
       });
     return () => {
@@ -283,9 +284,7 @@ export function InventoryBulkControls({
       await fn();
     } catch (cause) {
       setError(
-        cause instanceof Error
-          ? cause.message
-          : "通信結果を確認できません。再試行してください。",
+        inventoryEditErrorMessage(cause, "通信結果を確認できません。再試行してください。"),
       );
     } finally {
       lock.current = false;
@@ -342,7 +341,7 @@ export function InventoryBulkControls({
       } catch (cause) {
         if (!stopped) {
           setError(
-            cause instanceof Error ? cause.message : "結果を確認できません。",
+            inventoryEditErrorMessage(cause, "結果を確認できません。"),
           );
           timer = setTimeout(poll, 3000);
         }

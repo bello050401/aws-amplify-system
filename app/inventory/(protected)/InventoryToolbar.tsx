@@ -63,7 +63,9 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
   // 操作(詳細検索トグル・ページング・サイドバーの絞り込み、いずれも
   // 既存のLink/guardedNavigate経由)と同じ経路に揃える。
   const [, startSearchTransition] = useTransition();
-  const [pendingSearch, setPendingSearch] = useState<{ href: string; text: string } | null>(null);
+  const [pendingSearch, setPendingSearch] = useState<{ href: string; text: string; sequence: number; startedAt: number } | null>(null);
+  const searchSequence = useRef(0), inputAt = useRef(0);
+  const searchMetric = useRef<HTMLSpanElement>(null);
   const [searchDelayed, setSearchDelayed] = useState(false);
   // A superseded App Router transition can remain pending after the latest
   // server result has committed. Acknowledge the displayed query, not the
@@ -83,6 +85,7 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
     window.addEventListener('popstate',pop);return()=>{window.removeEventListener('popstate',pop);if(searchTimer.current)clearTimeout(searchTimer.current);};
   },[]);
   function scheduleSearch(value:string){
+    inputAt.current=performance.now();
     if(searchTimer.current)clearTimeout(searchTimer.current);
     if(composing.current||isDirty)return;
     searchTimer.current=setTimeout(()=>latestSearch.current(value,true),250);
@@ -95,6 +98,15 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
   }, [isSearchPending]);
   useEffect(() => {
     if (pendingSearch && searchResultAcknowledges(resultQuery, pendingSearch.href)) {
+      const completed = pendingSearch;
+      // Keep only a duration and sequence on the DOM; no search terms,
+      // product data or telemetry requests. Two frames include result paint.
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (searchSequence.current === completed.sequence && searchMetric.current) {
+          searchMetric.current.setAttribute('data-search-sequence', String(completed.sequence));
+          searchMetric.current.setAttribute('data-search-paint-ms', String(Math.round(performance.now()-completed.startedAt)));
+        }
+      }));
       setPendingSearch(null);
       setSearchDelayed(false);
       pendingSearchHrefRef.current = null;
@@ -162,7 +174,7 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
     typing.current=false;
     requestedText.current=value;
     pendingSearchHrefRef.current = href;
-    setPendingSearch({href, text:value});
+    setPendingSearch({href, text:value, sequence:++searchSequence.current, startedAt:automatic?inputAt.current:performance.now()});
     // App Router discards an older navigation when a new navigation is queued.
     // Each input sequence replaces the pending destination; Enter remains immediate.
     startSearchTransition(() => {
@@ -173,6 +185,7 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
 
   return (
     <div className="flex w-full flex-wrap items-center justify-between gap-4">
+      <span ref={searchMetric} hidden data-inventory-search-measurement="paint" />
       <div className="flex items-center gap-4">
         {/* 1. ページタイトル — 「在庫一覧＋件数」を薄いborderで囲み、1つ
             のタイトル領域として認識できるようにする。カードUI(角丸・

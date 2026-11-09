@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {searchResultAcknowledges as ack} from '../lib/inventory/searchNavigationState';
+import {inventoryEditErrorMessage} from '../lib/inventory/editErrorMessage';
 assert(ack('q=arper','/inventory?q=arper'));
 assert(!ack('q=chair','/inventory?q=arper'),'old result must not complete latest request');
 assert(!ack('q=arper&offset=50','/inventory?q=arper'),'same text on old page must stay pending');
@@ -11,3 +12,7 @@ assert(ack('','/inventory'));
 assert(!ack('q=arper','/elsewhere?q=arper'));
 assert(!ack('q=arper','https://outside.invalid/inventory?q=arper'));
 console.log('PASS search completion: committed query, filters, paging, ordering, Japanese, empty and external path (10 cases)');
+assert.match(inventoryEditErrorMessage(new Error('Server Action "old" was not found on the server.'),'fallback'),/入力内容はこの画面に残っています/);
+assert.equal(inventoryEditErrorMessage(new Error('Private server diagnostics'),'結果を確認できません'),'結果を確認できません');
+assert.equal(inventoryEditErrorMessage(new Error('他の操作で更新されました。'),'fallback'),'他の操作で更新されました。');
+console.log('PASS release transition and validation error messages (3 cases)');
