@@ -60,7 +60,13 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
   // のがQA-002の実体。router.pushでのSPA遷移に統一し、他のツールバー
   // 操作(詳細検索トグル・ページング・サイドバーの絞り込み、いずれも
   // 既存のLink/guardedNavigate経由)と同じ経路に揃える。
-  const [isSearchPending, startSearchTransition] = useTransition();
+  const [, startSearchTransition] = useTransition();
+  const [pendingSearch, setPendingSearch] = useState<{ href: string; text: string } | null>(null);
+  const [searchDelayed, setSearchDelayed] = useState(false);
+  // A superseded App Router transition can remain pending after the latest
+  // server result has committed. Acknowledge the displayed query, not the
+  // lifetime of unrelated/aborted React transitions.
+  const isSearchPending = pendingSearch !== null;
   const [searchText,setSearchText]=useState(q??'');
   const composing=useRef(false),searchTimer=useRef<ReturnType<typeof setTimeout>|null>(null),typing=useRef(false);
   const requestedText=useRef<string|null>(null);
@@ -85,6 +91,19 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
   useEffect(() => {
     if (!isSearchPending) pendingSearchHrefRef.current = null;
   }, [isSearchPending]);
+  useEffect(() => {
+    if (pendingSearch && (q ?? '') === pendingSearch.text) {
+      setPendingSearch(null);
+      setSearchDelayed(false);
+      pendingSearchHrefRef.current = null;
+    }
+  }, [q, pendingSearch]);
+  useEffect(() => {
+    setSearchDelayed(false);
+    if (!pendingSearch) return;
+    const timer = setTimeout(() => setSearchDelayed(true), 15000);
+    return () => clearTimeout(timer);
+  }, [pendingSearch]);
 
   function buildHref(overrides: Partial<{ q: string; advanced: string }> = {}) {
     const sp = new URLSearchParams();
@@ -141,6 +160,7 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
     typing.current=false;
     requestedText.current=value;
     pendingSearchHrefRef.current = href;
+    setPendingSearch({href, text:value});
     // App Router discards an older navigation when a new navigation is queued.
     // Each input sequence replaces the pending destination; Enter remains immediate.
     startSearchTransition(() => {
@@ -223,6 +243,12 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
             <span aria-live="polite" className="whitespace-nowrap text-[11px] font-medium text-gray-400">
               検索中…
             </span>
+          )}
+          {searchDelayed && pendingSearch && (
+            <button type="button" className="text-xs text-red-700 underline" onClick={() => {
+              if (isDirty) guardedNavigate(pendingSearch.href);
+              else window.location.assign(pendingSearch.href);
+            }}>時間がかかっています。再読み込み</button>
           )}
           <Link
             href={advancedHref}

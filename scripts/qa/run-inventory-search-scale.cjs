@@ -15,12 +15,12 @@ const name='BelloInventoryEditBenchmark20261109',table='InventorySearchQA2026110
  esbuild.buildSync({entryPoints:['scripts/qa/inventory-search-scale.ts'],outfile:path.join(dir,'index.js'),bundle:true,platform:'node',format:'cjs',target:'node22',alias:{'server-only':path.resolve('scripts/qa/inventory-edit-ui/empty.cjs')}});
  const zip=new JSZip();zip.file('index.js',fs.readFileSync(path.join(dir,'index.js')));await lambda.send(new UpdateFunctionCodeCommand({FunctionName:name,ZipFile:await zip.generateAsync({type:'nodebuffer',compression:'DEFLATE'})}));await waitUntilFunctionUpdatedV2({client:lambda,maxWaitTime:120},{FunctionName:name});
  await lambda.send(new UpdateFunctionConfigurationCommand({FunctionName:name,Description:"Isolated inventory search scale "+new Date().toISOString()}));await waitUntilFunctionUpdatedV2({client:lambda,maxWaitTime:120},{FunctionName:name});
- let previous=0;for(const count of [5645,16935,56450]){
+ let previous=0;for(const count of (process.env.SCALE_COUNTS?process.env.SCALE_COUNTS.split(',').map(Number):[5645,16935,56450])){
   for(const cache of [false,true])for(const users of [1,5,10]){
    let result;for(let attempt=0;;attempt++){
     const res=await lambda.send(new InvokeCommand({FunctionName:name,Payload:Buffer.from(JSON.stringify({count,previous,repeats:100,users,cache}))}));
     result=JSON.parse(Buffer.from(res.Payload).toString());if(!res.FunctionError)break;
-    if(result.errorType==='AccessDeniedException'&&attempt<30){await new Promise(r=>setTimeout(r,5000));continue;}
+    if((result.errorType==='AccessDeniedException'&&attempt<30)||(['InternalServerError','ServiceUnavailable','TimeoutError'].includes(result.errorType)&&attempt<3)){await new Promise(r=>setTimeout(r,5000));continue;}
     fs.writeFileSync(path.join(dir,`${count}-${users}-${cache?'cached':'cold'}-failure.json`),JSON.stringify(result,null,2));throw Error(JSON.stringify(result));
    }
    fs.writeFileSync(path.join(dir,`${count}-${users}-${cache?'cached':'cold'}.json`),JSON.stringify(result,null,2));
