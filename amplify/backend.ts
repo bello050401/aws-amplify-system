@@ -87,8 +87,8 @@ backend.data.resources.tables.Category.grantReadData(inventoryEditWorker);
 inventoryEditWorker.addToRolePolicy(new PolicyStatement({actions:['cognito-idp:AdminGetUser','cognito-idp:AdminListGroupsForUser'],resources:[backend.auth.resources.userPool.userPoolArn]}));
 inventoryEditWorker.addEventSource(new SqsEventSource(inventoryEditsQueue,{batchSize:1,reportBatchItemFailures:true,maxConcurrency:2}));
 new Alarm(inventoryEditsStack,'FailedJobs',{metric:inventoryEditsFailed.metricApproximateNumberOfMessagesVisible({period:Duration.minutes(5)}),threshold:1,evaluationPeriods:1,treatMissingData:TreatMissingData.NOT_BREACHING});
-const inventoryEditsWeb=Role.fromRoleName(inventoryEditsStack,'Web','BelloAmplifyStagingComputeRole');
-inventoryEditsTable.grantReadWriteData(inventoryEditsWeb);inventoryEditsQueue.grantSendMessages(inventoryEditsWeb);
+// The shared SSR role is at its inline-policy and managed-policy-count limits.
+// Exact edit resources are included in its existing Inventory managed policy below.
 backend.addOutput({custom:{inventoryEdits:{table:inventoryEditsTable.tableName,inventoryTable:backend.data.resources.tables.Inventory.tableName,queueUrl:inventoryEditsQueue.queueUrl,region:Stack.of(inventoryEditsStack).region}}});
 function grantInventoryHistoryReferences(fn:NodejsFunction){
  fn.addEnvironment('INVENTORY_EDIT_JOBS_TABLE',inventoryEditsTable.tableName);
@@ -753,6 +753,9 @@ if (process.env.AWS_APP_ID === 'd4hkkg7dty2du' && process.env.AWS_BRANCH === 'cl
       new PolicyStatement({actions: ['dynamodb:Scan'], resources: [inventoryTable.tableArn + '/index/' + COMPACT_SEARCH_INDEX]}),
       // EC overview reads only explicitly linked stock IDs, in one batch instead of per-row requests.
       new PolicyStatement({actions: ['dynamodb:BatchGetItem'], resources: [inventoryTable.tableArn]}),
+      new PolicyStatement({actions: ['dynamodb:GetItem','dynamodb:BatchGetItem','dynamodb:PutItem','dynamodb:UpdateItem','dynamodb:DeleteItem','dynamodb:Query','dynamodb:ConditionCheckItem'], resources: [inventoryEditsTable.tableArn]}),
+      new PolicyStatement({actions: ['dynamodb:Query'], resources: [inventoryEditsTable.tableArn + '/index/ByKind']}),
+      new PolicyStatement({actions: ['sqs:SendMessage'], resources: [inventoryEditsQueue.queueArn]}),
     ],
   });
 }
