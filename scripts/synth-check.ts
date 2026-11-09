@@ -210,6 +210,17 @@ async function main() {
     if (!compactIndexes.some(index => index.indexName === 'inventoriesBy' + field)) throw new Error('Existing inventory index removed: ' + field);
   }
   console.log('✓ Compact search: 6 existing indexes retained, 1 small id-keyed INCLUDE index added; no replacement table.');
+  if(process.env.INVENTORY_RELEASE_BASELINE){
+    const loaded=JSON.parse(fs.readFileSync(process.env.INVENTORY_RELEASE_BASELINE,'utf8'));
+    const baseline=typeof loaded.TemplateBody==='string'?JSON.parse(loaded.TemplateBody):loaded.TemplateBody;
+    const tables=Object.values(baseline.Resources??{}).filter((r:any)=>r.Type==='Custom::AmplifyDynamoDBTable') as any[];
+    if(tables.length!==1)throw Error('Existing inventory table is ambiguous');
+    const before=tables[0].Properties,after=compactTables[0].Properties;
+    for(const key of ['keySchema','attributeDefinitions','globalSecondaryIndexes','pointInTimeRecoverySpecification'])
+      if(JSON.stringify(before[key])!==JSON.stringify(after[key]))throw Error('Existing inventory table property changed: '+key);
+    console.log('✓ Production Inventory key, attributes, all seven indexes and recovery configuration unchanged.');
+  }
+
 
   // Amplify Data (Auth/Data/Storage/functions) is provisioned via nested
   // stacks, whose templates are written to disk as separate files in the

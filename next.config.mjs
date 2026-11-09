@@ -125,8 +125,8 @@ const nextConfig = {
         ],
       },
       {
-        // Authenticated iPhone message view is embedded only by our own PWA.
-        source: "/staff-messages",
+        // Authenticated staff views are embedded only by our own PWA.
+        source: "/:staffView(staff-messages|staff-inventory-edit)",
         headers: [
           { key: "X-Frame-Options", value: "SAMEORIGIN" },
           { key: "Content-Security-Policy", value: "frame-ancestors 'self'" },
