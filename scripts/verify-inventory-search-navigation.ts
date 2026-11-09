@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {searchResultAcknowledges as ack} from '../lib/inventory/searchNavigationState';
+import {coalesceSearchSubmission as coalesce, searchResultAcknowledges as ack} from '../lib/inventory/searchNavigationState';
 import {inventoryEditErrorMessage} from '../lib/inventory/editErrorMessage';
 assert(ack('q=arper','/inventory?q=arper'));
 assert(!ack('q=chair','/inventory?q=arper'),'old result must not complete latest request');
@@ -16,3 +16,10 @@ assert.match(inventoryEditErrorMessage(new Error('Server Action "old" was not fo
 assert.equal(inventoryEditErrorMessage(new Error('Private server diagnostics'),'結果を確認できません'),'結果を確認できません');
 assert.equal(inventoryEditErrorMessage(new Error('他の操作で更新されました。'),'fallback'),'他の操作で更新されました。');
 console.log('PASS release transition and validation error messages (3 cases)');
+assert(!coalesce(null,'/inventory?q=a',100));
+assert(coalesce({href:'/inventory?q=a',at:100},'/inventory?q=a',900));
+assert(!coalesce({href:'/inventory?q=a',at:100},'/inventory?q=a',1100),'explicit later search can refresh');
+assert(!coalesce({href:'/inventory?q=a',at:100},'/inventory?q=b',200));
+assert(!coalesce({href:'/inventory?q=a',at:100},'/inventory?q=a&categoryIds=c',200));
+assert(!coalesce({href:'/inventory?q=a',at:100},'/inventory?q=a',99));
+console.log('PASS automatic/button coalescing without blocking changed filters or later refresh (6 cases)');

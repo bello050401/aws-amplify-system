@@ -9,3 +9,14 @@ export function searchResultAcknowledges(resultQuery: string, requestedHref: str
   };
   return canonical(new URLSearchParams(resultQuery)) === canonical(requested.searchParams);
 }
+
+/** A click/Enter just after the 250ms automatic submission uses that same
+ * request, even if it has already committed. A later explicit search still
+ * fetches current data. No result or authorization is cached here. */
+export function coalesceSearchSubmission(
+  previous: { href: string; at: number } | null,
+  href: string,
+  now: number,
+): boolean {
+  return previous !== null && previous.href === href && now >= previous.at && now - previous.at < 1000;
+}

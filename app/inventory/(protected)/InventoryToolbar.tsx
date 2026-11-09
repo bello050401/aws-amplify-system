@@ -8,7 +8,7 @@ import { useUnsavedChanges } from "../UnsavedChangesProvider";
 import { DirectEditControls } from "./DirectEditControls";
 import { ExportMenu } from "./ExportMenu";
 import { ImportWizard } from "./ImportWizard";
-import {searchResultAcknowledges} from '@/lib/inventory/searchNavigationState';
+import {coalesceSearchSubmission, searchResultAcknowledges} from '@/lib/inventory/searchNavigationState';
 
 interface InventoryToolbarProps {
   role: InventoryRole;
@@ -65,6 +65,7 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
   const [, startSearchTransition] = useTransition();
   const [pendingSearch, setPendingSearch] = useState<{ href: string; text: string; sequence: number; startedAt: number } | null>(null);
   const searchSequence = useRef(0), inputAt = useRef(0);
+  const lastSearchSubmission = useRef<{href:string; at:number}|null>(null);
   const searchMetric = useRef<HTMLSpanElement>(null);
   const [searchDelayed, setSearchDelayed] = useState(false);
   // A superseded App Router transition can remain pending after the latest
@@ -99,6 +100,8 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
   useEffect(() => {
     if (pendingSearch && searchResultAcknowledges(resultQuery, pendingSearch.href)) {
       const completed = pendingSearch;
+      searchMetric.current?.setAttribute('data-search-commit-sequence', String(completed.sequence));
+      searchMetric.current?.setAttribute('data-search-commit-ms', String(Math.round(performance.now()-completed.startedAt)));
       // Keep only a duration and sequence on the DOM; no search terms,
       // product data or telemetry requests. Two frames include result paint.
       requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -170,11 +173,13 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
       guardedNavigate(href);
       return;
     }
-    if (isSearchPending && pendingSearchHrefRef.current === href) return; // 同一検索の連打で遷移を重ねない
+    const submittedAt=performance.now();
+    if (pendingSearchHrefRef.current === href || coalesceSearchSubmission(lastSearchSubmission.current, href, submittedAt)) return;
+    lastSearchSubmission.current={href,at:submittedAt};
     typing.current=false;
     requestedText.current=value;
     pendingSearchHrefRef.current = href;
-    setPendingSearch({href, text:value, sequence:++searchSequence.current, startedAt:automatic?inputAt.current:performance.now()});
+    setPendingSearch({href, text:value, sequence:++searchSequence.current, startedAt:automatic?inputAt.current:submittedAt});
     // App Router discards an older navigation when a new navigation is queued.
     // Each input sequence replaces the pending destination; Enter remains immediate.
     startSearchTransition(() => {
