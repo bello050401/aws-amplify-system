@@ -1,6 +1,6 @@
 import type {PostSalePlan} from './postSaleModel';
 
-export type PostSaleJob={id:string;candidateId:string;token:string;actor:string;terms:boolean;state:'SALE_EC_ACTIVE'|'SALE_EC_COMPLETE'|'SALE_EC_ATTENTION';createdAt:string;updatedAt:string;nextAt:number;attempts:number;reason?:string;ttl:number};
+export type PostSaleJob={id:string;candidateId:string;token:string;actor:string;terms:boolean;state:'SALE_EC_ACTIVE'|'SALE_EC_COMPLETE'|'SALE_EC_ATTENTION';createdAt:string;receivedAt:string;updatedAt:string;nextAt:number;attempts:number;reason?:string;ttl:number};
 export const postSaleJobId=(id:string)=>'EC_JOB:'+id;
 export function approvedPostSaleJob(plan:PostSalePlan|undefined,actor:string,token:string,confirmed:boolean,terms:boolean,now:number):{plan:PostSalePlan;job?:PostSaleJob}{
  if(!plan||!confirmed||plan.actor!==actor||plan.token!==token)throw Error('変更内容を確認してください。');
@@ -9,7 +9,8 @@ export function approvedPostSaleJob(plan:PostSalePlan|undefined,actor:string,tok
  if(plan.rows.some(r=>r.state==='READY'&&r.requiresTerms)&&!terms)throw Error('Yahoo!オークションのガイドラインを確認してください。');
  if(plan.rows.some(r=>r.channel===plan.soldChannel&&r.operation!=='RELIST'&&r.operation!=='MANUAL'))throw Error('売れた商品ページは変更できません。');
  const at=new Date(now).toISOString();
- return {plan:{...plan,state:'QUEUED',queuedAt:at,updatedAt:at},job:{id:postSaleJobId(plan.id),candidateId:plan.id,token,actor,terms,state:'SALE_EC_ACTIVE',createdAt:at,updatedAt:at,nextAt:plan.nextAt??0,attempts:0,ttl:Math.floor(now/1000)+30*86400}};
+ // ByState has a receivedAt sort key. Without it DynamoDB omits the job from this sparse index.
+ return {plan:{...plan,state:'QUEUED',queuedAt:at,updatedAt:at},job:{id:postSaleJobId(plan.id),candidateId:plan.id,token,actor,terms,state:'SALE_EC_ACTIVE',createdAt:at,receivedAt:at,updatedAt:at,nextAt:plan.nextAt??0,attempts:0,ttl:Math.floor(now/1000)+30*86400}};
 }
 export type PostSaleJobPorts={now:()=>number;read:()=>Promise<PostSalePlan|undefined>;execute:(p:PostSalePlan)=>Promise<PostSalePlan>;save:(job:PostSaleJob)=>Promise<void>;attention:(plan:PostSalePlan,reason:string)=>Promise<void>};
 /** Invoked by the scheduled worker, never by a browser timer. */

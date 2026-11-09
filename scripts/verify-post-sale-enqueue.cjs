@@ -10,6 +10,8 @@ const {build}=require('esbuild'),vm=require('node:vm'),assert=require('node:asse
   const [update,put]=c.input.TransactItems;
   assert.equal(update.Update.ConditionExpression,'#s=:review AND #t=:token AND actor=:actor AND expiresAt>=:time');
   assert.match(put.Put.ConditionExpression,/attribute_not_exists\(id\).*#s<>:active/);
+  // Actual deployed ByState key schema is (state, receivedAt); missing sort key makes a job invisible.
+  assert.equal(put.Put.Item.receivedAt,put.Put.Item.createdAt);assert(Number.isFinite(Date.parse(put.Put.Item.receivedAt)));
   if(mode==='fail-before')throw Error('DB unavailable');
   if(plan.state!=='REVIEW'||job?.state==='SALE_EC_ACTIVE')throw Error('Transaction cancelled');
   // The mock commits both records together, as required by TransactWriteItems.
