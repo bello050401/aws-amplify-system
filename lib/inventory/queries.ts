@@ -679,6 +679,7 @@ export async function getInventoryDetail(id: string, options?: {consistentDirect
   return {
     ...toListRow(item),
     ...toExtendedFields(item),
+    hasForwardHistory: readEditHistory(item as unknown as Record<string,unknown>).cursor < readEditHistory(item as unknown as Record<string,unknown>).entries.length,
     images: normalizedImages(item),
     customFields: parseCustomFields(item.customFields),
     createdBy: item.createdBy ?? null,
