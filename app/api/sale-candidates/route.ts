@@ -8,7 +8,8 @@ import {getInventoryDetail} from '@/lib/inventory/queries';
 import {bodyLimited,NO_STORE} from '@/lib/invoicing/gateway';
 import {japanToday} from '@/lib/inventory/soldOutInput';
 import {importBaseOrders} from '@/lib/saleCandidates/baseImport';
-import {reviewPostSale,executePostSale,PostSaleError} from '@/lib/saleCandidates/postSale';
+import {reviewPostSale,PostSaleError} from '@/lib/saleCandidates/postSale';
+import {enqueuePostSale,readPostSaleStatus,postSaleJobStatus} from '@/lib/saleCandidates/postSaleQueue';
 import {readManualSync,refreshManualSync,linkExternalProduct,productFingerprint,ManualSyncError} from '@/lib/listing/econveni/manualSync';
 import {inventoryThumbnails} from '@/lib/mobile/inventoryThumbnails';
 import {withCurrentSaleSummary} from '@/lib/saleCandidates/listSummary';
@@ -21,8 +22,8 @@ export async function GET(request:Request){
   const u=new URL(request.url),state=u.searchParams.get('state')==='DONE'?'DONE':'PENDING';
   const store=candidateStore(),[page,fees,status,baseStatus]=await Promise.all([store.list(state,u.searchParams.get('cursor')||undefined),store.config(),store.status(),store.baseStatus()]);
   const items=await withCurrentSaleSummary(page.items);
-  const automation=await automationStatus(items.map(x=>x.id));
-  return reply({items,cursor:page.cursor,fees,status,baseStatus,automation});
+  const [automation,postSaleJobs]=await Promise.all([automationStatus(items.map(x=>x.id)),postSaleJobStatus(items.map(x=>x.id))]);
+  return reply({items,cursor:page.cursor,fees,status,baseStatus,automation,postSaleJobs});
  }catch{return reply({error:'売却候補を取得できませんでした。'},503);}
 }
 export async function POST(request:Request){
@@ -51,7 +52,8 @@ export async function POST(request:Request){
   if(!/^[a-f0-9]{64}$/.test(b.id))return reply({error:'対象の候補を選び直してください。'},422);
   if(b.action==='delete'){await store.remove(b.id,session.owner);return reply({ok:true});}
   if(b.action==='ec-review')return reply({ok:true,plan:await reviewPostSale(b.id,session.owner,b.packSizes)});
-  if(b.action==='ec-confirm')return reply({ok:true,plan:await executePostSale(b.id,session.owner,b.token,b.confirmed===true,b.terms===true)});
+  if(b.action==='ec-status')return reply({ok:true,plan:await readPostSaleStatus(b.id)});
+  if(b.action==='ec-confirm')return reply({ok:true,plan:await enqueuePostSale(b.id,session.owner,b.token,b.confirmed===true,b.terms===true)},202);
   if(['ec-link-load','ec-link-refresh','ec-link-save'].includes(b.action)){
    const candidate=await store.get(b.id);if(candidate?.state!=='DONE'||!candidate.result)throw Error('売却済みの商品を選択してください。');
    const item=await getInventoryDetail(candidate.result.sourceId);if(!item)throw Error('在庫を確認できません。');

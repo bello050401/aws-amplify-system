@@ -59,7 +59,7 @@ async function baseApiCall<T>(path: string, params: Record<string, string | numb
   if (manual) {
     // Separate opt-in for confirmed staff operations; never enables scheduled pricing.
     const visibility = path === "/items/edit" && Object.keys(params).sort().join(",") === "item_id,visible" && [0, 1].includes(Number(params.visible));
-    const stockOnly=path==='/items/edit'&&Object.keys(params).sort().join(',')==='item_id,stock'&&Number.isSafeInteger(params.stock)&&Number(params.stock)>=0;
+    const stockOnly=path==='/items/edit'&&['item_id,stock','item_id,stock,title'].includes(Object.keys(params).sort().join(','))&&Number.isSafeInteger(params.stock)&&Number(params.stock)>=0&&Number(params.stock)<=100000&&(params.title===undefined||typeof params.title==='string'&&params.title.trim().length>0&&params.title.length<=1000);
     const image = path === "/items/add_image" && Object.keys(params).sort().join(",") === "image_no,image_url,item_id" && Number.isInteger(Number(params.image_no)) && Number(params.image_no) >= 1 && Number(params.image_no) <= 20;
     const removeImage = path === "/items/delete_image" && Object.keys(params).sort().join(",") === "image_no,item_id" && Number.isInteger(Number(params.image_no)) && Number(params.image_no) >= 1 && Number(params.image_no) <= 20;
     const content = path === "/items/edit" && Object.keys(params).sort().join(",") === "detail,item_id,price,stock,title" && typeof params.title === "string" && params.title.trim().length > 0 && Number.isSafeInteger(params.price) && Number(params.price) > 0 && Number.isSafeInteger(params.stock) && Number(params.stock) >= 0;

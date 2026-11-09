@@ -60,7 +60,7 @@ async function context(candidateId:string){
 const key=(id:string)=>({pk:'SALE_EC#'+id});
 export async function reviewPostSaleCore(ports:PostSalePorts,candidateId:string,actor:string,packSizes:Partial<Record<EcChannel,number>>={}):Promise<PostSalePlan>{
  const old=(await db.send(new GetCommand({TableName:table,Key:key(candidateId),ConsistentRead:true}))).Item as (PostSalePlan&{pk:string})|undefined;
- if(old&&(old.state==='COMPLETE'&&old.rows.length>0||old.state==='EXECUTING'&&old.expiresAt>Date.now())){
+ if(old&&(old.state==='QUEUED'||old.state==='EXECUTING'&&!!old.queuedAt||old.state==='COMPLETE'&&old.rows.length>0||old.state==='EXECUTING'&&old.expiresAt>Date.now())){
   // An already completed EC confirmation must not keep showing 'stock unchanged'
   // after the payment worker has settled the inventory. Never resend EC actions.
   if(old.quantityDeferred){const c=await candidateStore().get(candidateId);if(c?.yahooPaymentState==='APPLIED'&&c.result&&!c.result.quantityDeferred)return {...old,quantityDeferred:false};}
@@ -130,15 +130,27 @@ export async function reviewPostSaleCore(ports:PostSalePorts,candidateId:string,
 export async function executePostSaleCore(ports:PostSalePorts,candidateId:string,actor:string,token:string,confirmed:boolean,terms=false):Promise<PostSalePlan>{
  const p=(await db.send(new GetCommand({TableName:table,Key:key(candidateId),ConsistentRead:true}))).Item as PostSalePlan|undefined;
  if(!confirmed||!p||p.actor!==actor||p.token!==token)throw new PostSaleError('変更内容を確認してください。');
- if(p.state!=='REVIEW')return p;
+ const resume=!!ports.background&&p.state==='EXECUTING'&&!!p.queuedAt&&(p.executionLeaseUntil??p.expiresAt)<Date.now();
+ if(p.state!=='REVIEW'&&!(ports.background&&p.state==='QUEUED')&&!resume)return p;
+ if(!ports.background&&p.queuedAt)throw new PostSaleError('受付済みです。バックグラウンドで処理しています。');
  const current=await context(candidateId);
  if(p.expiresAt<Date.now()||p.sourceVersion!==current.source.updatedAt||p.soldChannel!==current.soldChannel||p.rows.some(r=>r.channel===current.soldChannel&&r.operation!=='RELIST'&&r.operation!=='MANUAL'))throw new PostSaleError('確認期限または対象の商品が変わりました。');
  if(ports.automatic&&p.rows.some(r=>r.operation==='RELIST'||r.channel===p.soldChannel))throw new PostSaleError('自動処理では販売先のページを変更しません。');
  if(p.rows.some(r=>r.state==='READY'&&r.requiresTerms)&&!terms)throw new PostSaleError('Yahoo!オークションのガイドラインを確認してください。');
  if(p.nextAt&&p.nextAt>Date.now())return p;
- await db.send(new UpdateCommand({TableName:table,Key:key(candidateId),UpdateExpression:'SET #s=:busy',ConditionExpression:'#s=:review AND #t=:token',ExpressionAttributeNames:{'#s':'state','#t':'token'},ExpressionAttributeValues:{':busy':'EXECUTING',':review':'REVIEW',':token':token}}));
+ await db.send(new UpdateCommand({TableName:table,Key:key(candidateId),UpdateExpression:'SET #s=:busy,executionLeaseUntil=:lease',ConditionExpression:'#s=:review AND #t=:token'+(resume?' AND executionLeaseUntil<:now':''),ExpressionAttributeNames:{'#s':'state','#t':'token'},ExpressionAttributeValues:{':busy':'EXECUTING',':review':p.state,':token':token,':lease':Date.now()+210000,...(resume?{':now':Date.now()}:{})}}));
  p.state='EXECUTING';
+ p.executionLeaseUntil=Date.now()+210000;
  p.nextAt=undefined;
+ if(resume){
+  // An interrupted external call is observed first. Durable child receipts prevent replay.
+  for(const row of p.rows.filter(r=>r.state==='VERIFY_REQUIRED')){
+   if(row.adjustment)row.state='READY';
+   else if(row.operation==='STOP'&&row.review){const r=await ports.executeStop(row.review,actor);row.message=r.message;if(r.status==='DONE')row.state='DONE';}
+   else if(row.channel==='BASE'){const r=await readBaseItem(row.externalId);if(r.quantity===row.targetQuantity&&r.title===row.targetTitle){row.state='DONE';row.message='前回の数量更新を確認しました。';}}
+  }
+  await persist(p);
+ }
  for(const row of p.rows){
   if(row.state!=='READY')continue;
   // Record an uncertain outcome before crossing the external boundary. Repeating the request cannot resend it.
@@ -150,11 +162,11 @@ export async function executePostSaleCore(ports:PostSalePorts,candidateId:string
     const result=await executeSaleAdjustment(row.adjustment);
     row.state=result.status==='DONE'?'DONE':result.status==='WAIT'?'READY':'VERIFY_REQUIRED';row.message=result.message;
     if('newListingId'in result)row.newListingId=result.newListingId;
-    if(result.status==='WAIT'){p.nextAt=result.nextAt??Date.now()+30000;p.state='REVIEW';await persist(p);return p;}
+    if(result.status==='WAIT'){p.nextAt=result.nextAt??Date.now()+30000;p.state=ports.background?'QUEUED':'REVIEW';await persist(p);return p;}
    }else if(row.operation==='STOP'&&row.review){
     const result=await ports.executeStop(row.review,actor);
     row.state=result.status==='DONE'?'DONE':result.status==='WAIT'?'READY':'BLOCKED';row.message=result.message;
-    if(result.status==='WAIT'){p.nextAt=result.nextAt??Date.now()+30000;p.state='REVIEW';await persist(p);return p;}
+    if(result.status==='WAIT'){p.nextAt=result.nextAt??Date.now()+30000;p.state=ports.background?'QUEUED':'REVIEW';await persist(p);return p;}
    }else if(row.channel==='BASE'&&row.targetQuantity!==undefined){
     const linked=await getChannelListing(p.sourceId,'BASE');if(linked?.externalListingId!==row.externalId)throw new PostSaleError('紐付けが変わりました。');
     const remote=await readBaseItem(row.externalId);if(remote.hasVariations||remote.quantity!==row.beforeQuantity||row.beforeTitle!==undefined&&remote.title!==row.beforeTitle)throw new PostSaleError('販売先の数量が変わりました。確認してください。');
@@ -171,6 +183,8 @@ async function persist(p:PostSalePlan){await db.send(new PutCommand({TableName:t
 
 export interface PostSalePorts {
  automatic?:boolean;
+ /** Private durable worker only. Browser calls enqueue the reviewed token instead. */
+ background?:boolean;
  catalog:(id:string)=>Promise<EcCatalog>;
  reviewStop:(id:string,channel:EcChannel,actor:string)=>Promise<EcReview>;
  executeStop:(review:EcReview,actor:string)=>Promise<EcReview>;

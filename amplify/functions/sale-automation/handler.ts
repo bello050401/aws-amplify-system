@@ -17,11 +17,15 @@ import {parseBaseOrder} from '../../../lib/saleCandidates/baseOrders';
 import {getAccessToken} from '../../../lib/base/oauth';
 import type {SaleCandidate} from '../../../lib/saleCandidates/model';
 import {shouldSeedAutomation} from '../../../lib/saleCandidates/automationEligibility';
+import {runPostSaleJob,type PostSaleJob} from '../../../lib/saleCandidates/postSaleQueueCore';
+import type {PostSalePlan} from '../../../lib/saleCandidates/postSaleModel';
+import {ECONVENI_WORKFLOW_TABLE} from '../../../lib/listing/econveni/runtimeStore';
 
 const required=(name:string)=>{const v=process.env[name];if(!v)throw Error('SALE_CONFIGURATION_MISSING');return v;};
 const table=()=>required('SALE_CANDIDATES_TABLE');
 const actor='BELLO_SALE_AUTOMATION';
 const ec:PostSalePorts={automatic:true,catalog:id=>getEcListingCatalogCore('ADMIN',id),reviewStop:stopListing,executeStop:(r,a)=>stopListing(r.inventoryId,r.channel,a,r.token)};
+const confirmedEc:PostSalePorts={...ec,automatic:false,background:true};
 const safeCode=(e:unknown)=>{const v=(e as {code?:string;name?:string})?.code||(e as Error)?.name;return v&&/^[A-Za-z0-9_]{1,64}$/.test(v)?v:'UNCONFIRMED';};
 async function get(id:string){return (await db.send(new GetCommand({TableName:table(),Key:{id},ConsistentRead:true}))).Item;}
 async function freshBase(c:SaleCandidate):Promise<SaleCandidate>{
@@ -49,12 +53,31 @@ export async function handler(event?:{mode?:string}){
   }catch(e){rows.push({candidateId:row.id,error:safeCode(e)});}}
   return {mode:'PREVIEW',enabled:config?.enabled===true,rows,more:!!page.LastEvaluatedKey,photoStorageConfigured:!!process.env.PHOTO_REGISTRATION_TABLE_NAME&&!!process.env.PHOTO_REGISTRATION_BUCKET_NAME};
  }
- if(!config?.enabled||!Number.isFinite(Date.parse(config.enabledAt)))return {enabled:false};
  const owner=randomUUID();
  try{await db.send(new UpdateCommand({TableName:table(),Key:{id:'AUTOMATION_LOCK'},UpdateExpression:'SET ownerId=:o,expiresAt=:e',ConditionExpression:'attribute_not_exists(expiresAt) OR expiresAt<:n',ExpressionAttributeValues:{':o':owner,':e':started+240000,':n':started}}));}
  catch(e){if((e as Error).name==='ConditionalCheckFailedException')return {busy:true};throw e;}
  let processed=0,complete=0,attention=0;
  try{
+  // Staff-confirmed work is independent of mail auto-sale. The persisted request is the authority.
+  const queueCursor=await get('POST_SALE_CURSOR');
+  const queued=await db.send(new QueryCommand({TableName:table(),IndexName:'ByState',KeyConditionExpression:'#s=:s',ExpressionAttributeNames:{'#s':'state'},ExpressionAttributeValues:{':s':'SALE_EC_ACTIVE'},Limit:20,ExclusiveStartKey:queueCursor?.cursor as QueryCommandInput['ExclusiveStartKey']}));
+  let queuedProcessed=0;
+  for(const indexed of queued.Items??[]){
+   if(Date.now()-started>100000)break;
+   // GSI may lag. Read the exact durable request before acting.
+   const job=await get(indexed.id) as PostSaleJob|undefined;
+   if(!job||job.state!=='SALE_EC_ACTIVE'||job.nextAt>Date.now())continue;
+   try{await runPostSaleJob(job,{
+    now:Date.now,
+    read:async()=> (await db.send(new GetCommand({TableName:ECONVENI_WORKFLOW_TABLE,Key:{pk:'SALE_EC#'+job.candidateId},ConsistentRead:true}))).Item as PostSalePlan|undefined,
+    execute:p=>executePostSaleCore(confirmedEc,p.candidateId,job.actor,job.token,true,job.terms),
+    save:async value=>{await db.send(new PutCommand({TableName:table(),Item:value,ConditionExpression:'#t=:t AND #s=:active',ExpressionAttributeNames:{'#t':'token','#s':'state'},ExpressionAttributeValues:{':t':job.token,':active':'SALE_EC_ACTIVE'}}));},
+    attention:async(p,reason)=>{await db.send(new UpdateCommand({TableName:ECONVENI_WORKFLOW_TABLE,Key:{pk:'SALE_EC#'+p.id},UpdateExpression:'SET #s=:attention,#e=:reason,updatedAt=:now',ConditionExpression:'#t=:t AND #s=:old',ExpressionAttributeNames:{'#t':'token','#s':'state','#e':'error'},ExpressionAttributeValues:{':t':job.token,':old':p.state,':attention':'ATTENTION',':reason':reason,':now':new Date().toISOString()}}));},
+   });queuedProcessed++;}catch(e){console.error('POST_SALE_WORKER_FAILED',{code:safeCode(e)});}
+  }
+  await db.send(new PutCommand({TableName:table(),Item:{id:'POST_SALE_CURSOR',...(queued.LastEvaluatedKey?{cursor:queued.LastEvaluatedKey}:{})}}));
+  await db.send(new PutCommand({TableName:table(),Item:{id:'POST_SALE_STATUS',lastRunAt:new Date().toISOString(),processed:queuedProcessed,durationMs:Date.now()-started}}));
+  if(event?.mode==='POST_SALE'||!config?.enabled||!Number.isFinite(Date.parse(config.enabledAt)))return {queuedProcessed,enabled:config?.enabled===true};
   const store=createCandidateStore(db,table()),fees=await store.config();
   const stock=createYahooPaymentStockPorts({db,table:inventoryTable,s3:new S3Client({}),inventoryBucket:required('INVENTORY_BUCKET'),photoTable:required('PHOTO_REGISTRATION_TABLE_NAME'),photoBucket:required('PHOTO_REGISTRATION_BUCKET_NAME'),nextSku:async()=>{
    const r=await new LambdaClient({}).send(new InvokeCommand({FunctionName:required('GENERATE_SKU_FUNCTION_NAME'),Payload:Buffer.from('{}')}));const sku=JSON.parse(Buffer.from(r.Payload??[]).toString());if(r.FunctionError||typeof sku!=='string'||!/^B\d+$/.test(sku))throw Error('SALE_SKU_FAILED');return sku;
@@ -82,6 +105,8 @@ export async function handler(event?:{mode?:string}){
    let version=job.version;
    const save=async(j:AutomationJob)=>{const next=randomUUID();await db.send(new PutCommand({TableName:table(),Item:{...j,version:next},ConditionExpression:'#v=:v',ExpressionAttributeNames:{'#v':'version'},ExpressionAttributeValues:{':v':version}}));version=next;j.version=next;};
    try{
+    const manual=await get('EC_JOB:'+job.candidateId);
+    if(manual?.state==='SALE_EC_ACTIVE')continue;
     const result=await runAutomaticSale(job,{now:Date.now,candidate:()=>store.get(job.candidateId),save,decide:async current=>{
      const c=await freshBase(current),ids=c.channel==='BASE'||c.channel==='YAHOO'?await exactListingInventoryIds(c.channel,c.externalListingId??''):[];
      return automaticSaleDecision(c,ids,ids.length===1?(await getInventoryRaw(ids[0])??null):null,fees,config.enabledAt);

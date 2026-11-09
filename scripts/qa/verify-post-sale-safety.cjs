@@ -1,9 +1,9 @@
 const {build}=require('esbuild'),vm=require('node:vm'),assert=require('node:assert/strict'),fs=require('node:fs');
 (async()=>{
-const built=await build({entryPoints:['lib/saleCandidates/postSale.ts'],bundle:true,platform:'node',format:'cjs',write:false,plugins:[{name:'isolate-ports',setup(b){b.onResolve({filter:/.*/},a=>a.kind==='entry-point'||a.path==='./postSaleCore'?undefined:{path:a.path,external:true});}}]});
+const built=await build({stdin:{contents:"export * from './lib/saleCandidates/postSale';export {executePostSaleCore} from './lib/saleCandidates/postSaleCore';",resolveDir:process.cwd(),loader:'ts'},bundle:true,platform:'node',format:'cjs',write:false,plugins:[{name:'isolate-ports',setup(b){b.onResolve({filter:/.*/},a=>a.kind==='entry-point'||['./postSaleCore','./lib/saleCandidates/postSale','./lib/saleCandidates/postSaleCore'].includes(a.path)?undefined:{path:a.path,external:true});}}]});
 let blankFromSync=false,soldCategory=false,deferred=false,paymentState,plans=new Map(),calls=[],stock=5,title='【在庫5】椅子',remaining=3,market='MERCARI',version='v1',remoteFailure=false,sourceCount=null,soldCount=2,saleIdentity=true,fullSale=false,soldOrder='order',soldVersion=null,selling=false,deleted=false,observation={remote:null,reviews:{}},reviewFailure=false;
 const candidate=()=>({id:'c',state:'DONE',yahooPaymentState:paymentState,channel:market,orderId:'order',result:{sourceId:'source',soldId:fullSale||deferred?'source':'sold',soldQuantity:2,...(deferred?{quantityDeferred:true,sourceQuantity:remaining+2}:{}),remainingQuantity:remaining,updatedAt:'v1'}});
-const db={send:async c=>{const x=c.input,k=x.Key?.pk??x.Item?.pk;if(c.kind==='GetCommand')return{Item:plans.has(k)?structuredClone(plans.get(k)):undefined};if(c.kind==='PutCommand'){plans.set(k,structuredClone(x.Item));return{};}const old=plans.get(k);if(old.state!=='REVIEW')throw Error('Concurrent');old.state='EXECUTING';return{};}};
+const db={send:async c=>{const x=c.input,k=x.Key?.pk??x.Item?.pk;if(c.kind==='GetCommand')return{Item:plans.has(k)?structuredClone(plans.get(k)):undefined};if(c.kind==='PutCommand'){plans.set(k,structuredClone(x.Item));return{};}const old=plans.get(k);if(old.state!==x.ExpressionAttributeValues[':review']||old.token!==x.ExpressionAttributeValues[':token'])throw Error('Concurrent');old.state='EXECUTING';return{};}};
 const make=k=>class{constructor(input){this.input=input;this.kind=k;}};
 const mods={
  'server-only':{},'node:crypto':require('node:crypto'),'@aws-sdk/lib-dynamodb':Object.fromEntries(['GetCommand','PutCommand','UpdateCommand'].map(k=>[k,make(k)])),
@@ -61,7 +61,20 @@ p=await reviewPostSale('c','owner');assert.equal(p.remaining,0);assert.equal(p.r
 reset();remaining=0;fullSale=true;version='v2';blankFromSync=true;await assert.rejects(()=>reviewPostSale('c','owner'),/数量または注文/);
 reset();remaining=3;version='v2';blankFromSync=true;soldCategory=true;await assert.rejects(()=>reviewPostSale('c','owner'),/数量または注文/);
 reset();remaining=0;fullSale=true;version='v2';blankFromSync=true;soldCategory=true;soldOrder='different';await assert.rejects(()=>reviewPostSale('c','owner'),/数量または注文/);
-const resultText='PASS: deferred-payment stock unchanged; pending other-channel stop and virtual remaining stock;  explicit confirmation; actor/token binding; sold-channel exclusion; zero-stock stops only other channels; pack-size stock; stale inventory blocked; uncertain write not retried; unsupported quantity not replaced with stop.';
+// Real execution core, with only the external stop endpoint replaced: waiting and crash recovery.
+reset();remaining=0;market='YAHOO';p=await reviewPostSale('c','owner');
+const queued=plans.get('SALE_EC#c');queued.state='QUEUED';queued.queuedAt=new Date().toISOString();
+let stopping=0,wait=true;
+const background={background:true,catalog:async()=>({channels:{},errors:[]}),reviewStop:async()=>{},executeStop:async r=>{stopping++;return wait?{status:'WAIT',message:'間隔待ち',nextAt:Date.now()+30000}:{status:'DONE',message:'停止済み'};}};
+const run=()=>module.exports.executePostSaleCore(background,'c','owner',p.token,true);
+await executePostSale('c','owner',p.token,true);assert.equal(stopping,0); // Browser cannot drain an accepted job.
+let bg=await run();assert.equal(bg.state,'QUEUED');assert.equal(stopping,1);assert.equal(bg.rows[0].state,'READY');
+await run();assert.equal(stopping,1); // No sleep or early resend; next schedule owns the delay.
+plans.get('SALE_EC#c').nextAt=0;wait=false;bg=await run();assert.equal(bg.state,'COMPLETE');assert.equal(stopping,3);assert(!bg.rows.some(r=>r.channel==='YAHOO'));
+await run();assert.equal(stopping,3);
+reset();remaining=0;market='YAHOO';p=await reviewPostSale('c','owner');Object.assign(plans.get('SALE_EC#c'),{state:'QUEUED',queuedAt:new Date().toISOString()});version='changed';await assert.rejects(run,/商品が変わり/);assert.equal(stopping,3);
+reset();remaining=0;market='YAHOO';p=await reviewPostSale('c','owner');Object.assign(plans.get('SALE_EC#c'),{state:'EXECUTING',queuedAt:new Date().toISOString(),executionLeaseUntil:Date.now()-1});plans.get('SALE_EC#c').rows[0].state='VERIFY_REQUIRED';bg=await run();assert.equal(bg.state,'COMPLETE');assert.equal(stopping,5); // Protected child receipt is consulted on recovery.
+const resultText='PASS: background queue never sleeps in browser; 30-second retry gate; stale stock rejected; interrupted worker recovery; deferred-payment stock unchanged; pending other-channel stop and virtual remaining stock; explicit confirmation; actor/token binding; sold-channel exclusion; zero-stock stops only other channels; pack-size stock; stale inventory blocked; uncertain write not retried; unsupported quantity not replaced with stop.';
 fs.mkdirSync('artifacts/sale-shipping-link-20261031',{recursive:true});fs.writeFileSync('artifacts/sale-shipping-link-20261031/post-sale-safety.txt',resultText);console.log(resultText);
 })().catch(e=>{console.error(e);process.exitCode=1;});
 

@@ -188,6 +188,9 @@ if(process.env.PHOTO_REGISTRATION_TABLE_NAME&&process.env.PHOTO_REGISTRATION_BUC
  saleAutomation.addToRolePolicy(new PolicyStatement({actions:['s3:GetObject'],resources:[`arn:aws:s3:::${process.env.PHOTO_REGISTRATION_BUCKET_NAME}/photo-batches/*/processed/*`,`arn:aws:s3:::${process.env.PHOTO_REGISTRATION_BUCKET_NAME}/photo-batches/*/thumbnail/*`]}));
 }
 new Rule(saleStack,'AutomaticSalesPoll',{schedule:Schedule.rate(Duration.minutes(1)),targets:[new LambdaFunction(saleAutomation,{retryAttempts:0})]});
+if(process.env.AWS_APP_ID==='d4hkkg7dty2du'&&process.env.AWS_BRANCH==='claude/inventory-management-system-5vbvc7'){
+ new ManagedPolicy(saleStack,'ConfirmedSaleQueueWebInvoke',{roles:[Role.fromRoleName(saleStack,'ConfirmedSaleWebRuntime','BelloAmplifyStagingComputeRole')],statements:[new PolicyStatement({actions:['lambda:InvokeFunction'],resources:[saleAutomation.functionArn]}),new PolicyStatement({actions:['dynamodb:BatchGetItem'],resources:[purchaseTable.tableArn]})]});
+}
 new Alarm(saleStack,'AutomaticSalesErrors',{metric:saleAutomation.metricErrors({period:Duration.minutes(5)}),threshold:1,evaluationPeriods:1,treatMissingData:TreatMissingData.NOT_BREACHING});
 backend.addOutput({custom:{saleAutomation:{functionName:saleAutomation.functionName}}});
 
