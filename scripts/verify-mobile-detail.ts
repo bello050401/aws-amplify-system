@@ -117,8 +117,8 @@ async function main() {
   assert.equal(core.diagnostics.milliseconds.photoAssets, undefined);
   const editRequest = parseMobileSave({ id, expectedUpdatedAt: core.item.updatedAt, mutationId: '22222222-2222-4222-8222-222222222222',
     draft: {...draftFor(core.item), name: 'Edited while photos load'} }, id);
-  const input = mobileInventoryInput(row as InventoryDetail, editRequest, 'staff', {ecListing:true,sales:true},
-    [{id:'category',name:'販売中'}], [{id:'location',name:'倉庫'}], [{id:'status',label:'既存の状態'}]);
+  const input = mobileInventoryInput(row as unknown as InventoryDetail, editRequest, 'staff', {ecListing:true,sales:true},
+    [{id:'category',name:'販売中',parentId:null,sortOrder:0}], [{id:'location',name:'倉庫',parentId:null,sortOrder:0}], [{id:'status',code:'normal',label:'既存の状態',sortOrder:0}]);
   assert.equal(input.name, 'Edited while photos load');
   assert.equal(input.images.length, row.images.length, 'Deferred photos must not clear original images on save');
   assert.deepEqual(input.images.map(image => 'storageKey' in image ? image.storageKey : undefined), row.images.map(image=>image.storageKey));
