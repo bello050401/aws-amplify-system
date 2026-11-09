@@ -1,4 +1,4 @@
-import { draftFor, sameDraft, validateDraft, type InventoryDraft, type InventoryItem } from "./inventory";
+import { draftFor, sameDraft, validateDraft, mergeInventoryGallery, type InventoryGallery, type InventoryDraft, type InventoryItem } from "./inventory";
 import { DETAIL_FIELDS, copyDetailValues } from "./detailFields";
 import type { PendingPhoto, UploadedPhoto } from "./inventory";
 import {splitCategoryNames} from '../../../lib/inventory/categories';
@@ -75,6 +75,21 @@ export class InventoryEditor {
   private set(patch: Partial<EditorState>) {
     this.state = { ...this.state, ...patch };
     this.listeners.forEach((listener) => listener());
+  }
+
+  receiveGallery(gallery: InventoryGallery): void {
+    const saved = mergeInventoryGallery(this.state.saved, gallery);
+    if (saved !== this.state.saved) this.set({ saved });
+  }
+
+  retryGallery(): void {
+    if (!this.state.saving && !this.state.outcomeUncertain) this.set({ saved: { ...this.state.saved, photosDeferred: true } });
+  }
+
+  galleryFailed(id: string, updatedAt: string): void {
+    if (this.state.saved.id === id && this.state.saved.updatedAt === updatedAt && this.state.saved.photosDeferred) {
+      this.set({ saved: { ...this.state.saved, photosDeferred: false, photosComplete: false } });
+    }
   }
 
   change<K extends keyof InventoryDraft>(key: K, value: InventoryDraft[K]): void {

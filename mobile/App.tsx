@@ -25,6 +25,8 @@ function Preview() {
   const readAttempt = useRef(0);
   const [catalogReads,setCatalogReads]=useState(0),[pageReads,setPageReads]=useState(0);
   const loadingTest = useRef(__DEV__ && typeof window !== "undefined" && new URLSearchParams(window.location.search).get("loading-test") === "1").current;
+  const galleryDelayTest = useRef(__DEV__ && typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('gallery-delay-test')).current;
+  const galleryAttempts = useRef(0);
   const quickSearchTest = useRef(__DEV__ && typeof window !== "undefined" && new URLSearchParams(window.location.search).get("quick-search-test") === "1").current;
   const records = useRef(quickSearchTest ? Array.from({length:6000},(_,index)=>({...previewItems[index%3],id:`quick-preview-${index}`,sku:`QA-${index}`,name:`検索確認 チェア ${index}`,thumbnailUrl:null,quantity:index%10+1})) : __DEV__ && typeof window !== "undefined" && new URLSearchParams(window.location?.search).get("gallery-test") === "1"
     ? galleryPreviewItems() : previewItems.map((item,index) => ({ ...item, ...(__DEV__ && index===0 && typeof window!=='undefined' && new URLSearchParams(window.location.search).get('photo-delete-test')==='1' ? {photosComplete:true,photos:[{id:'photo-00000000-0000-4000-8000-000000000001',source:'PHOTO_ASSET' as const,url:'http://127.0.0.1:8146/photo.jpg',type:'NORMAL' as const,primary:true},{id:'preview-image',source:'INVENTORY' as const,url:'http://127.0.0.1:8146/photo.jpg',type:'NORMAL' as const,primary:false}]} : {}) })));
@@ -62,6 +64,19 @@ function Preview() {
     online: async () => !offlineRef.current,
     newMutationId: () => Crypto.randomUUID(),
     loadOptions: async()=>({categories:["販売中","撮影待ち"],locations:["川越倉庫","所沢倉庫"],statuses:previewItems[0].statusOptions??[]}),
+    ...(galleryDelayTest ? {
+      loadEditableDetail: async (id: string) => {
+        await new Promise(resolve => setTimeout(resolve,200));
+        const item=records.current.find(row=>row.id===id)!;
+        return {...item,detailLoadedAt:new Date().toISOString(),photos:undefined,photosComplete:false,photosDeferred:true};
+      },
+      loadPhotos: async (id: string) => {
+        const item=records.current.find(row=>row.id===id)!,attempt=++galleryAttempts.current;
+        await new Promise(resolve=>setTimeout(resolve,5000));
+        if(attempt===1 && new URLSearchParams(window.location.search).get('gallery-delay-test')==='fail')throw Error('Synthetic photo outage');
+        return {id,updatedAt:item.updatedAt,photos:item.photos??[],photosComplete:true};
+      },
+    } : {}),
     deletePhotoAsset:async(id,photoId)=>{const item=records.current.find(r=>r.id===id);if(!item)throw Error('写真が見つかりません。');item.photos=item.photos?.filter(p=>p.id!==photoId);},
     uploadPhoto:async photo=>{uploadedPhotos.current.set(photo.id,photo.uri);return {storageKey:photo.id,type:photo.type};},
     checkBarcode:async(barcode,id)=>records.current.filter(r=>r.id!==id&&r.barcode===barcode).length,

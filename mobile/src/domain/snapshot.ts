@@ -35,6 +35,7 @@ export function isInventoryItem(value: unknown): value is InventoryItem {
     (row.details === undefined || isDetailValues(row.details)) &&
     (row.detailLoadedAt === undefined || (typeof row.detailLoadedAt === "string" && Number.isFinite(Date.parse(row.detailLoadedAt)))) &&
     (row.photosComplete === undefined || typeof row.photosComplete === "boolean") &&
+    (row.photosDeferred === undefined || typeof row.photosDeferred === "boolean") &&
     (row.photos === undefined || (Array.isArray(row.photos) && row.photos.every(photo =>
       photo && typeof photo.id === "string" && typeof photo.primary === "boolean" &&
       (photo.url === null || (typeof photo.url === "string" && photo.url.startsWith("https://"))) &&

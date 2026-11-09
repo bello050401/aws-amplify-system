@@ -23,28 +23,39 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
   const { id } = (await context.params);
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return NextResponse.json({ error: "INVALID_ID" }, { status: 400, headers });
   try {
+    // Text editing does not depend on PhotoStation or signed gallery URLs.
+    // Keep the default full response for existing clients and save receipts.
+    const photoMode = new URL(_request.url).searchParams.get('photos');
+    const photosOnly = photoMode === 'only';
+    const photosDeferred = photoMode === 'deferred';
     // Start independent reads after authorization. Master choices must not wait
     // for the item, particularly when this server's master cache is still cold.
     const [row, assetResult, activeCategories, activeLocations, statuses] = await Promise.all([
-      measure('inventory', () => getInventoryDetail(id, {consistentDirectRead: true})), measure('photoAssets', () => listInventoryPhotoAssetsAction(id)).catch(() => null),
-      measure('categories', () => listCategories()), measure('locations', () => listLocations()), measure('statuses', listStatuses),
+      measure('inventory', () => getInventoryDetail(id, {consistentDirectRead: true})),
+      photosDeferred ? null : measure('photoAssets', () => listInventoryPhotoAssetsAction(id)).catch(() => null),
+      photosOnly ? [] : measure('categories', () => listCategories()),
+      photosOnly ? [] : measure('locations', () => listLocations()),
+      photosOnly ? [] : measure('statuses', listStatuses),
     ]);
     if (!row) return NextResponse.json({ error: "NOT_FOUND" }, { status: 404, headers });
     // Existing records may reference a retired choice. Preserve it exactly as
     // before; only that exceptional lookup depends on the item's current IDs.
     const [categories, locations] = await Promise.all([
-      row.categoryId && !activeCategories.some(option => option.id === row.categoryId)
+      !photosOnly && row.categoryId && !activeCategories.some(option => option.id === row.categoryId)
         ? measure('inactiveCategory', () => listCategories(row.categoryId)) : activeCategories,
-      row.locationId && !activeLocations.some(option => option.id === row.locationId)
+      !photosOnly && row.locationId && !activeLocations.some(option => option.id === row.locationId)
         ? measure('inactiveLocation', () => listLocations(row.locationId)) : activeLocations,
     ]);
-    const photos = await mobileInventoryPhotos(row.images, assetResult?.ok ? assetResult.value.assets : [], async path => {
+    const photos = photosDeferred ? [] : await measure('photoUrls', () => mobileInventoryPhotos(row.images, assetResult?.ok ? assetResult.value.assets : [], async path => {
       const url = await signInventoryListKey(path);
       if (!url) throw new Error("IMAGE_UNAVAILABLE");
       return url;
-    });
+    }));
+    const photosComplete = Boolean(assetResult?.ok && !assetResult.value.truncated && photos.every(photo => photo.url));
+    if (photosOnly) return NextResponse.json({ owner: session.owner, gallery: { id: row.id, updatedAt: row.updatedAt, photos, photosComplete } }, { headers });
     const item = mobileInventoryDetail(row, categories, locations, statuses, session.features, photos, new Date().toISOString());
-    item.photosComplete = Boolean(assetResult?.ok && !assetResult.value.truncated && photos.every(photo => photo.url));
+    item.photosComplete = photosComplete;
+    if (photosDeferred) { item.photosDeferred = true; delete item.photos; }
     // Explicit administrator-only diagnostics contain durations, never tokens,
     // query arguments or extra business records. Ordinary responses are unchanged.
     const diagnostics = session.role === 'ADMIN' && new URL(_request.url).searchParams.get('timing') === '1'

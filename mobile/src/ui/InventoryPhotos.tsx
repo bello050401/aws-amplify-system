@@ -7,7 +7,7 @@ import { colors } from "./theme";
 import {SafeAreaView} from 'react-native-safe-area-context';
 import {ZoomablePhoto} from './ZoomablePhoto';
 
-export function InventoryPhotos({ item, onRemove, onDeleteAsset, disabled = false }: { item: InventoryItem; onRemove?: (id: string) => void; onDeleteAsset?: (id:string)=>Promise<void>; disabled?: boolean }) {
+export function InventoryPhotos({ item, onRemove, onDeleteAsset, onRetry, disabled = false }: { item: InventoryItem; onRemove?: (id: string) => void; onDeleteAsset?: (id:string)=>Promise<void>; onRetry?: () => void; disabled?: boolean }) {
   const [deleteError,setDeleteError]=useState('');
   const [deleting,setDeleting]=useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -25,8 +25,8 @@ export function InventoryPhotos({ item, onRemove, onDeleteAsset, disabled = fals
     <Image source={{ uri: photo.url, cacheKey: `${item.id}:${photo.id}:${item.updatedAt}:preview` }} style={large ? s.hero : s.photo} cachePolicy="memory-disk" contentFit={large ? "contain" : "cover"} /> :
     <View style={[large ? s.hero : s.photo, s.empty]}><Ionicons name="image-outline" size={30} color={colors.muted} /><Text style={s.caption}>取得できません</Text></View>;
   return <View style={s.section}>
-    <View style={s.headingRow}><Text style={s.heading}>画像</Text><Text style={s.count}>合計 {photos.length}枚</Text></View>
-    {item.photosComplete === false && <Text accessibilityRole="alert" style={s.warning}>一部の画像を取得できませんでした。通信できる状態で詳細を開き直してください。</Text>}
+    <View style={s.headingRow}><Text style={s.heading}>画像</Text><Text style={s.count}>{item.photosDeferred ? '読み込み中' : `合計 ${photos.length}枚`}</Text></View>
+    {item.photosDeferred ? <Text style={s.caption}>写真を読み込んでいます。ほかの項目は編集できます。</Text> : item.photosComplete === false && <View><Text accessibilityRole="alert" style={s.warning}>画像をすべて取得できませんでした。ほかの項目は編集できます。</Text>{onRetry && <Pressable accessibilityRole="button" accessibilityLabel="画像を再読み込み" disabled={disabled} onPress={onRetry} style={s.more}><Text style={s.moreText}>画像を再読み込み</Text></Pressable>}</View>}
     <View style={s.tabs}>
       {([ ["NORMAL", "商品画像", normal.length], ["DAMAGE", "傷・状態", damage.length] ] as const).map(([value, label, count]) =>
         <Pressable key={value} accessibilityRole="tab" accessibilityLabel={`${label} ${count}枚`} accessibilityState={{ selected: group === value }} onPress={() => { setGroup(value); setShown(24); }} style={[s.tab, group === value && s.activeTab]}>
@@ -35,7 +35,7 @@ export function InventoryPhotos({ item, onRemove, onDeleteAsset, disabled = fals
     </View>
     {hero ? <Pressable accessibilityRole="button" accessibilityLabel="選択中の画像を拡大" onPress={() => setExpanded(hero.id)} style={s.heroWrap}>
       {picture(hero, true)}{hero.primary && <Text style={s.badge}>主画像</Text>}
-    </Pressable> : <View style={[s.hero, s.empty]}><Ionicons name="image-outline" size={36} color={colors.muted} /><Text style={s.caption}>画像なし</Text></View>}
+    </Pressable> : <View style={[s.hero, s.empty]}><Ionicons name="image-outline" size={36} color={colors.muted} /><Text style={s.caption}>{item.photosDeferred ? '画像を読み込み中' : item.photosComplete === false ? '画像を取得できませんでした' : '画像なし'}</Text></View>}
     <View style={s.grid}>
       {current.slice(0, shown).map((photo, index) => <View key={photo.id} style={[s.cell, photo.primary && s.primary]}>
         <Pressable accessibilityRole="button" accessibilityLabel={`${group === "DAMAGE" ? "傷・状態" : "商品画像"}${index + 1}を拡大`} onPress={() => setExpanded(photo.id)}>

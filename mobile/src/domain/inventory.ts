@@ -8,6 +8,17 @@ export interface InventoryPhoto {
   source?: "INVENTORY" | "PHOTO_ASSET";
 }
 export interface InventoryStatusOption { id: string; label: string }
+export type InventoryGallery = { id: string; updatedAt: string; photos: InventoryPhoto[]; photosComplete: boolean };
+export function isInventoryGallery(value: unknown): value is InventoryGallery {
+  if (!value || typeof value !== 'object') return false;
+  const row = value as InventoryGallery;
+  const url = (value: unknown) => value === null || (typeof value === 'string' && value.startsWith('https://'));
+  return typeof row.id === 'string' && typeof row.updatedAt === 'string' && Number.isFinite(Date.parse(row.updatedAt)) &&
+    typeof row.photosComplete === 'boolean' && Array.isArray(row.photos) && row.photos.every(photo =>
+      photo && typeof photo.id === 'string' && typeof photo.primary === 'boolean' && url(photo.url) &&
+      (photo.fullUrl === undefined || url(photo.fullUrl)) && (photo.type === undefined || ['NORMAL','DAMAGE'].includes(photo.type)) &&
+      (photo.source === undefined || ['INVENTORY','PHOTO_ASSET'].includes(photo.source)));
+}
 export interface PendingPhoto { id: string; uri: string; type: "NORMAL" | "DAMAGE" }
 export interface UploadedPhoto { storageKey: string; type: "NORMAL" | "DAMAGE" }
 export interface InventoryOptions { searchFields?: SearchFieldDef[]; categories: string[]; locations: string[]; statuses: InventoryStatusOption[] }
@@ -40,7 +51,17 @@ export interface InventoryItem {
   details?: DetailValues;
   photos?: InventoryPhoto[];
   photosComplete?: boolean;
+  /** Gallery acquisition runs independently from the editable detail read. */
+  photosDeferred?: boolean;
   detailLoadedAt?: string;
+}
+
+/** Never let a late gallery response overwrite newer stock, text, or images. */
+export function mergeInventoryGallery(item: InventoryItem, gallery: InventoryGallery): InventoryItem {
+  if (item.id !== gallery.id || item.updatedAt !== gallery.updatedAt || !item.photosDeferred) return item;
+  const primary = gallery.photos.find(photo => photo.primary) ?? gallery.photos[0];
+  return { ...item, photos: gallery.photos, photosComplete: gallery.photosComplete, photosDeferred: false,
+    thumbnailUrl: primary?.url ?? (gallery.photosComplete ? null : item.thumbnailUrl) };
 }
 
 export type InventoryDraft = {

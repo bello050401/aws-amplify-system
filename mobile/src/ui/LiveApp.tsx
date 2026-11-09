@@ -18,6 +18,7 @@ import { colors } from "./theme";
 import { loginErrorMessage, loginUsername, requestedLoginMode, type LoginMode } from "../domain/login";
 import type { InventorySearchInput } from "../domain/search";
 import {DetailReadAhead} from '../domain/detailReadAhead';
+import {readInventoryGallery} from '../runtime/service';
 
 function connected(state: Network.NetworkState) { return state.isConnected !== false && state.isInternetReachable !== false; }
 const loginModeKey = `bello.login-mode.${API_ORIGIN}`;
@@ -78,7 +79,7 @@ export function LiveApp() {
     const snapshot = new SnapshotStore(AsyncStorage, userId, API_ORIGIN);
     const searchCatalogStore=new CatalogStore(catalogStorage,userId,API_ORIGIN);
     const detailAhead = new DetailReadAhead(async id => {
-      try { return await readInventoryDetail(id); }
+      try { return await readInventoryDetail(id, true); }
       catch (error) { if (error instanceof StaffSessionError) await revoke(error.message); throw error; }
     });
     const loadThumbnails=async(ids:string[])=>{try{return await readInventoryThumbnails(ids);}catch(error){if(error instanceof StaffSessionError)await revoke(error.message);throw error;}};
@@ -130,7 +131,15 @@ export function LiveApp() {
       }
     },
     loadThumbnails,
-    loadDetail: (id,version) => detailAhead.read(id,version),
+    loadDetail: async id => {
+      try { return await readInventoryDetail(id); }
+      catch (error) { if (error instanceof StaffSessionError) await revoke(error.message); throw error; }
+    },
+    loadEditableDetail: (id,version) => detailAhead.read(id,version),
+    loadPhotos: async id => {
+      try { return await readInventoryGallery(id); }
+      catch (error) { if (error instanceof StaffSessionError) await revoke(error.message); throw error; }
+    },
     prepareDetail: (id,version) => {
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
       const connection = typeof navigator === 'undefined' ? undefined : (navigator as unknown as {connection?:{saveData?:boolean;effectiveType?:string}}).connection;

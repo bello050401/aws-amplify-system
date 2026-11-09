@@ -14,7 +14,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import { Image } from "expo-image";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { InventoryEditor, type EditorPorts } from "../domain/editor";
-import { mergeInventoryRead, mergeInventoryThumbnails, type InventoryThumbnail, type InventoryItem, type InventoryOptions } from "../domain/inventory";
+import { mergeInventoryRead, mergeInventoryThumbnails, mergeInventoryGallery, type InventoryGallery, type InventoryThumbnail, type InventoryItem, type InventoryOptions } from "../domain/inventory";
 import { SnapshotStore, type InventorySnapshot } from "../domain/snapshot";
 import { InventoryEditorScreen } from "./InventoryEditorScreen";
 import {StockSplitScreen,type StockSplitPorts} from './StockSplitScreen';
@@ -53,6 +53,8 @@ export interface StaffAppPorts extends EditorPorts {
   loadOptions?: () => Promise<InventoryOptions>;
   loadSales?: (year:number,month:number,items?:boolean)=>Promise<SalesResponse>;
   loadDetail?: (id: string, expectedVersion?: string) => Promise<InventoryItem>;
+  loadEditableDetail?: (id: string, expectedVersion?: string) => Promise<InventoryItem>;
+  loadPhotos?: (id: string) => Promise<InventoryGallery>;
   prepareDetail?: (id: string, expectedVersion: string) => void;
   clearPreparedDetails?: () => void;
   removeInventory?: (request: DeleteRequest) => Promise<void>;
@@ -78,6 +80,36 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
   const [snapshot, setSnapshot] = useState<InventorySnapshot | null>(null);
   const [selected, setSelected] = useState<InventoryItem | null>(null);
   const [editor, setEditor] = useState<InventoryEditor | null>(null);
+  const editorRef = useRef(editor);
+  editorRef.current = editor;
+  useEffect(() => {
+    if (!selected?.photosDeferred || !ports.loadPhotos) return;
+    const {id, updatedAt} = selected;
+    let active = true;
+    void ports.loadPhotos(id).then(gallery => {
+      if (!active) return;
+      if (gallery.id !== id || gallery.updatedAt !== updatedAt) throw new Error('GALLERY_VERSION_CHANGED');
+      editorRef.current?.receiveGallery(gallery);
+      setSelected(current => current ? mergeInventoryGallery(current, gallery) : current);
+      const cached = snapshotRef.current;
+      if (cached) {
+        const items = cached.items.map(item => mergeInventoryGallery(item, gallery));
+        if (items.some((item, index) => item !== cached.items[index])) {
+          snapshotRef.current = { ...cached, items }; setSnapshot(snapshotRef.current);
+          void ports.snapshot.write(items, cached.fetchedAt).catch(() => {});
+        }
+      }
+    }).catch(() => {
+      if (!active) return;
+      editorRef.current?.galleryFailed(id, updatedAt);
+      setSelected(current => current?.id === id && current.updatedAt === updatedAt ? { ...current, photosDeferred: false, photosComplete: false } : current);
+    });
+    return () => { active = false; };
+  }, [selected?.id, selected?.updatedAt, selected?.photosDeferred, ports.loadPhotos]);
+  const retryPhotos = () => {
+    editorRef.current?.retryGallery();
+    setSelected(current => current ? { ...current, photosDeferred: true } : current);
+  };
   const [splitting,setSplitting]=useState<InventoryItem|null>(null);
   const [selling,setSelling]=useState<InventoryItem|null>(null);
   const [deleteTarget, setDeleteTarget] = useState<InventoryItem | null>(null);
@@ -377,7 +409,9 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
         if (!item.detailLoadedAt) setError("【圏外です】この商品の詳細は未取得です。保存済みの基本情報を表示しています。");
         return;
       }
-      const detail = freshlyLoaded ? item : await ports.loadDetail(item.id,item.updatedAt);
+      const loaded = freshlyLoaded ? item : await (ports.loadEditableDetail ?? ports.loadDetail)(item.id,item.updatedAt);
+      // Keep the existing preview while the separately authorized gallery loads.
+      const detail = loaded.photosDeferred ? { ...loaded, thumbnailUrl: loaded.thumbnailUrl ?? item.thumbnailUrl } : loaded;
       if (attempt !== detailGeneration.current) return;
       if (detail.id !== item.id) throw new Error("Detail identity mismatch");
       if(quick.current.observe(detail)){selectPhotos(Date.now());persistCatalog();}
@@ -429,7 +463,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
       <Pressable accessibilityRole="button" onPress={onToggleOffline}><Text style={s.previewLink}>{offline ? "通信を戻す" : "圏外を試す"}</Text></Pressable>
     </View>}
     {preview && onTogglePreviewAccount && <Pressable accessibilityRole="button" accessibilityLabel="表示確認アカウントを切り替え" onPress={onTogglePreviewAccount} style={s.accountPreview}><Text style={s.previewText}>表示確認：{previewAccount}</Text><Text style={s.previewLink}>切り替え</Text></Pressable>}
-    {inventoryEditOpen && writesEnabled ? <InventoryEditEntry onClose={()=>{setInventoryEditOpen(false);void refresh(false,true);}}/> : messagesOpen && writesEnabled ? <MessageEntry onClose={()=>setMessagesOpen(false)}/> : priceEntryOpen && writesEnabled ? <PriceEntry historyPorts={priceHistoryPorts} onClose={()=>{setPriceEntryOpen(false);void refresh(false,true);}}/> : splitting && writesEnabled && ports.split && ports.checkBarcode && ports.uploadPhoto ? <StockSplitScreen item={splitting} ports={{newMutationId:ports.newMutationId,split:ports.split,uploadPhoto:ports.uploadPhoto,checkBarcode:ports.checkBarcode}} onCancel={()=>setSplitting(null)} onSaved={({source,split})=>{setSplitting(null);sold({source,sold:split});}}/> : selling && canSellInventory && ports.sell ? <SoldOutScreen item={selling} ports={{newMutationId:ports.newMutationId,sell:ports.sell}} onCancel={()=>setSelling(null)} onSaved={sold}/> : editor ? <InventoryEditorScreen editor={editor} onLeave={leaveEditor} onSaved={item=>{saved(item);setSelected(item);}} onQrSaved={updateSavedItem} onPhotoDeleted={item=>{updateSavedItem(item);setSelected(item);}} features={features} /> : searchOpen ? <InventorySearchScreen value={advanced} fields={searchFields} onClose={()=>setSearchOpen(false)} onApply={value=>{setAdvanced(value);setSearchOpen(false);}}/> : <DetailSwipeBack enabled={!!selected && !feature && !deleteTarget && !scanSearch && !sortOpen && !categoryPicker} onBack={returnFromDetail}>
+    {inventoryEditOpen && writesEnabled ? <InventoryEditEntry onClose={()=>{setInventoryEditOpen(false);void refresh(false,true);}}/> : messagesOpen && writesEnabled ? <MessageEntry onClose={()=>setMessagesOpen(false)}/> : priceEntryOpen && writesEnabled ? <PriceEntry historyPorts={priceHistoryPorts} onClose={()=>{setPriceEntryOpen(false);void refresh(false,true);}}/> : splitting && writesEnabled && ports.split && ports.checkBarcode && ports.uploadPhoto ? <StockSplitScreen item={splitting} ports={{newMutationId:ports.newMutationId,split:ports.split,uploadPhoto:ports.uploadPhoto,checkBarcode:ports.checkBarcode}} onCancel={()=>setSplitting(null)} onSaved={({source,split})=>{setSplitting(null);sold({source,sold:split});}}/> : selling && canSellInventory && ports.sell ? <SoldOutScreen item={selling} ports={{newMutationId:ports.newMutationId,sell:ports.sell}} onCancel={()=>setSelling(null)} onSaved={sold}/> : editor ? <InventoryEditorScreen onRetryPhotos={ports.loadPhotos ? retryPhotos : undefined} editor={editor} onLeave={leaveEditor} onSaved={item=>{saved(item);setSelected(item);}} onQrSaved={updateSavedItem} onPhotoDeleted={item=>{updateSavedItem(item);setSelected(item);}} features={features} /> : searchOpen ? <InventorySearchScreen value={advanced} fields={searchFields} onClose={()=>setSearchOpen(false)} onApply={value=>{setAdvanced(value);setSearchOpen(false);}}/> : <DetailSwipeBack enabled={!!selected && !feature && !deleteTarget && !scanSearch && !sortOpen && !categoryPicker} onBack={returnFromDetail}>
       <View style={s.header}>
         <View style={[s.headerSide, selected && {width:88}]}>{(selected || feature) && <Pressable accessibilityRole="button" accessibilityLabel="戻る" onPress={selected ? returnFromDetail : () => setFeature(null)} style={s.round}><Ionicons name="chevron-back" size={27} color={colors.text} /></Pressable>}</View>
         <Text style={s.title}>{title}</Text>
@@ -451,7 +485,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
           <View style={s.heroFact}><Text style={s.label}>保管場所</Text><Text style={s.location}>{selected.location || "未設定"}</Text></View>
         </View></View>
         {[["在庫ID", selected.displayId ?? selected.sku], ["管理番号", selected.sku], ["物品名", selected.name], ["カテゴリ", selected.category], ["ページ作成日", selected.createdAt?new Date(selected.createdAt).toLocaleString("ja-JP"):""], ["最終更新日時", new Date(selected.listUpdatedAt??selected.updatedAt).toLocaleString("ja-JP")], ["備考", selected.note], ["QRコード・バーコード", selected.barcode], ["販売予定価格", selected.plannedSalePrice === null ? "" : `${selected.plannedSalePrice.toLocaleString()}円`]].map(([label, value]) => <DetailFact key={label} label={label!} value={value} multiline={label === "備考"} />)}
-        <InventoryPhotos item={selected} />
+        <InventoryPhotos item={selected} onRetry={ports.loadPhotos ? retryPhotos : undefined} />
         {detailLoading && <ActivityIndicator accessibilityLabel="商品詳細を読み込み中" color={colors.blue} />}
         {!!selected.zaicoOriginalValues?.length&&<View><Text style={s.label}>ZAICOの元の値</Text>{selected.zaicoOriginalValues.map((value,index)=><DetailFact key={index} label={value.name} value={value.value}/>)}</View>}
         {selected.detailLoadedAt && visibleDetailFields(features).map((field, index, fields) => <View key={field.key}>

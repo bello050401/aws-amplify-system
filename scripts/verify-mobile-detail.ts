@@ -8,6 +8,8 @@ import { ZAICO_ATTRIBUTE_MAP, mapZaicoOptionalAttributes } from "../lib/inventor
 import { mobileInventoryDetail } from "../lib/mobile/inventoryDetail";
 import type { InventoryDetail } from "../lib/inventory/queries";
 import { normalizeImageRecord } from "../lib/inventory/imageTypes";
+import {draftFor} from '../mobile/src/domain/inventory';
+import {mobileInventoryInput, parseMobileSave} from '../lib/mobile/inventoryWrite';
 
 async function main() {
   // The app must read the same persisted keys as the Web UI and existing ZAICO import.
@@ -24,7 +26,7 @@ async function main() {
   }
   const id = "11111111-1111-4111-8111-111111111111";
   let session: Record<string, unknown> = { ok: true, owner: "staff", role: "EDITOR", features: { ecListing: false, sales: false } };
-  let calls = 0, unavailable = false, found = true, assetsUnavailable = false;
+  let calls = 0, assetCalls = 0, unavailable = false, found = true, assetsUnavailable = false;
   const signedPaths: string[] = [];
   const row = {
     id, sku: "SAMPLE", displayId: "73770285", name: "Synthetic chair", quantity: 11, purchaseQuantity: 3,
@@ -41,6 +43,7 @@ async function main() {
     detail: async (requested: string) => { calls++; assert.equal(requested, id); if (unavailable) throw new Error("private provider details"); return found ? row : null; },
     sign: async (path: string) => { signedPaths.push(path); return { url: `https://bello-storage.example/${path}` }; },
     assets: async () => {
+      assetCalls++;
       if (assetsUnavailable) throw new Error("BELLO photo store unavailable");
       return { ok: true, value: { truncated: false, assets: [{ id: "bello-camera", status: "READY", isDeleted: false, sequence: 0,
         thumbnailUrl: "https://bello-storage.example/camera-thumb.jpg", processedUrl: "https://bello-storage.example/camera.jpg" }] } };
@@ -101,8 +104,39 @@ async function main() {
   assert.equal((await (await get()).json()).diagnostics, undefined, 'Ordinary reads have no diagnostic fields');
   const measured = await (await diagnostic()).json();
   assert.deepEqual(Object.keys(measured.diagnostics), ['milliseconds']);
-  assert.deepEqual(Object.keys(measured.diagnostics.milliseconds).sort(), ['categories','inventory','locations','photoAssets','session','statuses','total']);
+  assert.deepEqual(Object.keys(measured.diagnostics.milliseconds).sort(), ['categories','inventory','locations','photoAssets','photoUrls','session','statuses','total']);
   assert.ok(Object.values(measured.diagnostics.milliseconds).every(ms => typeof ms === 'number' && ms >= 0));
+  const mode = (photos: string) => module.exports.GET(new Request(`https://bello.example/api/mobile/inventory/test?photos=${photos}&timing=1`), { params: { id } });
+  const beforeAssets = assetCalls, beforeSigns = signedPaths.length;
+  const core = await (await mode('deferred')).json();
+  assert.equal(assetCalls, beforeAssets, 'Editing must not wait on or call PhotoStation');
+  assert.equal(signedPaths.length, beforeSigns, 'Editing must not sign gallery images');
+  assert.equal(core.item.photosDeferred, true); assert.equal(core.item.photos, undefined);
+  assert.equal(core.item.photosComplete, false); assert.equal(core.item.details.depth, item.details.depth);
+  assert.equal(core.item.updatedAt, item.updatedAt); assert.deepEqual(core.item.categoryOptions, item.categoryOptions);
+  assert.equal(core.diagnostics.milliseconds.photoAssets, undefined);
+  const editRequest = parseMobileSave({ id, expectedUpdatedAt: core.item.updatedAt, mutationId: '22222222-2222-4222-8222-222222222222',
+    draft: {...draftFor(core.item), name: 'Edited while photos load'} }, id);
+  const input = mobileInventoryInput(row as InventoryDetail, editRequest, 'staff', {ecListing:true,sales:true},
+    [{id:'category',name:'販売中'}], [{id:'location',name:'倉庫'}], [{id:'status',label:'既存の状態'}]);
+  assert.equal(input.name, 'Edited while photos load');
+  assert.equal(input.images.length, row.images.length, 'Deferred photos must not clear original images on save');
+  assert.deepEqual(input.images.map(image => 'storageKey' in image ? image.storageKey : undefined), row.images.map(image=>image.storageKey));
+  assert.equal(input.customFields?.unexpectedToken, row.customFields.unexpectedToken, 'Unexposed fields are preserved server-side');
+  const gallery = await (await mode('only')).json();
+  assert.equal(gallery.item, undefined); assert.equal(gallery.gallery.id, id);
+  assert.equal(gallery.gallery.updatedAt, item.updatedAt); assert.equal(gallery.gallery.photosComplete, true);
+  assert.equal(gallery.gallery.photos.length, 3);
+  assetsUnavailable = true;
+  assert.equal((await (await mode('deferred')).json()).item.photosDeferred, true);
+  assert.equal((await (await mode('only')).json()).gallery.photosComplete, false);
+  assetsUnavailable = false;
+  for (const status of [401,403,503]) {
+    session = { ok: false, status, error: 'FORBIDDEN' }; const before: number = calls, assets: number = assetCalls;
+    assert.equal((await mode('deferred')).status, status); assert.equal((await mode('only')).status, status);
+    assert.equal(calls, before); assert.equal(assetCalls, assets);
+  }
+  session = { ok: true, owner: 'staff', role: 'EDITOR', features: { ecListing: false, sales: false } };
   found = false; assert.equal((await get()).status, 404);
   unavailable = true; const failed = await get(); assert.equal(failed.status, 503); assert.deepEqual(await failed.json(), { error: "INVENTORY_UNAVAILABLE" });
   console.log("PASS: BELLO-only image sources and partial-source failure, detail access, field mapping, staff redaction, 404/errors and no writes; synthetic fixtures only.");

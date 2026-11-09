@@ -7,7 +7,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { nativeSessionCookies } from "./sessionCookies";
 import { SecureTokenStorage } from "./secureTokenStorage";
 import { isInventoryItem } from "../domain/snapshot";
-import type { InventoryItem, InventoryOptions, InventoryThumbnail, PendingPhoto, UploadedPhoto } from "../domain/inventory";
+import { isInventoryGallery, type InventoryGallery, type InventoryItem, type InventoryOptions, type InventoryThumbnail, type PendingPhoto, type UploadedPhoto } from "../domain/inventory";
 import { isMobileFeatures, type MobileFeatures } from "../domain/access";
 import type {SalesResponse} from "../ui/SalesScreen";
 import { InventoryWriteError, type SaveRequest } from "../domain/editor";
@@ -203,13 +203,22 @@ export async function saveInventory(request: SaveRequest): Promise<InventoryItem
   finally { clearTimeout(timeout); }
 }
 
-export async function readInventoryDetail(id: string): Promise<InventoryItem> {
+export async function readInventoryDetail(id: string, deferPhotos = false): Promise<InventoryItem> {
   const session = await authenticatedSession();
-  const value = await jsonRequest(`/api/mobile/inventory/${encodeURIComponent(id)}`, session.cookie) as { owner?: string; item?: unknown } | null;
+  const value = await jsonRequest(`/api/mobile/inventory/${encodeURIComponent(id)}${deferPhotos ? '?photos=deferred' : ''}`, session.cookie) as { owner?: string; item?: unknown } | null;
   if (!value || value.owner !== session.owner || !isInventoryItem(value.item) || value.item.id !== id || !value.item.detailLoadedAt) {
     throw new Error("商品詳細を確認できませんでした。");
   }
   return value.item;
+}
+
+export async function readInventoryGallery(id: string): Promise<InventoryGallery> {
+  const session = await authenticatedSession();
+  const value = await jsonRequest(`/api/mobile/inventory/${encodeURIComponent(id)}?photos=only`, session.cookie) as { owner?: string; gallery?: unknown } | null;
+  if (!value || value.owner !== session.owner || !isInventoryGallery(value.gallery) || value.gallery.id !== id) {
+    throw new Error('商品画像を確認できませんでした。');
+  }
+  return value.gallery;
 }
 
 export async function removeInventory(request: DeleteRequest): Promise<void> {

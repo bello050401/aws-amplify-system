@@ -14,10 +14,11 @@ import {PhotoPicker} from "./PhotoPicker";
 import {QrMovementSheet} from './QrMovementSheet';
 import {choicesWithCurrentValue} from '../../../lib/inventory/zaicoFieldChoices';
 
-export function InventoryEditorScreen({ editor, onLeave, onSaved, onQrSaved, onPhotoDeleted, features = RESTRICTED_FEATURES }: {
+export function InventoryEditorScreen({ editor, onLeave, onSaved, onQrSaved, onPhotoDeleted, onRetryPhotos, features = RESTRICTED_FEATURES }: {
   editor: InventoryEditor; onLeave: () => void; onSaved: (item: InventoryItem) => void;
   features?: MobileFeatures;
   onPhotoDeleted?:(item:InventoryItem)=>void;
+  onRetryPhotos?:()=>void;
   onQrSaved?:(item:InventoryItem)=>void;
 }) {
   const [scanning,setScanning]=useState(false);
@@ -49,7 +50,7 @@ export function InventoryEditorScreen({ editor, onLeave, onSaved, onQrSaved, onP
     {state.warning && <View accessibilityRole="alert" style={s.warning}><Text style={s.warningText}>{state.warning}</Text></View>}
     <ScrollView keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets contentContainerStyle={s.form}>
       {fields.map((field) => <React.Fragment key={field.key}>
-        {field.key === "barcode" && <><InventoryPhotos item={{ ...state.saved, photos: state.saved.photos?.filter(photo => !state.removedPhotoIds.includes(photo.id)) }} disabled={state.saving || state.outcomeUncertain || photoBusy} onDeleteAsset={!state.creating && state.saved.photosComplete === true ? async id=>{const updated=await editor.deletePhotoAsset(id);onPhotoDeleted?.(updated);} : undefined} onRemove={!state.creating && state.saved.photosComplete === true ? id => editor.removeSavedPhoto(id) : undefined} />
+        {field.key === "barcode" && <><InventoryPhotos onRetry={onRetryPhotos} item={{ ...state.saved, photos: state.saved.photos?.filter(photo => !state.removedPhotoIds.includes(photo.id)) }} disabled={state.saving || state.outcomeUncertain || photoBusy} onDeleteAsset={!state.creating && state.saved.photosComplete === true ? async id=>{const updated=await editor.deletePhotoAsset(id);onPhotoDeleted?.(updated);} : undefined} onRemove={!state.creating && state.saved.photosComplete === true ? id => editor.removeSavedPhoto(id) : undefined} />
           {state.removedPhotoIds.length > 0 && <View><Text style={s.hint}>{state.removedPhotoIds.length}枚を削除予定です。完了で保存すると反映されます。</Text><Pressable accessibilityRole="button" accessibilityLabel="写真の削除予定を元に戻す" disabled={state.saving || state.outcomeUncertain} style={s.choice} onPress={() => editor.restoreRemovedPhotos()}><Text style={s.link}>削除予定を元に戻す</Text></Pressable></View>}
           <PhotoPicker photos={state.photos} disabled={state.saving || state.outcomeUncertain} onAdd={photos=>editor.addPhotos(photos)} onRemove={id=>editor.removePhoto(id)} onBusy={setPhotoBusy}/></>}
         <View style={s.field}>
