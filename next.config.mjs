@@ -1,3 +1,8 @@
+import {readFileSync} from 'node:fs';
+// Only non-secret resource names. Backend Lambdas receive these through IAM
+// deployment environment; the web build receives them after backend deployment.
+let inventoryHistoryConfig;
+try { inventoryHistoryConfig=JSON.parse(readFileSync(new URL('./amplify_outputs.json',import.meta.url),'utf8')).custom?.inventoryEdits; } catch {}
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   images: {
@@ -59,6 +64,10 @@ const nextConfig = {
    * その場合はwebhookが TABLE_NOT_CONFIGURED を返すので原因が分かる。
    */
   env: {
+    ...(inventoryHistoryConfig?.table && inventoryHistoryConfig?.inventoryTable ? {
+      INVENTORY_EDIT_JOBS_TABLE: inventoryHistoryConfig.table,
+      INVENTORY_HISTORY_TABLE: inventoryHistoryConfig.inventoryTable,
+    } : {}),
     // Non-secret gate compiled into SSR, like the other Amplify switches below.
     BELLO_MOBILE_WRITES_ENABLED: process.env.BELLO_MOBILE_WRITES_ENABLED === "true" ? "true" : "false",
     ...(process.env.BELLO_MOBILE_PUBLIC_ORIGIN ? { BELLO_MOBILE_PUBLIC_ORIGIN: process.env.BELLO_MOBILE_PUBLIC_ORIGIN } : {}),

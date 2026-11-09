@@ -1,13 +1,11 @@
-import outputs from '../../amplify_outputs.json';
 import type {TransactWriteCommandInput} from '@aws-sdk/lib-dynamodb';
 import type {EditHistoryState} from './reversibleHistory';
 
 /** Deployment-specific table matching prevents test/maintenance tables from
  * accidentally writing reference records into the production history store. */
 export function historyReferenceTable(inventoryTable:string):string|undefined {
- const config=(outputs as unknown as {custom?:{inventoryEdits?:{table:string;inventoryTable:string}}}).custom?.inventoryEdits;
- const table=process.env.INVENTORY_EDIT_JOBS_TABLE??config?.table;
- const expected=process.env.INVENTORY_HISTORY_TABLE??config?.inventoryTable;
+ const table=process.env.INVENTORY_EDIT_JOBS_TABLE;
+ const expected=process.env.INVENTORY_HISTORY_TABLE;
  return table&&expected===inventoryTable?table:undefined;
 }
 
