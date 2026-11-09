@@ -8,6 +8,7 @@ import { useUnsavedChanges } from "../UnsavedChangesProvider";
 import { DirectEditControls } from "./DirectEditControls";
 import { ExportMenu } from "./ExportMenu";
 import { ImportWizard } from "./ImportWizard";
+import {searchResultAcknowledges} from '@/lib/inventory/searchNavigationState';
 
 interface InventoryToolbarProps {
   role: InventoryRole;
@@ -22,6 +23,7 @@ interface InventoryToolbarProps {
   advRaw?: string;
   /** 総件数の表示。Suspenseで後から差し込まれるServer Componentを受け取るためReactNode。 */
   totalLabel: React.ReactNode;
+  resultQuery: string;
 }
 
 /**
@@ -48,7 +50,7 @@ interface InventoryToolbarProps {
  * dirty, which reloaded the whole document (auth/assets included) on
  * every search.
  */
-export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, advancedOpen, advancedActive, advRaw, totalLabel }: InventoryToolbarProps) {
+export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, advancedOpen, advancedActive, advRaw, totalLabel, resultQuery }: InventoryToolbarProps) {
   const canEdit = role === "ADMIN" || role === "EDITOR";
   const { isDirty, guardedNavigate } = useUnsavedChanges();
   const [importOpen, setImportOpen] = useState(false);
@@ -77,7 +79,7 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
     if(requestedText.current===(q??''))requestedText.current=null;
   },[q]);
   useEffect(()=>{
-    const pop=()=>{if(searchTimer.current)clearTimeout(searchTimer.current);typing.current=false;requestedText.current=null;setSearchText(new URLSearchParams(window.location.search).get('q')??'');};
+    const pop=()=>{if(searchTimer.current)clearTimeout(searchTimer.current);typing.current=false;requestedText.current=null;setPendingSearch(null);setSearchText(new URLSearchParams(window.location.search).get('q')??'');};
     window.addEventListener('popstate',pop);return()=>{window.removeEventListener('popstate',pop);if(searchTimer.current)clearTimeout(searchTimer.current);};
   },[]);
   function scheduleSearch(value:string){
@@ -92,12 +94,12 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
     if (!isSearchPending) pendingSearchHrefRef.current = null;
   }, [isSearchPending]);
   useEffect(() => {
-    if (pendingSearch && (q ?? '') === pendingSearch.text) {
+    if (pendingSearch && searchResultAcknowledges(resultQuery, pendingSearch.href)) {
       setPendingSearch(null);
       setSearchDelayed(false);
       pendingSearchHrefRef.current = null;
     }
-  }, [q, pendingSearch]);
+  }, [resultQuery, pendingSearch]);
   useEffect(() => {
     setSearchDelayed(false);
     if (!pendingSearch) return;

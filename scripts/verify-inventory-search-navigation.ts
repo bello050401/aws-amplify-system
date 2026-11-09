@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import {searchResultAcknowledges as ack} from '../lib/inventory/searchNavigationState';
+assert(ack('q=arper','/inventory?q=arper'));
+assert(!ack('q=chair','/inventory?q=arper'),'old result must not complete latest request');
+assert(!ack('q=arper&offset=50','/inventory?q=arper'),'same text on old page must stay pending');
+assert(!ack('q=arper&adv=old','/inventory?q=arper'),'old advanced filters must not complete quick search');
+assert(!ack('q=arper&categoryIds=a','/inventory?q=arper&categoryIds=b'));
+assert(ack('categoryIds=a&q=arper','/inventory?q=arper&categoryIds=a'),'parameter ordering does not change meaning');
+assert(ack('q=%E3%83%81%E3%82%A7%E3%82%A2','/inventory?q=チェア'));
+assert(ack('','/inventory'));
+assert(!ack('q=arper','/elsewhere?q=arper'));
+assert(!ack('q=arper','https://outside.invalid/inventory?q=arper'));
+console.log('PASS search completion: committed query, filters, paging, ordering, Japanese, empty and external path (10 cases)');

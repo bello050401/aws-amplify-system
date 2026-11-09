@@ -234,6 +234,7 @@ export default async function InventoryListPage(props: InventoryListPageProps) {
           role={role}
           center={
             <InventoryToolbar
+              resultQuery={listReturnQuery}
               role={role}
               q={searchParams.q}
               categoryIds={categoryIds}
