@@ -50,6 +50,7 @@ async function main() {
     },
   };
   const sources: Record<string, string> = {
+    '@/lib/mobile/editMasters': 'export {listCategories as listMobileEditCategories, listLocations as listMobileEditLocations, listStatuses as listMobileEditStatuses} from "@/lib/inventory/queries";',
     '@/lib/inventory/listImageUrls': 'export const signInventoryListKey = async path => (await globalThis.ports.sign(path)).url;',
     "next/server": 'export class NextResponse { static json(body, init={}) { return new Response(JSON.stringify(body), { ...init, headers: { "Content-Type":"application/json", ...init.headers } }); } }',
     "next/headers": 'export const cookies = () => ({});',

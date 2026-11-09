@@ -20,6 +20,7 @@ import {MobileSoldOutError,type SoldOutSaved} from '../domain/soldOut';
 import type {SoldOutRequest,SoldOutResult} from '../../../lib/inventory/soldOutInput';
 import type {CatalogDelta} from '../domain/catalogProtocol';
 import {singleFlight} from '../domain/singleFlight';
+import {detailTiming} from './detailTiming';
 
 const isWeb = Platform.OS === "web";
 // The web app is served by BELLO itself and uses its existing authenticated session.
@@ -204,8 +205,11 @@ export async function saveInventory(request: SaveRequest): Promise<InventoryItem
 }
 
 export async function readInventoryDetail(id: string, deferPhotos = false): Promise<InventoryItem> {
+  const timing = detailTiming('request');
   const session = await authenticatedSession();
+  timing('authenticated');
   const value = await jsonRequest(`/api/mobile/inventory/${encodeURIComponent(id)}${deferPhotos ? '?photos=deferred' : ''}`, session.cookie) as { owner?: string; item?: unknown } | null;
+  timing('response');
   if (!value || value.owner !== session.owner || !isInventoryItem(value.item) || value.item.id !== id || !value.item.detailLoadedAt) {
     throw new Error("商品詳細を確認できませんでした。");
   }

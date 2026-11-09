@@ -1,4 +1,5 @@
 import {splitCategoryNames} from '../../../lib/inventory/categories';
+import {detailTiming} from '../runtime/detailTiming';
 import {newInventoryDefaults} from '../../../lib/inventory/newInventoryDefaults';
 import { InventorySearchScreen, InventorySortSheet } from "./InventorySearchScreen";
 import { cachedInventorySearch, cachedSearchFields, mobileSearchFields, DEFAULT_INVENTORY_SORT, type InventorySearchInput, type AdvancedSearchQuery, type InventorySort } from "../domain/search";
@@ -398,18 +399,21 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
     finally { deleteBusy.current = false; setDeleting(false); }
   };
   const openItem = async (item: InventoryItem, freshlyLoaded = false) => {
+    const timing = detailTiming('screen');
     const attempt = ++detailGeneration.current;
     setSelected(item); setError(null); setDetailLoading(false);
     if (!ports.loadDetail) return;
     setDetailLoading(true);
     try {
       const online = await ports.online();
+        timing('online');
       if (attempt !== detailGeneration.current) return;
       if (!online) {
         if (!item.detailLoadedAt) setError("【圏外です】この商品の詳細は未取得です。保存済みの基本情報を表示しています。");
         return;
       }
       const loaded = freshlyLoaded ? item : await (ports.loadEditableDetail ?? ports.loadDetail)(item.id,item.updatedAt);
+      timing('loaded');
       // Keep the existing preview while the separately authorized gallery loads.
       const detail = loaded.photosDeferred ? { ...loaded, thumbnailUrl: loaded.thumbnailUrl ?? item.thumbnailUrl } : loaded;
       if (attempt !== detailGeneration.current) return;
@@ -442,7 +446,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
         }
         setError("この商品は自社システムから削除されています。一覧から取り除きました。");
       } else setError("商品詳細を読み込めませんでした。保存済みの情報を表示しています。");
-    } finally { if (attempt === detailGeneration.current) setDetailLoading(false); }
+    } finally { if (attempt === detailGeneration.current) {setDetailLoading(false); timing('ready');} }
   };
   const serverResults = !!ports.searchInventory && serverRows !== null;
   const rows = serverResults ? serverRows! : !offline && !!ports.searchInventory && !error ? [] : cachedInventorySearch(snapshot?.items ?? [],{q:query,category,advanced,sort},searchFields);

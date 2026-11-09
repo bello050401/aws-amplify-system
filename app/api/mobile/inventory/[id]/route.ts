@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { signInventoryListKey } from "@/lib/inventory/listImageUrls";
 import { getMobileSession } from "@/lib/mobile/session";
+import {listMobileEditCategories, listMobileEditLocations, listMobileEditStatuses} from '@/lib/mobile/editMasters';
 import { getInventoryDetail, listCategories, listLocations, listStatuses } from "@/lib/inventory/queries";
 import { mobileInventoryDetail } from "@/lib/mobile/inventoryDetail";
 import { mobileInventoryPhotos } from "@/lib/mobile/inventoryPhotos";
@@ -33,9 +34,9 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
     const [row, assetResult, activeCategories, activeLocations, statuses] = await Promise.all([
       measure('inventory', () => getInventoryDetail(id, {consistentDirectRead: true})),
       photosDeferred ? null : measure('photoAssets', () => listInventoryPhotoAssetsAction(id)).catch(() => null),
-      photosOnly ? [] : measure('categories', () => listCategories()),
-      photosOnly ? [] : measure('locations', () => listLocations()),
-      photosOnly ? [] : measure('statuses', listStatuses),
+      photosOnly ? [] : measure('categories', photosDeferred ? listMobileEditCategories : () => listCategories()),
+      photosOnly ? [] : measure('locations', photosDeferred ? listMobileEditLocations : () => listLocations()),
+      photosOnly ? [] : measure('statuses', photosDeferred ? listMobileEditStatuses : listStatuses),
     ]);
     if (!row) return NextResponse.json({ error: "NOT_FOUND" }, { status: 404, headers });
     // Existing records may reference a retired choice. Preserve it exactly as
