@@ -753,7 +753,7 @@ if (process.env.AWS_APP_ID === 'd4hkkg7dty2du' && process.env.AWS_BRANCH === 'cl
       new PolicyStatement({actions: ['dynamodb:Scan'], resources: [inventoryTable.tableArn + '/index/' + COMPACT_SEARCH_INDEX]}),
       // EC overview reads only explicitly linked stock IDs, in one batch instead of per-row requests.
       new PolicyStatement({actions: ['dynamodb:BatchGetItem'], resources: [inventoryTable.tableArn]}),
-      new PolicyStatement({actions: ['dynamodb:GetItem','dynamodb:BatchGetItem','dynamodb:PutItem','dynamodb:UpdateItem','dynamodb:DeleteItem','dynamodb:Query','dynamodb:ConditionCheckItem'], resources: [inventoryEditsTable.tableArn]}),
+      new PolicyStatement({actions: ['dynamodb:GetItem','dynamodb:BatchGetItem','dynamodb:BatchWriteItem','dynamodb:PutItem','dynamodb:UpdateItem','dynamodb:DeleteItem','dynamodb:Query','dynamodb:ConditionCheckItem'], resources: [inventoryEditsTable.tableArn]}),
       new PolicyStatement({actions: ['dynamodb:Query'], resources: [inventoryEditsTable.tableArn + '/index/ByKind']}),
       new PolicyStatement({actions: ['sqs:SendMessage'], resources: [inventoryEditsQueue.queueArn]}),
     ],

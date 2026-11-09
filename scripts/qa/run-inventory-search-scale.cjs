@@ -15,6 +15,17 @@ const name='BelloInventoryEditBenchmark20261109',table='InventorySearchQA2026110
  esbuild.buildSync({entryPoints:['scripts/qa/inventory-search-scale.ts'],outfile:path.join(dir,'index.js'),bundle:true,platform:'node',format:'cjs',target:'node22',alias:{'server-only':path.resolve('scripts/qa/inventory-edit-ui/empty.cjs')}});
  const zip=new JSZip();zip.file('index.js',fs.readFileSync(path.join(dir,'index.js')));await lambda.send(new UpdateFunctionCodeCommand({FunctionName:name,ZipFile:await zip.generateAsync({type:'nodebuffer',compression:'DEFLATE'})}));await waitUntilFunctionUpdatedV2({client:lambda,maxWaitTime:120},{FunctionName:name});
  await lambda.send(new UpdateFunctionConfigurationCommand({FunctionName:name,Description:"Isolated inventory search scale "+new Date().toISOString()}));await waitUntilFunctionUpdatedV2({client:lambda,maxWaitTime:120},{FunctionName:name});
- let previous=0;for(const count of [5645,16935,56450]){let result;for(let attempt=0;;attempt++){const res=await lambda.send(new InvokeCommand({FunctionName:name,Payload:Buffer.from(JSON.stringify({count,previous,repeats:100}))}));result=JSON.parse(Buffer.from(res.Payload).toString());if(!res.FunctionError)break;if(result.errorType==='AccessDeniedException'&&attempt<30){await new Promise(r=>setTimeout(r,5000));continue;}throw Error(JSON.stringify(result));}fs.writeFileSync(path.join(dir,count+'.json'),JSON.stringify(result,null,2));console.log('PASS '+count+' rows at 1 / 5 / 10 concurrent users, 100 cold searches each');previous=count;}
+ let previous=0;for(const count of [5645,16935,56450]){
+  for(const cache of [false,true])for(const users of [1,5,10]){
+   let result;for(let attempt=0;;attempt++){
+    const res=await lambda.send(new InvokeCommand({FunctionName:name,Payload:Buffer.from(JSON.stringify({count,previous,repeats:100,users,cache}))}));
+    result=JSON.parse(Buffer.from(res.Payload).toString());if(!res.FunctionError)break;
+    if(result.errorType==='AccessDeniedException'&&attempt<30){await new Promise(r=>setTimeout(r,5000));continue;}
+    fs.writeFileSync(path.join(dir,`${count}-${users}-${cache?'cached':'cold'}-failure.json`),JSON.stringify(result,null,2));throw Error(JSON.stringify(result));
+   }
+   fs.writeFileSync(path.join(dir,`${count}-${users}-${cache?'cached':'cold'}.json`),JSON.stringify(result,null,2));
+   console.log(`PASS ${count} rows, ${users} concurrent requests, ${cache?'bounded production cache':'cold'}, 100 searches; p95 ${Math.round(result.results[0].coldSearch.p95)} ms`);previous=count;
+  }
+ }
  }finally{if(created)await db.send(new DeleteTableCommand({TableName:table}));if(policy)await iam.send(new DeleteRolePolicyCommand({RoleName:name,PolicyName:'TemporarySearchScale'}));console.log('Scale table and temporary policy removed');}
 })().catch(e=>{console.error(e.message);process.exitCode=1;});
