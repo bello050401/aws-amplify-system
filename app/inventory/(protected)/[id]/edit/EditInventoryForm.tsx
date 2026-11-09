@@ -301,6 +301,8 @@ export function EditInventoryForm({ item, photoAssets, categories, locations, cu
         </button>
       </div>
 
+      {item.hasForwardHistory && <p role="status" className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 lg:col-span-3">新しく保存すると、進む履歴は消えます。</p>}
+
       {/* 左カラム: 画像(商品画像/傷・汚れ写真)。参照レイアウト通り、
           フォームの左に固定幅で配置 — モバイルでは(grid-cols-1により)
           フォームより先に単純に積まれる("image then form")。 */}

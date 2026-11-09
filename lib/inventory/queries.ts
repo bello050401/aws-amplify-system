@@ -1,3 +1,4 @@
+import {readEditHistory} from './reversibleHistory';
 import {NOT_MERGED_FILTER} from "@/lib/outbound/mergeInventory";
 import {MAX_SEARCH_CANDIDATES as SEARCH_MAX_SCAN_ITEMS} from './searchBounds';
 import {inventoryCategoryIds,categoryFilter} from "./categories";
@@ -631,6 +632,7 @@ export interface InventoryHistoryRow {
 }
 
 export interface InventoryDetail extends InventoryListRow, ExtendedFieldsAsNullable {
+  hasForwardHistory?: boolean;
   images: InventoryImageRecord[]; // both NORMAL and DAMAGE, normalized — callers split via lib/inventory/imageTypes.ts's splitImagesByType
   customFields: Record<string, unknown> | null;
   createdBy: string | null;
