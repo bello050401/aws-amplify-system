@@ -40,6 +40,7 @@ export function galleryPreviewItems(): InventoryItem[] {
 export function photoPreviewImage(label:string,color:string) {
   return 'data:image/svg+xml;charset=utf-8,'+encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1200"><rect width="1200" height="1200" fill="#eeeae3"/><text x="80" y="110" font-size="42" fill="#263d3c">BELLO · ${label}</text><rect x="350" y="250" width="500" height="330" rx="26" fill="${color}"/><rect x="300" y="600" width="600" height="100" rx="20" fill="${color}"/><path d="M350 690v330M850 690v330" stroke="#665d50" stroke-width="35"/><text x="80" y="1130" font-size="32" fill="#555">操作確認用の画像</text></svg>`);
 }
-export function photoPreviewItems():InventoryItem[] {
-  return Array.from({length:24},(_,index)=>({...previewItems[index%3],id:`11111111-1111-4111-8111-${String(index+1).padStart(12,'0')}`,sku:`写真確認${index+1}`,name:`写真確認 ${index+1} チェア`,thumbnailUrl:photoPreviewImage(`${index+1} / 主画像`,'#9b6b53'),photos:undefined,photosComplete:false}));
+export function photoPreviewItems(longTitles=false):InventoryItem[] {
+  const title='【展示品・在庫確認】Cassina ixc. TULU ダイニングチェア / ミッドセンチュリー モダン 名作 デザイナーズ チェア カッシーナ ツル / 高濱和秀（Knoll,B&B Italia）';
+  return Array.from({length:24},(_,index)=>({...previewItems[index%3],id:`11111111-1111-4111-8111-${String(index+1).padStart(12,'0')}`,sku:`写真確認${index+1}`,name:longTitles&&index<2?title.repeat(index===0?1:6)+'【商品名の末尾】':`写真確認 ${index+1} チェア`,thumbnailUrl:photoPreviewImage(`${index+1} / 主画像`,'#9b6b53'),photos:undefined,photosComplete:false}));
 }

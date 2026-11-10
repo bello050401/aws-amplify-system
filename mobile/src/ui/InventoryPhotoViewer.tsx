@@ -1,5 +1,5 @@
 import React from 'react';
-import {ActivityIndicator, Modal, Pressable, StyleSheet, Text, View} from 'react-native';
+import {ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View} from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import type {InventoryPhoto} from '../domain/inventory';
 import {ZoomablePhoto} from './ZoomablePhoto';
@@ -14,7 +14,9 @@ export function InventoryPhotoViewer({photos,index,onIndexChange,onClose,title,l
     <SafeAreaView style={s.viewer} accessibilityViewIsModal>
       <View style={s.bar}><Text style={s.text}>{photos.length ? `${index+1} / ${photos.length}` : '写真'}</Text>
         <Pressable accessibilityRole="button" accessibilityLabel="画像を閉じる" onPress={onClose} style={s.button}><Text style={s.text}>閉じる</Text></Pressable></View>
-      {!!title&&<Text numberOfLines={2} style={s.title}>{title}</Text>}
+      {!!title&&<ScrollView accessibilityLabel="商品名" style={s.titleArea} contentContainerStyle={s.titleContent}>
+        <Text selectable style={s.title}>{title}</Text>
+      </ScrollView>}
       {loading&&<View style={s.status}><ActivityIndicator color="white"/><Text style={s.hint}>写真を読み込み中…</Text></View>}
       {!!notice&&<View style={s.status}><Text accessibilityRole="alert" style={s.notice}>{notice}</Text>{onRetry&&<Pressable accessibilityRole="button" onPress={onRetry} style={s.button}><Text style={s.text}>写真を再取得</Text></Pressable>}</View>}
       {uri ? <ZoomablePhoto key={selected.id} uri={uri} onDismiss={onClose}
@@ -32,7 +34,9 @@ export function InventoryPhotoViewer({photos,index,onIndexChange,onClose,title,l
 const s=StyleSheet.create({
   viewer:{flex:1,backgroundColor:'#141414'},bar:{flexDirection:'row',alignItems:'center',justifyContent:'space-between',paddingHorizontal:16},
   button:{minHeight:48,minWidth:64,padding:14,alignItems:'center',justifyContent:'center'},text:{color:'white',fontSize:16},
-  title:{color:'#E4E4E4',fontSize:13,lineHeight:19,paddingHorizontal:16,paddingBottom:8},
+  // Keep the complete name readable without pushing the photo or controls off screen.
+  titleArea:{maxHeight:'30%',flexGrow:0,flexShrink:0},titleContent:{paddingHorizontal:16,paddingBottom:8},
+  title:{color:'#E4E4E4',fontSize:14,lineHeight:21},
   status:{flexDirection:'row',alignItems:'center',justifyContent:'center',gap:8,paddingHorizontal:16},
   notice:{color:'#FFDB96',fontSize:13,lineHeight:19,flex:1},hint:{color:'#BDBDBD',fontSize:12,textAlign:'center',padding:10},
   empty:{flex:1,justifyContent:'center',alignItems:'center'},disabled:{opacity:.3},
