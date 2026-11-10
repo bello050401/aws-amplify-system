@@ -1,13 +1,16 @@
-import {listFastCategories, listFastLocations, listFastStatuses, listFastCustomFieldDefinitions} from '@/lib/mobile/editMasters';
 import {InventoryBulkControls} from "./InventoryBulkPanel";
 import {withListImageUrls} from '@/lib/inventory/listImageUrls';
 import {browserListRow} from '@/lib/inventory/browserListRow';
 import {selectableLocations} from "@/lib/inventory/locationChoices";
 import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import {
+  listCategories,
+  listCustomFieldDefinitions,
   listInventory,
   listInventoryAdvanced,
   listInventorySimpleSearch,
+  listLocations,
+  listStatuses,
 } from "@/lib/inventory/queries";
 import { buildSearchFieldDefs, completeConditions, STATIC_SEARCH_FIELDS, type AdvancedSearchQuery } from "@/lib/inventory/advancedSearch";
 import { listInventoryOffsetPage } from "@/lib/inventory/inventoryPage";
@@ -140,10 +143,10 @@ export default async function InventoryListPage(props: InventoryListPageProps) {
   earlyAdvancedPromise?.catch(() => {});
 
   const [categories, locations, statuses, customFieldDefs] = await Promise.all([
-    listFastCategories(),
-    listFastLocations(),
-    listFastStatuses(),
-    listFastCustomFieldDefinitions(),
+    listCategories(),
+    listLocations(),
+    listStatuses(),
+    listCustomFieldDefinitions(),
   ]);
   const mastersReadyAt = performance.now();
 
