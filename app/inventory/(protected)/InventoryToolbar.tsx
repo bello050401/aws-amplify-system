@@ -67,6 +67,32 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
   const searchSequence = useRef(0), inputAt = useRef(0);
   const lastSearchSubmission = useRef<{href:string; at:number}|null>(null);
   const searchMetric = useRef<HTMLSpanElement>(null);
+  // Local diagnostics only: distinguish server/network waiting from committing
+  // a ready response. Do not retain URLs/search text or send telemetry.
+  const activeSearchTiming = useRef<{href:string;startedAt:number;sequence:number}|null>(null);
+  useEffect(() => {
+    if (typeof PerformanceObserver === 'undefined') return;
+    const observer = new PerformanceObserver(list => {
+      const active = activeSearchTiming.current;
+      if (!active || !searchMetric.current) return;
+      for (const entry of list.getEntries()) {
+        const resource = entry as PerformanceResourceTiming;
+        if (resource.initiatorType !== 'fetch' || resource.startTime < active.startedAt - 50) continue;
+        const url = new URL(resource.name, window.location.origin);
+        if (url.origin !== window.location.origin || !url.searchParams.has('_rsc')) continue;
+        url.searchParams.delete('_rsc');
+        if (!searchResultAcknowledges(url.search, active.href)) continue;
+        searchMetric.current.setAttribute('data-search-resource', JSON.stringify({
+          sequence:active.sequence, start:Math.round(resource.startTime-active.startedAt),
+          firstByte:Math.round(resource.responseStart-resource.startTime),
+          download:Math.round(resource.responseEnd-resource.responseStart),
+          total:Math.round(resource.duration),bytes:resource.encodedBodySize,
+        }));
+      }
+    });
+    observer.observe({type:'resource',buffered:false});
+    return () => observer.disconnect();
+  }, []);
   const [searchDelayed, setSearchDelayed] = useState(false);
   // A superseded App Router transition can remain pending after the latest
   // server result has committed. Acknowledge the displayed query, not the
@@ -174,7 +200,10 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
     typing.current=false;
     requestedText.current=value;
     pendingSearchHrefRef.current = href;
-    setPendingSearch({href, text:value, sequence:++searchSequence.current, startedAt:automatic?inputAt.current:submittedAt});
+    const sequence=++searchSequence.current;
+    activeSearchTiming.current={href,startedAt:submittedAt,sequence};
+    searchMetric.current?.removeAttribute('data-search-resource');
+    setPendingSearch({href, text:value, sequence, startedAt:automatic?inputAt.current:submittedAt});
     // App Router discards an older navigation when a new navigation is queued.
     // Each input sequence replaces the pending destination; Enter remains immediate.
     // App Router owns its navigation transition. Avoid a second transition
