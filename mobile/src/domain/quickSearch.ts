@@ -3,16 +3,20 @@ import type {InventoryItem} from './inventory';
 import {inventoryComparator} from '../../../lib/inventory/searchSort';
 import {splitCategoryNames} from '../../../lib/inventory/categories';
 import {createNameSearchMatcher,normalizeNameSearch} from '../../../lib/inventory/nameSearch';
+import {createAdvancedSearchMatcher, type SearchableRecord} from '../../../lib/inventory/advancedSearch';
+import {searchValidation} from './search';
 import {applyCatalogDelta,catalogBucket,compactCatalogItem,CATALOG_BUCKETS,CATALOG_RETENTION_MS,CATALOG_SYNC_MS,type CatalogDelta,type CatalogState} from './catalogProtocol';
 
 export const QUICK_SEARCH_MAX_AGE=CATALOG_RETENTION_MS;
-const supported=new Set(['updatedAt','createdAt','name','locationId','quantity','barcode','plannedSalePrice','sku','displayId','statusId','unit']);
+// Only fields actually present in the compact, authorized catalogue. Notes,
+// sales and custom fields continue to use the server; missing data is not blank.
+const supported=new Set(['updatedAt','createdAt','name','categoryId','locationId','quantity','barcode','plannedSalePrice','sku','displayId','statusId','unit']);
 export function supportsQuickSearch(input:InventorySearchInput){
  const conditions=input.advanced?.conditions??[];
- return supported.has(input.sort?.field??'updatedAt')&&conditions.every(c=>c.field==='barcode'&&c.operator==='equals'&&typeof c.value==='string');
+ return supported.has(input.sort?.field??'updatedAt')&&conditions.every(c=>supported.has(c.field));
 }
 const normalize=(text:string)=>text.normalize('NFKC').toLocaleLowerCase('ja');
-type Entry={item:InventoryItem;name:string;barcode:string;categories:string[];record:Record<string,unknown>};
+type Entry={item:InventoryItem;name:string;barcode:string;categories:string[];record:SearchableRecord};
 export class QuickSearchCatalog {
  private items:InventoryItem[]=[];
  private fetchedAt=0;
@@ -64,12 +68,26 @@ export class QuickSearchCatalog {
  }
  search(input:InventorySearchInput,fields:SearchFieldDef[],now=Date.now()){
   if(!this.ready(now)||!supportsQuickSearch(input))return null;
+  if(input.advanced && searchValidation(input.advanced,fields)) return null;
+  const requiredMasters=new Set([...(input.advanced?.conditions??[]).map(c=>c.field),input.sort?.field]);
+  if(input.categoryIds?.length)requiredMasters.add('categoryId');
+  // The compact legacy catalogue carries labels. When labels are ambiguous,
+  // use the authoritative ID-based server search instead of choosing an ID.
+  for(const key of ['categoryId','locationId','statusId'])if(requiredMasters.has(key)){
+   const options=fields.find(f=>f.key===key)?.options??[];
+   if(new Set(options.map(o=>o.label)).size!==options.length)return null;
+   if(key==='categoryId'&&input.categoryIds?.some(id=>!options.some(o=>o.value===id)))return null;
+  }
   if(!this.indexed||this.indexedFields!==fields){
    this.indexedFields=fields;
-   const defs=new Map(fields.map(f=>[f.key,f]));
-   const master=(key:string,label:string)=>defs.get(key)?.options?.find(o=>o.label===label)?.value??label;
+   const masters=new Map(fields.map(f=>[f.key,new Map(f.options?.map(o=>[o.label,o.value]))]));
+   const master=(key:string,label:string)=>masters.get(key)?.get(label)??label;
    this.indexed=this.items.map(item=>({item,name:normalizeNameSearch(item.name),barcode:normalize(item.barcode),categories:splitCategoryNames(item.category),
-    record:{...item,sourceInventoryId:item.displayId&&/^\d+$/.test(item.displayId)?item.displayId:undefined,locationId:master('locationId',item.location),statusId:item.statusId??master('statusId',item.condition)}}));
+    record:{...item,customFields:null,quantity:item.quantityUnset?null:item.quantity,
+      sourceInventoryId:item.displayId&&/^\d+$/.test(item.displayId)?item.displayId:undefined,
+      categoryId:master('categoryId',splitCategoryNames(item.category)[0]??''),
+      categoryIds:splitCategoryNames(item.category).map(name=>master('categoryId',name)),
+      locationId:master('locationId',item.location),statusId:item.statusId??master('statusId',item.condition)}}));
    this.sorted=null;this.result=null;
   }
   const sort=input.sort??{field:'updatedAt',direction:'desc' as const},sortKey=JSON.stringify(sort);
@@ -77,11 +95,13 @@ export class QuickSearchCatalog {
    const compare=inventoryComparator(sort,new Map(fields.map(f=>[f.key,f])));
    this.sorted={key:sortKey,entries:[...this.indexed].sort((a,b)=>compare(a.record,b.record))};this.result=null;
   }
-  const key=JSON.stringify([input.q,input.category,input.advanced,sort]);
+  const key=JSON.stringify([input.q,input.category,input.categoryIds,input.advanced,sort]);
   if(this.result?.key!==key){
-   const matchesName=createNameSearchMatcher(input.q??''),conditions=input.advanced?.conditions??[],codes=conditions.map(c=>normalize(c.value??''));
+   const matchesName=createNameSearchMatcher(input.q??'');
+   const matchesConditions=createAdvancedSearchMatcher(input.advanced??{combinator:'AND',conditions:[]},new Map(fields.map(f=>[f.key,f])));
    const found=this.sorted.entries.filter(e=>matchesName(e.name)&&(!input.category||e.categories.includes(input.category))&&
-    (!codes.length||(input.advanced?.combinator==='OR'?codes.some(c=>e.barcode===c):codes.every(c=>e.barcode===c)))).map(e=>e.item);
+    (!input.categoryIds?.length||input.categoryIds.some(id=>(e.record.categoryIds as string[]).includes(id)))&&
+    matchesConditions(e.record)).map(e=>e.item);
    this.result={key,items:found,quantity:found.reduce((sum,r)=>sum+r.quantity,0)};
   }
   const all=this.result.items,offset=input.offset??0;

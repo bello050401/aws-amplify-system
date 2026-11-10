@@ -1,3 +1,7 @@
+import {buildSearchFieldDefs} from '../../../lib/inventory/advancedSearch';
+import {MultiChoiceSheet} from './MultiChoiceSheet';
+import {InventoryQueryInput} from './InventoryQueryInput';
+import type {ListPreferences} from '../domain/listPreferences';
 import {splitCategoryNames} from '../../../lib/inventory/categories';
 import {detailTiming} from '../runtime/detailTiming';
 import {newInventoryDefaults} from '../../../lib/inventory/newInventoryDefaults';
@@ -46,6 +50,7 @@ const tabs: { key: Tab; label: string; icon: IconName }[] = [
 ];
 export interface StaffAppPorts extends EditorPorts {
   snapshot: SnapshotStore;
+  listPreferences?: ListPreferences;
   loadInventory: () => Promise<InventoryItem[]>;
   searchCatalogStore?:CatalogStore;
   listPhotoCache?:ListPhotoCache;
@@ -136,7 +141,10 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
   snapshotRef.current = snapshot;
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [category, setCategory] = useState("");
+  const [categoryIds, setCategoryIds] = useState<string[]>([]);
+  const [searchRequest,setSearchRequest]=useState(0);
+  const listOffset=useRef(0);
+  const sortChosen=useRef(false);
   const [categoryPicker, setCategoryPicker] = useState(false);
   const [feature, setFeature] = useState<string | null>(null);
   const generation = useRef(0);
@@ -270,7 +278,20 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
     if (!offline && ports.loadOptions) void ports.loadOptions().then(value=>{if(active)setOptions(value);}).catch(()=>{});
     return ()=>{active=false;};
   },[ports,offline]);
-  const searchFields=useMemo(()=>options?.searchFields ? mobileSearchFields(options.searchFields,features) : cachedSearchFields([],features),[options,features]);
+  const searchFields=useMemo(()=>options?.searchFields ? mobileSearchFields(options.searchFields,features) : options ? mobileSearchFields(buildSearchFieldDefs([],{categories:options.categories.map(name=>({id:name,name})),locations:options.locations.map(name=>({id:name,name})),statuses:options.statuses}),features) : cachedSearchFields([],features),[options,features.sales,features.ecListing]);
+  useEffect(()=>{
+    let active=true;
+    void ports.listPreferences?.read().then(saved=>{
+      if(active&&saved&&!sortChosen.current&&searchFields.some(f=>f.key===saved.field))setSort(saved);
+    });
+    return ()=>{active=false;};
+  },[ports,searchFields]);
+  const applySort=(value:InventorySort)=>{
+    sortChosen.current=true;setSort(value);setSortOpen(false);listOffset.current=0;
+    void ports.listPreferences?.write(value).catch(()=>setError('並び順を記憶できませんでした。現在の表示には反映されています。'));
+  };
+  const submitSearch=()=>{listOffset.current=0;setSearchRequest(n=>n+1);};
+  const changeQuery=(value:string)=>{listOffset.current=0;setQuery(value);};
   const priceHistoryPorts=useMemo<PriceHistoryPorts|undefined>(()=>features.sales&&ports.loadDetail?{
     features,detail:ports.loadDetail,thumbnails:ports.loadThumbnails,
     search:async(q,offset)=>{
@@ -280,6 +301,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
       return ports.searchInventory(input);
     },
   }:undefined,[features,ports,searchFields,offline]);
+  const lastSearchRequest=useRef(0);
   const refresh = async (append = false,force = false) => {
     if (append && loading) return;
     const currentGeneration = ++generation.current;
@@ -287,7 +309,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
     setLoading(true); setError(null);
     try {
       if(force){await ensureCatalog(true,true);thumbnailDone.current.clear();}
-      const input = { q: query, category, advanced, sort, offset: append ? nextOffset.current : 0 };
+      const input = { q: query, categoryIds, advanced, sort, offset: append ? nextOffset.current : 0 };
       const local=quick.current.search(input,searchFields);
       const online = local?true:await ports.online();
       if (currentGeneration !== generation.current) return;
@@ -319,15 +341,16 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
     }
   };
   useEffect(() => {
+    const immediate=lastSearchRequest.current!==searchRequest;lastSearchRequest.current=searchRequest;
     // Invalidate an older response immediately when search changes.
     generation.current++;
     imageGeneration.current++;
-    if(quick.current.ready()&&supportsQuickSearch({q:query,category,advanced,sort})){void refresh();void ensureCatalog();return;}
+    if(quick.current.ready()&&supportsQuickSearch({q:query,categoryIds,advanced,sort})){void refresh();void ensureCatalog();return;}
     setServerRows(null); setHasMore(false); setTotal(null);setTotalQuantity(null);
-    if(query||category)void ensureCatalog();
-    const timer = setTimeout(() => { void refresh(); }, query ? 160 : 250);
+    if(query||categoryIds.length)void ensureCatalog();
+    const timer = setTimeout(() => { void refresh(); }, immediate ? 0 : 250);
     return () => clearTimeout(timer);
-  }, [ports, query, category, advanced, sort, supportsQuickSearch({q:query,category,advanced,sort})?catalogRevision:0,offline]); // Reconnection never submits edits.
+  }, [ports, query, categoryIds, advanced, sort, searchRequest, searchFields, supportsQuickSearch({q:query,categoryIds,advanced,sort})?catalogRevision:0,offline]); // Reconnection never submits edits.
 
   const updateSavedItem = (item: InventoryItem) => {
     quick.current.update([item]);
@@ -360,16 +383,16 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
     if(creating)return;
     if(!writesEnabled){setError("在庫を登録する権限がありません。");return;}
     setCreating(true);setError(null);
-    let options:InventoryOptions={categories:[],locations:[],statuses:[]};
-    try{if(ports.loadOptions&&await ports.online())options=await ports.loadOptions();}
+    let createOptions:InventoryOptions=options??{categories:[],locations:[],statuses:[]};
+    try{if(!options&&ports.loadOptions&&await ports.online())createOptions=await ports.loadOptions();}
     catch{setError("選択肢を取得できませんでした。通信状態を確認してください。");}
-    const defaults=newInventoryDefaults(options.categories.map(name=>({name})),options.locations.map(name=>({name})));
+    const defaults=newInventoryDefaults(createOptions.categories.map(name=>({name})),createOptions.locations.map(name=>({name})));
     const item:InventoryItem={id:ports.newMutationId(),sku:"保存時に自動採番",name:"",quantity:1,unit:"",location:defaults.location?.name??"",category:defaults.category?.name??"",condition:"",statusId:null,
       note:"",barcode:"",plannedSalePrice:null,thumbnailUrl:null,updatedAt:new Date().toISOString(),details:{},photos:[],photosComplete:true,
-      statusOptions:options.statuses,categoryOptions:options.categories,locationOptions:options.locations};
+      statusOptions:createOptions.statuses,categoryOptions:createOptions.categories,locationOptions:createOptions.locations};
     setEditor(new InventoryEditor(item,ports,true));setCreating(false);
   };
-  const leaveEditor = () => { setEditor(null); setSelected(null); setError(null); setTab("inventory"); };
+  const leaveEditor = () => { setEditor(null); setError(null); setTab("inventory"); };
   const returnFromDetail = () => {
     detailGeneration.current++; setDetailLoading(false); setSelected(null); setFeature(null); setError(null); setTab("inventory");
   };
@@ -451,7 +474,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
     } finally { if (attempt === detailGeneration.current) {setDetailLoading(false); timing('ready');} }
   };
   const serverResults = !!ports.searchInventory && serverRows !== null;
-  const rows = serverResults ? serverRows! : !offline && !!ports.searchInventory && !error ? [] : cachedInventorySearch(snapshot?.items ?? [],{q:query,category,advanced,sort},searchFields);
+  const rows = serverResults ? serverRows! : !offline && !!ports.searchInventory && !error ? [] : cachedInventorySearch(snapshot?.items ?? [],{q:query,categoryIds,advanced,sort},searchFields);
   const preparationKey = rows.slice(0,2).map(row => `${row.id}:${row.updatedAt}`).join('|');
   useEffect(() => {
     if (offline) ports.clearPreparedDetails?.();
@@ -460,7 +483,8 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
     const timer = setTimeout(() => {for (const item of targets) ports.prepareDetail?.(item.id,item.updatedAt);}, 300);
     return () => clearTimeout(timer);
   }, [ports, offline, selected, tab, query, loading, preparationKey]);
-  const categories = options?.categories ?? Array.from(new Set((snapshot?.items ?? []).flatMap(item=>splitCategoryNames(item.category)).filter(Boolean)));
+  const categoryChoices = searchFields.find(field=>field.key==='categoryId')?.options??[];
+  const categoryLabel=categoryIds.length===1?categoryChoices.find(c=>c.value===categoryIds[0])?.label??'カテゴリ':categoryIds.length?'カテゴリ '+categoryIds.length+'件':'カテゴリ';
   const title = feature ?? (selected ? "物品詳細" : tabs.find((item) => item.key === tab)!.label);
 
   return <SafeAreaView style={[s.safe, tab === "home" && !selected && !editor && { backgroundColor: "#F8F6F1" }]}>
@@ -469,7 +493,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
       <Pressable accessibilityRole="button" onPress={onToggleOffline}><Text style={s.previewLink}>{offline ? "通信を戻す" : "圏外を試す"}</Text></Pressable>
     </View>}
     {preview && onTogglePreviewAccount && <Pressable accessibilityRole="button" accessibilityLabel="表示確認アカウントを切り替え" onPress={onTogglePreviewAccount} style={s.accountPreview}><Text style={s.previewText}>表示確認：{previewAccount}</Text><Text style={s.previewLink}>切り替え</Text></Pressable>}
-    {inventoryEditOpen && writesEnabled ? <InventoryEditEntry onClose={()=>{setInventoryEditOpen(false);void refresh(false,true);}}/> : messagesOpen && writesEnabled ? <MessageEntry onClose={()=>setMessagesOpen(false)}/> : priceEntryOpen && writesEnabled ? <PriceEntry historyPorts={priceHistoryPorts} onClose={()=>{setPriceEntryOpen(false);void refresh(false,true);}}/> : splitting && writesEnabled && ports.split && ports.checkBarcode && ports.uploadPhoto ? <StockSplitScreen item={splitting} ports={{newMutationId:ports.newMutationId,split:ports.split,uploadPhoto:ports.uploadPhoto,checkBarcode:ports.checkBarcode}} onCancel={()=>setSplitting(null)} onSaved={({source,split})=>{setSplitting(null);sold({source,sold:split});}}/> : selling && canSellInventory && ports.sell ? <SoldOutScreen item={selling} ports={{newMutationId:ports.newMutationId,sell:ports.sell}} onCancel={()=>setSelling(null)} onSaved={sold}/> : editor ? <InventoryEditorScreen onRetryPhotos={ports.loadPhotos ? retryPhotos : undefined} editor={editor} onLeave={leaveEditor} onSaved={item=>{saved(item);setSelected(item);}} onQrSaved={updateSavedItem} onPhotoDeleted={item=>{updateSavedItem(item);setSelected(item);}} features={features} /> : searchOpen ? <InventorySearchScreen value={advanced} fields={searchFields} onClose={()=>setSearchOpen(false)} onApply={value=>{setAdvanced(value);setSearchOpen(false);}}/> : <DetailSwipeBack enabled={!!selected && !feature && !deleteTarget && !scanSearch && !sortOpen && !categoryPicker && !photoPreview} onBack={returnFromDetail}>
+    {inventoryEditOpen && writesEnabled ? <InventoryEditEntry onClose={()=>{setInventoryEditOpen(false);void refresh(false,true);}}/> : messagesOpen && writesEnabled ? <MessageEntry onClose={()=>setMessagesOpen(false)}/> : priceEntryOpen && writesEnabled ? <PriceEntry historyPorts={priceHistoryPorts} onClose={()=>{setPriceEntryOpen(false);void refresh(false,true);}}/> : splitting && writesEnabled && ports.split && ports.checkBarcode && ports.uploadPhoto ? <StockSplitScreen item={splitting} ports={{newMutationId:ports.newMutationId,split:ports.split,uploadPhoto:ports.uploadPhoto,checkBarcode:ports.checkBarcode}} onCancel={()=>setSplitting(null)} onSaved={({source,split})=>{setSplitting(null);sold({source,sold:split});}}/> : selling && canSellInventory && ports.sell ? <SoldOutScreen item={selling} ports={{newMutationId:ports.newMutationId,sell:ports.sell}} onCancel={()=>setSelling(null)} onSaved={sold}/> : editor ? <InventoryEditorScreen onRetryPhotos={ports.loadPhotos ? retryPhotos : undefined} editor={editor} onLeave={leaveEditor} onSaved={item=>{saved(item);setSelected(item);}} onQrSaved={updateSavedItem} onPhotoDeleted={item=>{updateSavedItem(item);setSelected(item);}} features={features} /> : searchOpen ? <InventorySearchScreen value={advanced} fields={searchFields} onClose={()=>setSearchOpen(false)} onApply={value=>{listOffset.current=0;setAdvanced(value);setSearchOpen(false);submitSearch();}}/> : <DetailSwipeBack enabled={!!selected && !feature && !deleteTarget && !scanSearch && !sortOpen && !categoryPicker && !photoPreview} onBack={returnFromDetail}>
       <View style={s.header}>
         <View style={[s.headerSide, selected && {width:88}]}>{(selected || feature) && <Pressable accessibilityRole="button" accessibilityLabel="戻る" onPress={selected ? returnFromDetail : () => setFeature(null)} style={s.round}><Ionicons name="chevron-back" size={27} color={colors.text} /></Pressable>}</View>
         <Text style={s.title}>{title}</Text>
@@ -500,9 +524,10 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
         </View>)}
         {!writesEnabled && <Text style={s.homeSub}>このアプリでは現在、在庫の閲覧のみ利用できます。</Text>}
       </ScrollView> : tab === "home" ? <HomeScreen onMessages={()=>setMessagesOpen(true)} onPriceEntry={()=>setPriceEntryOpen(true)} offline={offline} creating={creating} writesEnabled={writesEnabled} onInventory={()=>setTab("inventory")} onCreate={()=>{void startCreate();}} onScan={()=>setScanSearch(true)} /> : tab === "inventory" ? <View style={s.list}>
-        <PullToRefreshList keyboardShouldPersistTaps="handled" ListHeaderComponent={<View style={s.listHeader}>
-        <View style={s.search}><Ionicons name="search" size={24} color={colors.text} /><TextInput accessibilityLabel="商品名を検索" placeholder="商品名" value={query} onChangeText={setQuery} style={s.searchInput} />{query !== "" && <Pressable accessibilityRole="button" accessibilityLabel="検索をクリア" onPress={() => setQuery("")}><Ionicons name="close-circle" size={22} color={colors.muted} /></Pressable>}</View>
-        <View style={s.filterRow}><Pressable accessibilityRole="button" onPress={() => setCategoryPicker(true)} style={s.category}><Ionicons name="pricetag-outline" size={21} color={colors.text} /><Text numberOfLines={1} style={[s.categoryText,{maxWidth:130}]}>{category || "カテゴリ"}</Text><Ionicons name="chevron-down" size={16} color={colors.muted} /></Pressable><Pressable accessibilityRole="button" onPress={()=>setSearchOpen(true)} style={s.advancedButton}><Text style={s.blue}>詳細検索{advanced.conditions.length ? `（${advanced.conditions.length}）` : ""}</Text></Pressable></View>
+        <PullToRefreshList contentOffset={{x:0,y:listOffset.current}} onPositionChange={offset=>{listOffset.current=offset;}} scrollEventThrottle={100} keyboardShouldPersistTaps="handled" ListHeaderComponent={<View style={s.listHeader}>
+        <View style={s.search}><Ionicons name="search" size={24} color={colors.text} /><InventoryQueryInput value={query} onChange={changeQuery} onSubmit={submitSearch}/>{query !== "" && <Pressable accessibilityRole="button" accessibilityLabel="検索をクリア" onPress={() => changeQuery("")}><Ionicons name="close-circle" size={22} color={colors.muted} /></Pressable>}</View>
+        <View style={s.filterRow}><Pressable accessibilityRole="button" onPress={() => setCategoryPicker(true)} style={s.category}><Ionicons name="pricetag-outline" size={21} color={colors.text} /><Text numberOfLines={1} style={[s.categoryText,{maxWidth:130}]}>{categoryLabel}</Text><Ionicons name="chevron-down" size={16} color={colors.muted} /></Pressable><View style={{flexDirection:"row",gap:8}}><Pressable accessibilityRole="button" onPress={submitSearch} style={s.advancedButton}><Text style={s.blue}>検索</Text></Pressable><Pressable accessibilityRole="button" onPress={()=>setSearchOpen(true)} style={s.advancedButton}><Text style={s.blue}>詳細検索{advanced.conditions.length ? `（${advanced.conditions.length}）` : ""}</Text></Pressable></View></View>
+        {(query||categoryIds.length>0||advanced.conditions.length>0)&&<Pressable accessibilityRole="button" onPress={()=>{listOffset.current=0;setQuery("");setCategoryIds([]);setAdvanced({combinator:"AND",conditions:[]});}} style={{alignSelf:"flex-end",minHeight:40,justifyContent:"center"}}><Text style={s.blue}>検索条件をすべて解除</Text></Pressable>}
         {writesEnabled&&<Pressable accessibilityRole="button" disabled={offline} onPress={()=>setInventoryEditOpen(true)} style={s.advancedButton}><Text style={s.blue}>一括編集・戻る・進む</Text></Pressable>}<View style={s.summaryRow}><Text style={s.result}>{serverResults && total!==null ? total.toLocaleString() : rows.length.toLocaleString()}件{serverResults&&total===null&&hasMore?" 読込済み":""}・数量合計 {(serverResults && totalQuantity!==null ? totalQuantity : rows.reduce((sum,item)=>sum+item.quantity,0)).toLocaleString()}{serverResults&&totalQuantity===null&&hasMore?"（表示分）":""}</Text></View>
         <Text style={s.scope}>{loading ? "読み込み中…" : serverResults ? `${searchFields.find(field=>field.key===sort.field)?.label ?? "更新日"}・${sort.direction === "asc" ? "昇順" : "降順"}` : "読み込み済みの在庫のみ（未取得の詳細は対象外）"}{catalogSyncing?' ・最新情報を確認中':''}</Text>
         {catalogWarning&&<Text style={s.scope}>{catalogWarning}</Text>}
@@ -535,9 +560,9 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
         <Pressable accessibilityRole="button" disabled={deleting} onPress={()=>{void confirmDelete();}} style={[s.deleteConfirm,deleting&&{opacity:.5}]}><Text style={s.white}>{deleting?"削除中…":"削除する"}</Text></Pressable></View>
       </View></View>
     </Modal>
-    {scanSearch&&<BarcodeScanner onClose={()=>setScanSearch(false)} onRead={value=>{setScanSearch(false);setQuery("");setCategory("");setAdvanced({combinator:"AND",conditions:[{id:"barcode-scan",field:"barcode",operator:"equals",value}]});setSelected(null);setTab("inventory");}}/>}
-    {sortOpen&&<InventorySortSheet value={sort} fields={searchFields} onClose={()=>setSortOpen(false)} onApply={value=>{setSort(value);setSortOpen(false);}}/>}
-    <Modal visible={categoryPicker} transparent animationType="slide" onRequestClose={() => setCategoryPicker(false)}><View style={s.shade}><View style={s.picker}><Text style={s.title}>カテゴリを選択</Text><ScrollView style={{maxHeight:450}}>{["", ...categories].map((value) => <Pressable accessibilityRole="button" key={value} style={s.pickerChoice} onPress={() => { setCategory(value); setCategoryPicker(false); }}><Text style={s.categoryText}>{value || "指定なし"}</Text></Pressable>)}</ScrollView><Pressable accessibilityRole="button" style={s.pickerChoice} onPress={() => setCategoryPicker(false)}><Text style={s.blue}>キャンセル</Text></Pressable></View></View></Modal>
+    {scanSearch&&<BarcodeScanner onClose={()=>setScanSearch(false)} onRead={value=>{setScanSearch(false);setQuery("");setCategoryIds([]);setAdvanced({combinator:"AND",conditions:[{id:"barcode-scan",field:"barcode",operator:"equals",value}]});setSelected(null);setTab("inventory");}}/>}
+    {sortOpen&&<InventorySortSheet value={sort} fields={searchFields} onClose={()=>setSortOpen(false)} onApply={applySort}/>}
+    {categoryPicker&&<MultiChoiceSheet title="カテゴリを選択" hint="選んだカテゴリのいずれかが付いた商品を表示します。" options={categoryChoices} value={categoryIds} onClose={()=>setCategoryPicker(false)} onApply={values=>{listOffset.current=0;setCategoryIds(values);setCategoryPicker(false);submitSearch();}} applyLabel="絞り込む"/>}
   </SafeAreaView>;
 }
 

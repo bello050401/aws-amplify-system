@@ -50,6 +50,7 @@ async function main() {
     },
   };
   const sources: Record<string, string> = {
+    'server-only': '',
     '@/lib/mobile/editMasters': 'export {listCategories as listMobileEditCategories, listLocations as listMobileEditLocations, listStatuses as listMobileEditStatuses} from "@/lib/inventory/queries";',
     '@/lib/inventory/listImageUrls': 'export const signInventoryListKey = async path => (await globalThis.ports.sign(path)).url;',
     "next/server": 'export class NextResponse { static json(body, init={}) { return new Response(JSON.stringify(body), { ...init, headers: { "Content-Type":"application/json", ...init.headers } }); } }',
@@ -62,7 +63,7 @@ async function main() {
     "@/lib/inventory/queries": 'export const getInventoryDetail = id => globalThis.ports.detail(id); export const listCategories = async () => [{id:"category",name:"販売中"}]; export const listLocations = async () => [{id:"location",name:"倉庫"}]; export const listStatuses = async () => [{id:"status",label:"既存の状態"}];',
   };
   const bundled = await build({ entryPoints: ["app/api/mobile/inventory/[id]/route.ts"], bundle: true, write: false, platform: "node", format: "cjs", plugins: [{ name: "isolated-detail", setup(builder) {
-    builder.onResolve({ filter: /.*/ }, args => sources[args.path] ? { path: args.path, namespace: "stub" } : undefined);
+    builder.onResolve({ filter: /.*/ }, args => Object.hasOwn(sources,args.path) ? { path: args.path, namespace: "stub" } : undefined);
     builder.onLoad({ filter: /.*/, namespace: "stub" }, args => ({ contents: sources[args.path], loader: "js" }));
   }}] });
   const module = { exports: {} as { GET(request: Request, context: { params: { id: string } }): Promise<Response>; POST?: unknown } };

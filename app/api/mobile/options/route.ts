@@ -3,7 +3,7 @@ import { buildSearchFieldDefs } from "@/lib/inventory/advancedSearch";
 import { mobileSearchFields } from "@/mobile/src/domain/search";
 import { NextResponse } from "next/server";
 import { getMobileSession } from "@/lib/mobile/session";
-import { listCategories, listLocations, listStatuses, listCustomFieldDefinitions } from "@/lib/inventory/queries";
+import {listFastCategories as listCategories, listFastLocations as listLocations, listFastStatuses as listStatuses, listFastCustomFieldDefinitions as listCustomFieldDefinitions} from "@/lib/mobile/editMasters";
 export const dynamic = "force-dynamic";
 export async function GET() {
   const headers = { "Cache-Control": "private, no-store", Vary: "Cookie" };

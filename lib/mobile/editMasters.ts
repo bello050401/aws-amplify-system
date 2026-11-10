@@ -5,6 +5,7 @@ import {directTableName} from '../amplify/directData';
 import {inventoryVerifiedReadSession} from '../inventory/mutationSession';
 import {cachedMaster} from '../inventory/masterCache';
 import {listCategories, listLocations, listStatuses, type MasterOption, type StatusOption} from '../inventory/queries';
+import {listCustomFieldDefinitions, toCustomFieldDefinitionRow, type CustomFieldDefinitionRow} from '../inventory/queries';
 
 let client: DynamoDBDocumentClient | undefined;
 type Master = 'Category' | 'Location' | 'StatusMaster';
@@ -50,4 +51,35 @@ export async function listMobileEditStatuses(): Promise<StatusOption[]> {
       sortOrder: typeof row.sortOrder === 'number' ? row.sortOrder : 0,
     })).sort((a,b) => a.sortOrder - b.sortOrder))).slice();
   } catch { return listStatuses(); }
+}
+
+/** PC and mobile list/search reuse the same small-master fast path. No inventory
+ * records or customer data are cached here. Each caller still checks its session. */
+export const listFastCategories = listMobileEditCategories;
+export const listFastLocations = listMobileEditLocations;
+export const listFastStatuses = listMobileEditStatuses;
+export async function listFastCustomFieldDefinitions(): Promise<CustomFieldDefinitionRow[]> {
+  try {
+    if (!await inventoryVerifiedReadSession()) return listCustomFieldDefinitions();
+    return (await cachedMaster('CustomFieldDefinition', async () => {
+      client ??= DynamoDBDocumentClient.from(new DynamoDBClient({region: process.env.AWS_REGION || 'us-west-2'}));
+      const rows: CustomFieldDefinitionRow[] = [];
+      let cursor: Record<string, unknown> | undefined;
+      do {
+        const result = await client.send(new ScanCommand({TableName:directTableName('CustomFieldDefinition'),
+          ConsistentRead:true, ExclusiveStartKey:cursor,
+          FilterExpression:'#active = :active',ExpressionAttributeValues:{':active':true},
+          ProjectionExpression:'id, fieldKey, #label, fieldType, #required, sortOrder, #options, #active',
+          ExpressionAttributeNames:{'#active':'isActive','#label':'label','#required':'required','#options':'options'},
+        }));
+        for (const row of result.Items ?? []) {
+          if (typeof row.id!=='string'||typeof row.fieldKey!=='string'||typeof row.label!=='string'||
+            !['TEXT','TEXTAREA','NUMBER','SELECT','DATE','URL'].includes(row.fieldType)) throw Error('INVALID_MASTER');
+          rows.push(toCustomFieldDefinitionRow(row as Parameters<typeof toCustomFieldDefinitionRow>[0]));
+        }
+        cursor=result.LastEvaluatedKey;
+      } while(cursor);
+      return rows.sort((a,b)=>a.sortOrder-b.sortOrder);
+    })).slice();
+  } catch {return listCustomFieldDefinitions();}
 }

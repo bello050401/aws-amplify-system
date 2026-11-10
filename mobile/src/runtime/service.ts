@@ -98,6 +98,7 @@ function inventoryParams(input: InventorySearchInput): URLSearchParams {
   const params = new URLSearchParams();
   if (input.q) params.set("q", input.q);
   if (input.category) params.set("category", input.category);
+  if (input.categoryIds?.length) params.set("categoryIds", JSON.stringify(input.categoryIds));
   if (input.offset) params.set("offset", String(input.offset));
   if (input.advanced?.conditions.length) params.set("advanced",JSON.stringify(input.advanced));
   if (input.sort) params.set("sort",JSON.stringify(input.sort));

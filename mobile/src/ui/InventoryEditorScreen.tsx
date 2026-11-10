@@ -1,3 +1,4 @@
+import {MultiChoiceSheet} from './MultiChoiceSheet';
 import {splitCategoryNames} from '../../../lib/inventory/categories';
 import React, { useState, useSyncExternalStore } from "react";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
@@ -39,7 +40,7 @@ export function InventoryEditorScreen({ editor, onLeave, onSaved, onQrSaved, onP
   const extra = visibleDetailFields(features);
   return <View style={s.screen}>
     <View style={s.header}>
-      <Pressable accessibilityRole="button" accessibilityLabel="一覧へ戻る" disabled={state.saving || photoBusy} onPress={leave} style={s.round}>
+      <Pressable accessibilityRole="button" accessibilityLabel="編集を閉じる" disabled={state.saving || photoBusy} onPress={leave} style={s.round}>
         <Ionicons name="close" size={30} color={colors.text} />
       </Pressable>
       <Text style={s.title}>{state.creating ? "在庫の新規登録" : "在庫の編集"}</Text>
@@ -78,7 +79,8 @@ export function InventoryEditorScreen({ editor, onLeave, onSaved, onQrSaved, onP
     </ScrollView>
     {scanning && <BarcodeScanner onClose={()=>setScanning(false)} onRead={value=>{setScanned(value);setScanning(false);}}/>}
     {scanned!==null&&<QrMovementSheet value={scanned} editor={editor} onCancel={()=>setScanned(null)} onRescan={()=>{setScanned(null);setScanning(true);}} onSaved={item=>{setScanned(null);onQrSaved?.(item);}}/>}
-    <Modal visible={master!==null} transparent animationType="slide" onRequestClose={()=>setMaster(null)}><View style={s.shade}><View style={s.dialog}><Text style={s.dialogTitle}>{master==="category"?"カテゴリ":"保管場所"}</Text><ScrollView style={{maxHeight:400}}>{["",...new Set(master==="category"?state.saved.categoryOptions:state.saved.locationOptions)].map(value=><Pressable accessibilityRole="button" key={value} style={s.choice} onPress={()=>{if(master==="category"){const current=splitCategoryNames(state.draft.category);editor.change("category",!value?"":(current.includes(value)?current.filter(c=>c!==value):[...current,value]).join(","));}else if(master){editor.change(master,value);setMaster(null);}}}><Text style={s.link}>{master==="category"&&splitCategoryNames(state.draft.category).includes(value)?"✓ ":""}{value||"未設定"}</Text></Pressable>)}</ScrollView><Pressable accessibilityRole="button" onPress={()=>setMaster(null)} style={s.choice}><Text style={s.link}>完了</Text></Pressable></View></View></Modal>
+    {master==="category"&&<MultiChoiceSheet title="カテゴリ" options={(state.saved.categoryOptions??[]).map(name=>({value:name,label:name}))} value={splitCategoryNames(state.draft.category)} onClose={()=>setMaster(null)} onApply={values=>{editor.change("category",values.join(","));setMaster(null);}} hint="複数選択できます。在庫への保存は編集画面の「完了」で行います。"/>}
+    <Modal visible={master==="location"} transparent animationType="slide" onRequestClose={()=>setMaster(null)}><View style={s.shade}><View style={s.dialog}><Text style={s.dialogTitle}>保管場所</Text><ScrollView style={{maxHeight:400}}>{["",...new Set(state.saved.locationOptions)].map(value=><Pressable accessibilityRole="button" key={value} style={s.choice} onPress={()=>{editor.change("location",value);setMaster(null);}}><Text style={s.link}>{value||"未設定"}</Text></Pressable>)}</ScrollView><Pressable accessibilityRole="button" onPress={()=>setMaster(null)} style={s.choice}><Text style={s.link}>キャンセル</Text></Pressable></View></View></Modal>
     <Modal visible={choice !== null} transparent animationType="slide" onRequestClose={() => setChoice(null)}>
       <View style={s.shade}><View style={s.dialog}><Text style={s.dialogTitle}>{choice?.label}</Text>
         <ScrollView style={{maxHeight:320}} keyboardShouldPersistTaps="handled">
@@ -90,7 +92,7 @@ export function InventoryEditorScreen({ editor, onLeave, onSaved, onQrSaved, onP
     <Modal visible={state.leaveConfirmation} transparent animationType="fade" onRequestClose={() => editor.continueEditing()}>
       <View style={s.shade}><View accessibilityViewIsModal style={s.dialog}>
         <Text style={s.dialogTitle}>{state.outcomeUncertain ? "保存状況を確認してください" : "変更内容をどうしますか？"}</Text>
-        <Text style={s.dialogText}>{state.outcomeUncertain ? "変更が保存されている可能性があります。通信回復後に保存状況を確認するまで、入力を保持します。" : "保存してから一覧に戻るか、変更内容を破棄するかを選んでください。"}</Text>
+        <Text style={s.dialogText}>{state.outcomeUncertain ? "変更が保存されている可能性があります。通信回復後に保存状況を確認するまで、入力を保持します。" : "保存してから戻るか、変更内容を破棄するかを選んでください。"}</Text>
         {state.warning && <Text accessibilityRole="alert" style={s.warningText}>{state.warning}</Text>}
         <Pressable accessibilityRole="button" disabled={state.saving} onPress={save} style={[s.choice, s.primary]}><Text style={s.white}>{state.saving ? "保存中…" : state.outcomeUncertain ? "保存状況を確認する" : "変更を保存する"}</Text></Pressable>
         {!state.outcomeUncertain && <Pressable accessibilityRole="button" disabled={state.saving} onPress={() => { if (editor.discard()) onLeave(); }} style={s.choice}><Text style={s.destructive}>変更内容を破棄する</Text></Pressable>}

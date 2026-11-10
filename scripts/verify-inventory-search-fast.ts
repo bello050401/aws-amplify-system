@@ -77,7 +77,8 @@ function toReferenceRecord(raw: RawItem): SearchableRecord & { id: string; updat
       sourceInventoryId: (raw.sourceInventoryId as string | null | undefined) ?? null,
       sku: raw.sku as string,
     }),
-    quantity: (raw.quantity as number | null | undefined) ?? 0,
+    // Independent reference preserves the source distinction: missing is not 0.
+    quantity: (raw.quantity as number | null | undefined) ?? null,
     customFields,
     id: raw.id as string,
     updatedAt: raw.updatedAt as string,

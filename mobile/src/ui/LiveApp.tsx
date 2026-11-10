@@ -1,3 +1,4 @@
+import {ListPreferences} from '../domain/listPreferences';
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { signIn, signOut, confirmSignIn, getCurrentUser } from "aws-amplify/auth";
@@ -102,6 +103,7 @@ export function LiveApp() {
     };
     return {
     snapshot,searchCatalogStore,listPhotoCache,
+    listPreferences:new ListPreferences(AsyncStorage,userId,API_ORIGIN),
     online: async () => connected(await Network.getNetworkStateAsync()),
     loadInventory: async () => {
       try {

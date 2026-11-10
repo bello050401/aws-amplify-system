@@ -6,10 +6,20 @@ import { PULL_THRESHOLD, PullToRefreshGesture } from "../domain/pullToRefresh";
 import { colors } from "./theme";
 
 /** React Native Web's RefreshControl is a placeholder, so handle the web gesture explicitly. */
-export function PullToRefreshList<T>({ onRefresh, refreshing, ...props }: PullToRefreshListProps<T>) {
+export function PullToRefreshList<T>({ onRefresh, refreshing, onPositionChange, ...props }: PullToRefreshListProps<T>) {
   const list = useRef<FlatList<T>>(null);
-  const latest = useRef({ onRefresh, refreshing });
-  latest.current = { onRefresh, refreshing };
+  // React Native Web ignores the native ScrollView contentOffset on mount.
+  // Restore after FlatList has laid out its rows, not before its content exists.
+  const restoreOffset = useRef(props.contentOffset?.y ?? 0);
+  const restorePosition = () => {
+    const node = list.current?.getScrollableNode() as HTMLElement | undefined;
+    if (!node || restoreOffset.current <= 0 || node.scrollHeight <= node.clientHeight) return;
+    const target = Math.min(restoreOffset.current, node.scrollHeight - node.clientHeight);
+    list.current?.scrollToOffset({ offset: target, animated: false });
+    restoreOffset.current = 0;
+  };
+  const latest = useRef({ onRefresh, refreshing, onPositionChange });
+  latest.current = { onRefresh, refreshing, onPositionChange };
   const [distance, setDistance] = useState(0);
   const [pending, setPending] = useState(false);
 
@@ -22,7 +32,9 @@ export function PullToRefreshList<T>({ onRefresh, refreshing, ...props }: PullTo
     const overscroll = node.style.overscrollBehaviorY, userSelect = node.style.userSelect;
     node.style.overscrollBehaviorY = "contain";
     const editable = (target: EventTarget | null) => target instanceof Element && !!target.closest("input,textarea,select,[contenteditable=true]");
+    const recordPosition = () => { if (node.isConnected && restoreOffset.current === 0) latest.current.onPositionChange?.(node.scrollTop); };
     const begin = (x: number, y: number, target: EventTarget | null) => {
+      recordPosition();
       gesture.begin(x, y, node.scrollTop, busy || !!latest.current.refreshing || editable(target));
     };
     const move = (x: number, y: number, event: Event) => {
@@ -79,6 +91,7 @@ export function PullToRefreshList<T>({ onRefresh, refreshing, ...props }: PullTo
     };
     const stopImageDrag = (event: DragEvent) => { if (pointerId !== null) event.preventDefault(); };
     const stopSelection = (event: Event) => { if (pointerId !== null) event.preventDefault(); };
+    node.addEventListener("scroll", recordPosition, { passive: true });
     node.addEventListener("touchstart", touchStart, { passive: true });
     node.addEventListener("touchmove", touchMove, { passive: false });
     node.addEventListener("touchend", touchEnd);
@@ -94,6 +107,7 @@ export function PullToRefreshList<T>({ onRefresh, refreshing, ...props }: PullTo
     return () => {
       disposed = true;
       node.style.overscrollBehaviorY = overscroll; node.style.userSelect = userSelect;
+      node.removeEventListener("scroll", recordPosition);
       node.removeEventListener("touchstart", touchStart); node.removeEventListener("touchmove", touchMove);
       node.removeEventListener("touchend", touchEnd); node.removeEventListener("touchcancel", touchEnd);
       node.removeEventListener("pointerdown", pointerDown); node.removeEventListener("pointermove", pointerMove);
@@ -112,6 +126,8 @@ export function PullToRefreshList<T>({ onRefresh, refreshing, ...props }: PullTo
       {pending ? <ActivityIndicator size="small" color={colors.turquoise} /> : <span style={{ display: "flex", transform: `rotate(${ready ? 180 : 0}deg)`, transition: "transform 150ms ease" }}><Ionicons name="arrow-down" size={19} color={colors.turquoise} /></span>}
       <span>{pending ? "更新中…" : ready ? "指を離して更新" : "下に引いて更新"}</span>
     </div>
-    <FlatList {...props} ref={list} />
+    <FlatList {...props} ref={list}
+      onContentSizeChange={(width, height) => { restorePosition(); props.onContentSizeChange?.(width, height); }}
+      onLayout={event => { restorePosition(); props.onLayout?.(event); }} />
   </div>;
 }

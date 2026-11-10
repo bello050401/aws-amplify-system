@@ -1,10 +1,11 @@
+import {listFastCategories, listFastLocations, listFastStatuses, listFastCustomFieldDefinitions} from '@/lib/mobile/editMasters';
 import {withListImageUrls} from '@/lib/inventory/listImageUrls';
 import {inventoryCategoryIds} from '@/lib/inventory/categories';
 import { NextResponse } from "next/server";
 import { getMobileSession } from "@/lib/mobile/session";
 import { buildSearchFieldDefs, emptyAdvancedQuery } from "@/lib/inventory/advancedSearch";
 import { mobileSearchFields, searchValidation, DEFAULT_INVENTORY_SORT, type AdvancedSearchQuery, type InventorySort } from "@/mobile/src/domain/search";
-import { listCategories, listLocations, listStatuses, listInventory, listInventoryMobileSearch, listCustomFieldDefinitions } from "@/lib/inventory/queries";
+import { listInventory, listInventoryMobileSearch } from "@/lib/inventory/queries";
 import { readThumbnailRecords } from '@/lib/inventory/thumbnailRecords';
 import { listInventoryOffsetPage } from "@/lib/inventory/inventoryPage";
 import { inventoryThumbnails } from "@/lib/mobile/inventoryThumbnails";
@@ -36,11 +37,19 @@ export async function GET(request: Request) {
       const items = await inventoryThumbnails(rows);
       return NextResponse.json({ owner, items }, { headers });
     }
-    const [categories, locations, statuses, customFields] = await Promise.all([listCategories(), listLocations(), listStatuses(), listCustomFieldDefinitions()]);
+    const [categories, locations, statuses, customFields] = await Promise.all([listFastCategories(), listFastLocations(), listFastStatuses(), listFastCustomFieldDefinitions()]);
     if (!owner) return NextResponse.json({ error: "SIGN_IN_REQUIRED" }, { status: 401, headers });
     const categoryId = categories.find((row) => row.name === category)?.id;
     if (category && !categoryId) return NextResponse.json({ owner, role: session.role, items: [], hasMore: false, fetchedAt: new Date().toISOString() }, { headers });
     const fields = mobileSearchFields(buildSearchFieldDefs(customFields,{categories,locations,statuses}), session.features);
+    let categoryIds: string[];
+    try {
+      const rawIds=params.get("categoryIds");
+      if ((rawIds?.length??0)>10000) throw new Error();
+      categoryIds=rawIds?JSON.parse(rawIds):categoryId?[categoryId]:[];
+      if(!Array.isArray(categoryIds)||categoryIds.length>100||categoryIds.some(id=>typeof id!=="string"||!categories.some(c=>c.id===id)))throw new Error();
+      categoryIds=[...new Set(categoryIds)];
+    } catch {return NextResponse.json({error:"INVALID_QUERY"},{status:400,headers});}
     let advanced: AdvancedSearchQuery, sort: InventorySort;
     try {
       const rawAdvanced=params.get("advanced"), rawSort=params.get("sort");
@@ -49,9 +58,9 @@ export async function GET(request: Request) {
       sort=rawSort ? JSON.parse(rawSort) : DEFAULT_INVENTORY_SORT;
       if (searchValidation(advanced,fields) || !sort || !["asc","desc"].includes(sort.direction) || !fields.some(field=>field.key===sort.field)) throw new Error();
     } catch {return NextResponse.json({error:"INVALID_QUERY"},{status:400,headers});}
-    const filters = { ...(q ? { q } : {}), ...(categoryId ? { categoryIds: [categoryId] } : {}) };
+    const filters = { ...(q ? { q } : {}), ...(categoryIds.length ? { categoryIds } : {}) };
     const options = { offset, limit: 50 };
-    const fullSearch = Boolean(q || categoryId) || advanced.conditions.length > 0 || sort.field !== "updatedAt" || sort.direction !== "desc";
+    const fullSearch = Boolean(q || categoryIds.length) || advanced.conditions.length > 0 || sort.field !== "updatedAt" || sort.direction !== "desc";
     const indexed = fullSearch ? null : await listInventoryOffsetPage(filters, options);
     const page = fullSearch ? await listInventoryMobileSearch({...filters,advanced,sort},new Map(fields.map(field=>[field.key,field])),options) : indexed?.usedIndex ? indexed : await listInventory(filters, options);
     // Product names and quantities must not wait for 50 photo lookups/signatures.

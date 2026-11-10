@@ -135,9 +135,10 @@ function toCandidate(raw: RawItem): Candidate {
       sourceInventoryId: (raw.sourceInventoryId as string | null | undefined) ?? null,
       sku: raw.sku as string,
     }),
-    // toListRow は数量だけ `?? 0` で埋める。ここで揃えないと
-    // 「数量が空」「数量=0」の判定が新旧でずれる。
+    // Keep the list's numeric presentation plus its explicit missing flag.
+    // The shared matcher/sorter uses the flag to distinguish unset from zero.
     quantity: (raw.quantity as number | null | undefined) ?? 0,
+    quantityUnset: raw.quantityUnset === true || raw.quantity == null,
     customFields: parseCustomFieldsValue(raw.customFields),
     id: raw.id as string,
     updatedAt: raw.updatedAt as string,

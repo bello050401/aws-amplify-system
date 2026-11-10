@@ -6,7 +6,7 @@ import type { MobileFeatures } from "./access";
 import type { InventoryItem } from "./inventory";
 export { DEFAULT_INVENTORY_SORT };
 export type { InventorySort, AdvancedSearchQuery, SearchFieldDef };
-export interface InventorySearchInput { q?: string; category?: string; offset?: number; advanced?: AdvancedSearchQuery; sort?: InventorySort }
+export interface InventorySearchInput { q?: string; category?: string; categoryIds?: string[]; offset?: number; advanced?: AdvancedSearchQuery; sort?: InventorySort }
 
 /** The same field catalogue and feature boundaries as the existing BELLO editor. */
 export function mobileSearchFields(fields: SearchFieldDef[], features: MobileFeatures): SearchFieldDef[] {
@@ -31,6 +31,12 @@ export function searchValidation(query: AdvancedSearchQuery, fields: SearchField
     if (![condition.value,condition.value2].every(value=>value===undefined||(typeof value==="string"&&value.length<=500))) return "検索する値を確認してください。";
     if (!isConditionComplete(condition)) return `${field.label}の条件を入力してください。`;
     if (operatorNeedsNoValue(condition.operator)) continue;
+    if (field.valueType === "category" && ["anyOf","allOf","noneOf"].includes(condition.operator)) {
+      if (!Array.isArray(condition.values) || !condition.values.length || condition.values.length > 100 ||
+          condition.values.some(id => typeof id !== "string" || !field.options?.some(option => option.value === id)))
+        return "カテゴリの選択肢を確認してください。";
+      continue;
+    }
     const values = operatorNeedsSecondValue(condition.operator) ? [condition.value!,condition.value2!] : [condition.value!];
     if (field.valueType === "number" && values.some(value=>!Number.isFinite(Number(value)))) return `${field.label}は数字で入力してください。`;
     if (["date","datetime"].includes(field.valueType) && values.some(value=>!/^\d{4}-\d{2}-\d{2}$/.test(value)||!validCalendarDate(value))) return `${field.label}の日付を確認してください。`;
@@ -42,11 +48,12 @@ export function searchValidation(query: AdvancedSearchQuery, fields: SearchField
 export function cachedInventorySearch(items: InventoryItem[], input: InventorySearchInput, fields: SearchFieldDef[]): InventoryItem[] {
   const defs = new Map(fields.map(field=>[field.key,field]));
   const mapMaster = (key:string,label:string) => defs.get(key)?.options?.find(option=>option.label===label)?.value ?? label;
-  const records = items.map(item=>({item,record:{...item,...item.details,sourceInventoryId:item.displayId && /^\d+$/.test(item.displayId) ? item.displayId : undefined,customFields:item.details ?? {},
+  const records = items.map(item=>({item,record:{...item,...item.details,quantity:item.quantityUnset?null:item.quantity,sourceInventoryId:item.displayId && /^\d+$/.test(item.displayId) ? item.displayId : undefined,customFields:item.details ?? {},
     categoryId:mapMaster("categoryId",item.category),categoryIds:splitCategoryNames(item.category).map(name=>mapMaster("categoryId",name)),locationId:mapMaster("locationId",item.location),statusId:item.statusId ?? mapMaster("statusId",item.condition)}}));
   const compare=inventoryComparator(input.sort ?? DEFAULT_INVENTORY_SORT,defs);
   return records.filter(({item,record})=>{
     if (input.category && !splitCategoryNames(item.category).includes(input.category)) return false;
+    if (input.categoryIds?.length && !input.categoryIds.some(id=>record.categoryIds.includes(id))) return false;
     if (input.q && !matchesNameSearch(record, input.q)) return false;
     if (!input.advanced?.conditions.length) return true;
     // Unfetched details are unknown, never misreported as empty fields.

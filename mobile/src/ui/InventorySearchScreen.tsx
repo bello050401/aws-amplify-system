@@ -6,6 +6,7 @@ import {searchValidation,type AdvancedSearchQuery,type SearchFieldDef,type Inven
 import {DateField} from "./DateField";
 import {WheelPicker} from "./WheelPicker";
 import {colors} from "./theme";
+import {MultiChoiceSheet} from './MultiChoiceSheet';
 
 interface Choice {label:string;value:string;group?:string}
 function Choices({title,options,onChoose,onClose}:{title:string;options:Choice[];onChoose:(value:string)=>void;onClose:()=>void}) {
@@ -17,6 +18,7 @@ function Choices({title,options,onChoose,onClose}:{title:string;options:Choice[]
 export function InventorySearchScreen({value,fields,onApply,onClose}:{value:AdvancedSearchQuery;fields:SearchFieldDef[];onApply:(query:AdvancedSearchQuery)=>void;onClose:()=>void}) {
   const [draft,setDraft]=useState<AdvancedSearchQuery>(()=>({...value,conditions:value.conditions.map(condition=>({...condition}))}));
   const [choice,setChoice]=useState<{title:string;options:Choice[];choose:(value:string)=>void}|null>(null);
+  const [categoryCondition,setCategoryCondition]=useState<string|null>(null);
   const error=searchValidation(draft,fields);
   const update=(id:string,change:Partial<AdvancedSearchCondition>)=>setDraft(query=>({...query,conditions:query.conditions.map(condition=>condition.id===id?{...condition,...change}:condition)}));
   const add=()=>setChoice({title:"検索する項目",options:fields.map(field=>({label:field.label,value:field.key,group:field.group})),choose:key=>{
@@ -37,6 +39,7 @@ export function InventorySearchScreen({value,fields,onApply,onClose}:{value:Adva
           const value=(second?condition.value2:condition.value)??"";
           const label=field.label+(second?"の終了値":"の検索値");
           const onChange=(value:string)=>update(condition.id,second?{value2:value}:{value});
+          if(field.valueType==="category"&&["anyOf","allOf","noneOf"].includes(condition.operator))return <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={()=>setCategoryCondition(condition.id)} style={s.input}><Text style={s.blue}>{condition.values?.length?condition.values.map(id=>field.options?.find(o=>o.value===id)?.label??id).join('・'):"カテゴリを複数選択"}</Text></Pressable>;
           if(field.valueType==="date"||field.valueType==="datetime")return <DateField label={label} value={value} onChange={onChange}/>;
           if(field.options)return <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={()=>setChoice({title:field.label,options:field.options!,choose:value=>{onChange(value);setChoice(null);}})} style={s.input}><Text style={{fontSize:17,color:value?colors.text:colors.muted}}>{field.options.find(option=>option.value===value)?.label||"選択してください"}</Text></Pressable>;
           return <TextInput accessibilityLabel={label} value={value} onChangeText={onChange} placeholder={field.label} inputMode={field.valueType==="number"?"decimal":"text"} keyboardType={field.valueType==="number"?"decimal-pad":"default"} style={s.input}/>;
@@ -50,6 +53,7 @@ export function InventorySearchScreen({value,fields,onApply,onClose}:{value:Adva
     </ScrollView>
     <View style={s.footer}>{error&&<Text style={s.hint}>{error}</Text>}<View style={s.actions}><Pressable accessibilityRole="button" onPress={()=>setDraft({combinator:"AND",conditions:[]})} style={s.reset}><Text style={s.blue}>リセット</Text></Pressable><Pressable accessibilityRole="button" disabled={!!error} onPress={()=>onApply(draft)} style={[s.submit,error&&{opacity:.45}]}><Text style={s.white}>検索</Text></Pressable></View></View>
     {choice&&<Choices title={choice.title} options={choice.options} onChoose={choice.choose} onClose={()=>setChoice(null)}/>}
+    {categoryCondition&&<MultiChoiceSheet title="カテゴリ" options={fields.find(f=>f.key==='categoryId')?.options??[]} value={draft.conditions.find(c=>c.id===categoryCondition)?.values??[]} onClose={()=>setCategoryCondition(null)} onApply={values=>{update(categoryCondition,{values,value:undefined});setCategoryCondition(null);}}/>}
   </View>;
 }
 

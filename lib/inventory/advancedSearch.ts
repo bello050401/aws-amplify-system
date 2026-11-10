@@ -297,7 +297,7 @@ export function evaluateCondition(record: SearchableRecord, def: SearchFieldDef,
     if(condition.operator === "noneOf") return values.every(id => !ids.includes(id));
     return false;
   }
-  const raw = def.key.startsWith("cf:") ? record.customFields?.[def.key.slice(3)] : productDateValue(record,def.key);
+  const raw = def.key === "quantity" && record.quantityUnset === true ? null : def.key.startsWith("cf:") ? record.customFields?.[def.key.slice(3)] : productDateValue(record,def.key);
   switch (def.valueType) {
     case "number":
       return matchNumber(raw, condition.operator, condition.value, condition.value2);

@@ -927,7 +927,7 @@ export interface CustomFieldDefinitionRow {
   isActive: boolean;
 }
 
-function toCustomFieldDefinitionRow(f: {
+export function toCustomFieldDefinitionRow(f: {
   id: string;
   fieldKey: string;
   label: string;
