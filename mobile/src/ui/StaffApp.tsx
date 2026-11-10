@@ -24,6 +24,7 @@ import { colors } from "./theme";
 import { canOpenTab, permittedTab, RESTRICTED_FEATURES, type MobileFeatures } from "../domain/access";
 import { visibleDetailFields } from "../domain/detailFields";
 import { InventoryPhotos } from "./InventoryPhotos";
+import {InventoryPhotoPreview} from './InventoryPhotoPreview';
 import {BarcodeScanner} from "./BarcodeScanner";
 import {SalesScreen, type SalesResponse} from "./SalesScreen";
 import { InventoryReadError } from "../domain/readError";
@@ -80,6 +81,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
   useEffect(() => { if (requestedTab !== tab) setTab(tab); }, [requestedTab, tab]);
   const [snapshot, setSnapshot] = useState<InventorySnapshot | null>(null);
   const [selected, setSelected] = useState<InventoryItem | null>(null);
+  const [photoPreview,setPhotoPreview]=useState<InventoryItem|null>(null);
   const [editor, setEditor] = useState<InventoryEditor | null>(null);
   const editorRef = useRef(editor);
   editorRef.current = editor;
@@ -467,7 +469,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
       <Pressable accessibilityRole="button" onPress={onToggleOffline}><Text style={s.previewLink}>{offline ? "通信を戻す" : "圏外を試す"}</Text></Pressable>
     </View>}
     {preview && onTogglePreviewAccount && <Pressable accessibilityRole="button" accessibilityLabel="表示確認アカウントを切り替え" onPress={onTogglePreviewAccount} style={s.accountPreview}><Text style={s.previewText}>表示確認：{previewAccount}</Text><Text style={s.previewLink}>切り替え</Text></Pressable>}
-    {inventoryEditOpen && writesEnabled ? <InventoryEditEntry onClose={()=>{setInventoryEditOpen(false);void refresh(false,true);}}/> : messagesOpen && writesEnabled ? <MessageEntry onClose={()=>setMessagesOpen(false)}/> : priceEntryOpen && writesEnabled ? <PriceEntry historyPorts={priceHistoryPorts} onClose={()=>{setPriceEntryOpen(false);void refresh(false,true);}}/> : splitting && writesEnabled && ports.split && ports.checkBarcode && ports.uploadPhoto ? <StockSplitScreen item={splitting} ports={{newMutationId:ports.newMutationId,split:ports.split,uploadPhoto:ports.uploadPhoto,checkBarcode:ports.checkBarcode}} onCancel={()=>setSplitting(null)} onSaved={({source,split})=>{setSplitting(null);sold({source,sold:split});}}/> : selling && canSellInventory && ports.sell ? <SoldOutScreen item={selling} ports={{newMutationId:ports.newMutationId,sell:ports.sell}} onCancel={()=>setSelling(null)} onSaved={sold}/> : editor ? <InventoryEditorScreen onRetryPhotos={ports.loadPhotos ? retryPhotos : undefined} editor={editor} onLeave={leaveEditor} onSaved={item=>{saved(item);setSelected(item);}} onQrSaved={updateSavedItem} onPhotoDeleted={item=>{updateSavedItem(item);setSelected(item);}} features={features} /> : searchOpen ? <InventorySearchScreen value={advanced} fields={searchFields} onClose={()=>setSearchOpen(false)} onApply={value=>{setAdvanced(value);setSearchOpen(false);}}/> : <DetailSwipeBack enabled={!!selected && !feature && !deleteTarget && !scanSearch && !sortOpen && !categoryPicker} onBack={returnFromDetail}>
+    {inventoryEditOpen && writesEnabled ? <InventoryEditEntry onClose={()=>{setInventoryEditOpen(false);void refresh(false,true);}}/> : messagesOpen && writesEnabled ? <MessageEntry onClose={()=>setMessagesOpen(false)}/> : priceEntryOpen && writesEnabled ? <PriceEntry historyPorts={priceHistoryPorts} onClose={()=>{setPriceEntryOpen(false);void refresh(false,true);}}/> : splitting && writesEnabled && ports.split && ports.checkBarcode && ports.uploadPhoto ? <StockSplitScreen item={splitting} ports={{newMutationId:ports.newMutationId,split:ports.split,uploadPhoto:ports.uploadPhoto,checkBarcode:ports.checkBarcode}} onCancel={()=>setSplitting(null)} onSaved={({source,split})=>{setSplitting(null);sold({source,sold:split});}}/> : selling && canSellInventory && ports.sell ? <SoldOutScreen item={selling} ports={{newMutationId:ports.newMutationId,sell:ports.sell}} onCancel={()=>setSelling(null)} onSaved={sold}/> : editor ? <InventoryEditorScreen onRetryPhotos={ports.loadPhotos ? retryPhotos : undefined} editor={editor} onLeave={leaveEditor} onSaved={item=>{saved(item);setSelected(item);}} onQrSaved={updateSavedItem} onPhotoDeleted={item=>{updateSavedItem(item);setSelected(item);}} features={features} /> : searchOpen ? <InventorySearchScreen value={advanced} fields={searchFields} onClose={()=>setSearchOpen(false)} onApply={value=>{setAdvanced(value);setSearchOpen(false);}}/> : <DetailSwipeBack enabled={!!selected && !feature && !deleteTarget && !scanSearch && !sortOpen && !categoryPicker && !photoPreview} onBack={returnFromDetail}>
       <View style={s.header}>
         <View style={[s.headerSide, selected && {width:88}]}>{(selected || feature) && <Pressable accessibilityRole="button" accessibilityLabel="戻る" onPress={selected ? returnFromDetail : () => setFeature(null)} style={s.round}><Ionicons name="chevron-back" size={27} color={colors.text} /></Pressable>}</View>
         <Text style={s.title}>{title}</Text>
@@ -484,7 +486,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
       {error && selected && !detailLoading && <Pressable accessibilityRole="button" onPress={() => { void openItem(selected); }} style={{padding:14}}><Text style={{color:colors.blue}}>商品詳細を再読み込み</Text></Pressable>}
       {feature ? <View style={s.pending}><Text style={s.pendingTitle}>{feature}</Text><Text style={s.pendingText}>この操作は実装中です。実在庫への変更は行いません。</Text></View> : selected ? <ScrollView contentContainerStyle={s.detail}>
         <View style={{flexDirection:"row",flexWrap:"wrap",gap:4}}>{splitCategoryNames(selected.category).map(c=><Text key={c} style={s.tag}>{c}</Text>)}</View><Text style={s.itemTitle}>{selected.name}</Text>
-        <View style={s.hero}><ProductImage item={selected} large cache={ports.listPhotoCache}/><View style={s.heroFacts}>
+        <View style={s.hero}><ProductImage item={selected} large cache={ports.listPhotoCache} onPress={()=>setPhotoPreview(selected)}/><View style={s.heroFacts}>
           <View style={s.heroFact}><Text style={s.label}>数量</Text><Text style={s.heroQuantity}>{selected.quantityUnset?"—":selected.quantity}<Text style={s.unit}> {selected.unit}</Text></Text></View>
           <View style={s.heroFact}><Text style={s.label}>保管場所</Text><Text style={s.location}>{selected.location || "未設定"}</Text></View>
         </View></View>
@@ -509,16 +511,20 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
           initialNumToRender={10} maxToRenderPerBatch={8} windowSize={5} onViewableItemsChanged={viewableChanged} viewabilityConfig={viewabilityConfig}
           ListFooterComponent={!offline && hasMore ? <Pressable accessibilityRole="button" disabled={loading} onPress={() => { void refresh(true); }} style={s.pickerChoice}><Text style={s.blue}>{loading ? "読み込み中…" : "続きを読み込む"}</Text></Pressable> : undefined}
           contentContainerStyle={s.listContent} ListEmptyComponent={loading ? <ActivityIndicator color={colors.blue} /> : <Text style={s.empty}>{offline ? "この端末に保存済みの在庫がありません。通信が戻ったら読み込んでください。" : "該当する在庫がありません。"}</Text>}
-          renderItem={({ item }) => <Pressable accessibilityRole="button" accessibilityLabel={`${item.name}、数量${item.quantityUnset?"未入力":item.quantity}`} onPressIn={() => {if(!offline)ports.prepareDetail?.(item.id,item.updatedAt);}} onPress={() => { void openItem(item); }} style={s.row}>
-            <ProductImage item={item} cache={ports.listPhotoCache}/><View style={s.rowMain}><View style={{flexDirection:"row",flexWrap:"wrap",gap:4}}>{splitCategoryNames(item.category).map(c=><Text key={c} style={s.tag}>{c}</Text>)}</View><Text style={s.rowName} numberOfLines={2}>{item.name}</Text></View>
+          renderItem={({ item }) => <View style={s.row}>
+            <ProductImage item={item} cache={ports.listPhotoCache} onPress={()=>setPhotoPreview(item)}/>
+            <Pressable accessibilityRole="button" accessibilityLabel={`${item.name}、数量${item.quantityUnset?"未入力":item.quantity}`} onPressIn={() => {if(!offline)ports.prepareDetail?.(item.id,item.updatedAt);}} onPress={() => { void openItem(item); }} style={s.rowDetails}>
+            <View style={s.rowMain}><View style={{flexDirection:"row",flexWrap:"wrap",gap:4}}>{splitCategoryNames(item.category).map(c=><Text key={c} style={s.tag}>{c}</Text>)}</View><Text style={s.rowName} numberOfLines={2}>{item.name}</Text></View>
             <View style={s.rowRight}><View style={s.quantityBox}><Text style={s.quantity}>{item.quantityUnset?"—":item.quantity}</Text></View><Text numberOfLines={1} style={s.rowLocation}>● {item.location || "未設定"}</Text></View>
-          </Pressable>} />
+            </Pressable>
+          </View>} />
       </View> : tab === "outbound" ? <OutboundEntry offline={offline}/> : tab === "sales" && ports.loadSales ? <SalesScreen canIssueDocuments={canIssueDocuments} load={ports.loadSales} offline={offline} onOpen={id=>{if(ports.loadDetail)void ports.loadDetail(id).then(item=>{setTab("inventory");void openItem(item,true);}).catch(()=>setError("商品を取得できませんでした。"));}}/> : <View style={s.pending}><Text style={s.pendingText}>売上を取得できませんでした。</Text></View>}
       {selected && !selected.mergedIntoInventoryId && writesEnabled && ports.split && <Pressable accessibilityRole="button" accessibilityLabel="在庫分け" disabled={offline||detailLoading||!selected.detailLoadedAt||selected.quantity<1} onPress={()=>setSplitting(selected)} style={[s.edit,s.floatingEdit,{bottom:canSellInventory?228:156},(offline||detailLoading||!selected.detailLoadedAt||selected.quantity<1)&&{opacity:.4}]}><Text style={[s.editLabel,{textAlign:'center'}]}>{'在庫\n分け'}</Text></Pressable>}
       {selected && !selected.mergedIntoInventoryId && writesEnabled && canSellInventory && ports.sell && features.sales && features.ecListing && <Pressable accessibilityRole="button" accessibilityLabel="売却" disabled={offline || detailLoading || !selected.detailLoadedAt || selected.quantity<1 || splitCategoryNames(selected.category).includes('売り切れ')} onPress={()=>setSelling(selected)} style={[s.edit,s.floatingEdit,{bottom:156},(offline||detailLoading||!selected.detailLoadedAt||selected.quantity<1||splitCategoryNames(selected.category).includes('売り切れ'))&&{opacity:.4}]}><Text style={s.editLabel}>売却</Text></Pressable>}
       {selected && !selected.mergedIntoInventoryId && writesEnabled && <Pressable accessibilityRole="button" accessibilityLabel="編集" disabled={detailLoading || (!!ports.loadDetail && !selected.detailLoadedAt)} onPress={() => setEditor(new InventoryEditor(selected, ports))} style={[s.edit, s.floatingEdit, (detailLoading || (!!ports.loadDetail && !selected.detailLoadedAt)) && { opacity: .4 }]}><Ionicons name="create-outline" size={21} color="white" /><Text style={s.editLabel}>編集</Text></Pressable>}
       <View style={s.tabBar}>{visibleTabs.map((item) => <Pressable accessibilityRole="tab" accessibilityLabel={item.label} accessibilityState={{ selected: tab === item.key }} key={item.key} onPress={() => { detailGeneration.current++; setDetailLoading(false); setSelected(null); setFeature(null); setTab(item.key); }} style={[s.tab, tab === item.key && s.activeTab]}><Ionicons name={item.icon} size={22} color={tab === item.key ? colors.turquoise : colors.orange} /><Text style={[s.tabLabel, tab === item.key && s.activeLabel]}>{item.label}</Text></Pressable>)}</View>
     </DetailSwipeBack>}
+    {photoPreview&&<InventoryPhotoPreview key={photoPreview.id} item={photoPreview} offline={offline} cache={ports.listPhotoCache} loadPhotos={ports.loadPhotos} loadDetail={ports.loadDetail} onClose={()=>setPhotoPreview(null)}/>}
     <Modal visible={!!deleteTarget} transparent animationType="fade" onRequestClose={()=>{if(!deleteBusy.current)setDeleteTarget(null);}}>
       <View style={s.deleteShade}><View accessibilityViewIsModal style={s.deleteDialog}>
         <Ionicons name="trash-outline" size={30} color={colors.danger}/><Text style={s.deleteTitle}>この商品を本当に削除しますか？</Text>
@@ -535,10 +541,12 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
   </SafeAreaView>;
 }
 
-function ProductImage({ item, large,cache }: { item: InventoryItem; large?: boolean;cache?:ListPhotoCache }) {
+function ProductImage({ item, large,cache,onPress }: { item: InventoryItem; large?: boolean;cache?:ListPhotoCache;onPress?:()=>void }) {
   const style = large ? s.largeImage : s.thumbnail;
+  const pictureStyle = onPress ? s.imageFill : style;
   const uri=useListPhoto(cache,item);
-  return uri ? <Image source={{ uri }} style={style} contentFit="cover" cachePolicy={uri.startsWith('blob:')?'none':'memory-disk'} accessibilityLabel={item.name} /> : <View style={[style, s.placeholder]}><Ionicons name="cube-outline" size={large ? 60 : 28} color="#C8BDAA" /></View>;
+  const picture=uri ? <Image source={{ uri }} style={pictureStyle} contentFit="cover" cachePolicy={uri.startsWith('blob:')?'none':'memory-disk'} accessibilityLabel={item.name} /> : <View style={[pictureStyle, s.placeholder]}><Ionicons name="cube-outline" size={large ? 60 : 28} color="#C8BDAA" /></View>;
+  return onPress?<Pressable accessibilityRole="button" accessibilityLabel={`${item.name}の写真を拡大`} onPress={onPress} style={[style,{flexShrink:0}]}>{picture}</Pressable>:picture;
 }
 
 function DetailFact({ label, value, multiline = false }: { label: string; value?: string; multiline?: boolean }) {
@@ -549,6 +557,8 @@ function DetailFact({ label, value, multiline = false }: { label: string; value?
 }
 
 const s = StyleSheet.create({
+  imageFill:{width:'100%',height:'100%',borderRadius:5},
+  rowDetails:{flex:1,minWidth:0,flexDirection:"row",gap:9,alignItems:"flex-start",minHeight:64},
   deleteShade:{flex:1,backgroundColor:"#00000066",justifyContent:"center",padding:24},deleteDialog:{backgroundColor:"white",borderRadius:22,padding:22,gap:16},deleteTitle:{fontSize:18,fontWeight:"700",lineHeight:27,color:colors.text},deleteName:{fontSize:16,lineHeight:24,color:colors.text},deleteNote:{fontSize:13,lineHeight:21,color:colors.muted},deleteButtons:{flexDirection:"row",gap:12,marginTop:8},deleteCancel:{flex:1,minHeight:48,alignItems:"center",justifyContent:"center"},deleteConfirm:{flex:1,minHeight:48,alignItems:"center",justifyContent:"center",backgroundColor:colors.danger,borderRadius:12},
   advancedButton:{borderWidth:1.5,borderColor:colors.blue,borderRadius:10,padding:11},summaryRow:{flexDirection:"row",alignItems:"center",justifyContent:"flex-end",marginTop:3},
   floatingEdit: { position: "absolute", right: 16, bottom: 84, zIndex: 1 },

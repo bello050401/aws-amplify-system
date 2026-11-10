@@ -10,7 +10,11 @@ config.watchFolders.push(path.resolve(__dirname,"../lib/brands"));
 config.watchFolders.push(path.resolve(__dirname,"../components/inventory"));
 // Windows worktrees share dependencies through a junction. Metro must see its real target.
 const dependencyRoot=fs.realpathSync(path.resolve(__dirname,"node_modules"));
-if(dependencyRoot!==path.resolve(__dirname,"node_modules"))config.watchFolders.push(dependencyRoot);
+if(dependencyRoot!==path.resolve(__dirname,"node_modules")){
+ config.watchFolders.push(dependencyRoot);
+ // Resolve Metro's own async loader through the real dependency folder as well.
+ config.transformer.asyncRequireModulePath=require.resolve(config.transformer.asyncRequireModulePath,{paths:[__dirname]});
+}
 config.resolver.nodeModulesPaths=[dependencyRoot];
 // Shared web components must use the app's React instance, not the PC bundle's.
 config.resolver.resolveRequest=(context,moduleName,platform)=>{

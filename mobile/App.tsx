@@ -5,7 +5,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import { SnapshotStore } from "./src/domain/snapshot";
 import { StaffApp, type StaffAppPorts } from "./src/ui/StaffApp";
-import { previewItems, galleryPreviewItems } from "./src/preview/fixture";
+import { previewItems, galleryPreviewItems,photoPreviewItems,photoPreviewImage } from "./src/preview/fixture";
 import { InventoryWriteError } from "./src/domain/editor";
 import { LiveApp } from "./src/ui/LiveApp";
 import { nowInJst, shiftYearMonth } from "../lib/inventory/sales";
@@ -27,8 +27,9 @@ function Preview() {
   const loadingTest = useRef(__DEV__ && typeof window !== "undefined" && new URLSearchParams(window.location.search).get("loading-test") === "1").current;
   const galleryDelayTest = useRef(__DEV__ && typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('gallery-delay-test')).current;
   const galleryAttempts = useRef(0);
+  const photoPreviewTest=useRef(__DEV__&&typeof window!=='undefined'?new URLSearchParams(window.location.search).get('photo-preview-test'):null).current;
   const quickSearchTest = useRef(__DEV__ && typeof window !== "undefined" && new URLSearchParams(window.location.search).get("quick-search-test") === "1").current;
-  const records = useRef(quickSearchTest ? Array.from({length:6000},(_,index)=>({...previewItems[index%3],id:`quick-preview-${index}`,sku:`QA-${index}`,name:`検索確認 チェア ${index}`,thumbnailUrl:null,quantity:index%10+1})) : __DEV__ && typeof window !== "undefined" && new URLSearchParams(window.location?.search).get("gallery-test") === "1"
+  const records = useRef(photoPreviewTest?photoPreviewItems():quickSearchTest ? Array.from({length:6000},(_,index)=>({...previewItems[index%3],id:`quick-preview-${index}`,sku:`QA-${index}`,name:`検索確認 チェア ${index}`,thumbnailUrl:null,quantity:index%10+1})) : __DEV__ && typeof window !== "undefined" && new URLSearchParams(window.location?.search).get("gallery-test") === "1"
     ? galleryPreviewItems() : previewItems.map((item,index) => ({ ...item, ...(__DEV__ && index===0 && typeof window!=='undefined' && new URLSearchParams(window.location.search).get('photo-delete-test')==='1' ? {photosComplete:true,photos:[{id:'photo-00000000-0000-4000-8000-000000000001',source:'PHOTO_ASSET' as const,url:'http://127.0.0.1:8146/photo.jpg',type:'NORMAL' as const,primary:true},{id:'preview-image',source:'INVENTORY' as const,url:'http://127.0.0.1:8146/photo.jpg',type:'NORMAL' as const,primary:false}]} : {}) })));
   const uploadedPhotos=useRef(new Map<string,string>());
   const ports = useMemo<StaffAppPorts>(() => ({
@@ -77,6 +78,14 @@ function Preview() {
         return {id,updatedAt:item.updatedAt,photos:item.photos??[],photosComplete:true};
       },
     } : {}),
+    ...(photoPreviewTest?{loadThumbnails:async(ids:string[])=>records.current.filter(item=>ids.includes(item.id)).map(({id,updatedAt,thumbnailUrl})=>({id,updatedAt,thumbnailUrl})),loadPhotos:async(id:string)=>{
+      const item=records.current.find(row=>row.id===id)!,attempt=++galleryAttempts.current;
+      await new Promise(resolve=>setTimeout(resolve,photoPreviewTest==='slow'?3000:500));
+      if(photoPreviewTest==='fail'&&attempt===1)throw Error('Synthetic photo failure');
+      return {id:photoPreviewTest==='mismatch'?'another-product':id,updatedAt:item.updatedAt,photosComplete:true,
+        photos:[{id:'main-'+id,url:photoPreviewImage(item.sku+' / 主画像','#9b6b53'),primary:true},
+          {id:'other-'+id,url:photoPreviewImage(item.sku+' / 側面','#527a72'),primary:false}]};
+    }}:{}),
     deletePhotoAsset:async(id,photoId)=>{const item=records.current.find(r=>r.id===id);if(!item)throw Error('写真が見つかりません。');item.photos=item.photos?.filter(p=>p.id!==photoId);},
     uploadPhoto:async photo=>{uploadedPhotos.current.set(photo.id,photo.uri);return {storageKey:photo.id,type:photo.type};},
     checkBarcode:async(barcode,id)=>records.current.filter(r=>r.id!==id&&r.barcode===barcode).length,

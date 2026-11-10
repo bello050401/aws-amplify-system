@@ -4,8 +4,7 @@ import { Image } from "expo-image";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import type { InventoryItem, InventoryPhoto } from "../domain/inventory";
 import { colors } from "./theme";
-import {SafeAreaView} from 'react-native-safe-area-context';
-import {ZoomablePhoto} from './ZoomablePhoto';
+import {InventoryPhotoViewer} from './InventoryPhotoViewer';
 
 export function InventoryPhotos({ item, onRemove, onDeleteAsset, onRetry, disabled = false }: { item: InventoryItem; onRemove?: (id: string) => void; onDeleteAsset?: (id:string)=>Promise<void>; onRetry?: () => void; disabled?: boolean }) {
   const [deleteError,setDeleteError]=useState('');
@@ -46,16 +45,7 @@ export function InventoryPhotos({ item, onRemove, onDeleteAsset, onRetry, disabl
     </View>
     {current.length > shown && <Pressable accessibilityRole="button" style={s.more} onPress={() => setShown(value => value + 24)}><Text style={s.moreText}>残り{current.length - shown}枚を表示</Text></Pressable>}
 
-    <Modal visible={Boolean(selected)} animationType="fade" onRequestClose={() => setExpanded(null)}>
-      <SafeAreaView style={s.viewer}>
-        <View style={s.viewerHeader}><Text style={s.closeText}>{selectedIndex + 1} / {current.length}</Text><Pressable accessibilityRole="button" accessibilityLabel="画像を閉じる" onPress={() => setExpanded(null)} style={s.close}><Text style={s.closeText}>閉じる</Text></Pressable></View>
-        {selected && (selected.fullUrl ?? selected.url) ? <ZoomablePhoto key={selected.id} uri={(selected.fullUrl ?? selected.url)!} onPrevious={selectedIndex>0?()=>setExpanded(current[selectedIndex-1].id):undefined} onNext={selectedIndex<current.length-1?()=>setExpanded(current[selectedIndex+1].id):undefined}/> : <Text style={s.closeText}>画像を取得できませんでした。</Text>}
-        <View style={s.viewerHeader}>
-          <Pressable accessibilityRole="button" accessibilityLabel="前の画像" disabled={selectedIndex <= 0} style={[s.close, selectedIndex <= 0 && s.disabled]} onPress={() => setExpanded(current[selectedIndex - 1].id)}><Text style={s.closeText}>前へ</Text></Pressable>
-          <Pressable accessibilityRole="button" accessibilityLabel="次の画像" disabled={selectedIndex >= current.length - 1} style={[s.close, selectedIndex >= current.length - 1 && s.disabled]} onPress={() => setExpanded(current[selectedIndex + 1].id)}><Text style={s.closeText}>次へ</Text></Pressable>
-        </View>
-      </SafeAreaView>
-    </Modal>
+    {selected&&<InventoryPhotoViewer photos={current} index={selectedIndex} onIndexChange={index=>setExpanded(current[index].id)} onClose={()=>setExpanded(null)} title={item.name}/>}
     <Modal visible={removeTarget !== null} transparent animationType="fade" onRequestClose={() => {if(!deleting)setRemoveTarget(null);}}>
       <View style={s.shade}><View style={s.dialog} accessibilityViewIsModal>
         <Text style={s.heading}>この写真を削除しますか？</Text>
@@ -76,5 +66,5 @@ const s = StyleSheet.create({
   heroWrap: { position: "relative" }, hero: { width: "100%", height: 200, borderRadius: 10, backgroundColor: "#F7F5F1" }, badge: { position: "absolute", left: 8, top: 8, backgroundColor: colors.orange, color: "#352A1B", fontSize: 11, padding: 5, borderRadius: 5 },
   grid: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginVertical: 12 }, cell: { width: "31%", borderRadius: 10, borderWidth: 2, borderColor: "transparent", overflow: "hidden" }, photo: { width: "100%", aspectRatio: 1, borderRadius: 8 }, primary: { borderColor: colors.orange }, photoLabel: { fontSize: 11, color: colors.muted, padding: 5 },
   empty: { justifyContent: "center", alignItems: "center", gap: 6 }, caption: { fontSize: 12, color: colors.muted, lineHeight: 19 }, warning: { fontSize: 13, color: colors.danger, marginBottom: 12, lineHeight: 20 }, more: { padding: 14, borderWidth: 1, borderColor: colors.border, borderRadius: 10, alignItems: "center", marginBottom: 12 }, moreText: { color: colors.blue, fontSize: 14 },
-  viewer: { flex: 1, backgroundColor: "#141414" }, viewerHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20 }, close: { padding: 20 }, closeText: { color: "white", fontSize: 17 }, disabled: { opacity: .3 },
+
 });

@@ -35,3 +35,11 @@ export function galleryPreviewItems(): InventoryItem[] {
     photos: Array.from({ length: 33 }, (_, number) => ({ id: `gallery-${number}`, url: `https://bello-preview.invalid/thumb/${number}.png`, fullUrl: `https://bello-preview.invalid/full/${number}.png`, primary: number === 0, type: number < 30 ? "NORMAL" : "DAMAGE", source: number % 2 ? "PHOTO_ASSET" : "INVENTORY" })),
   });
 }
+
+/** Self-contained pictures for the tap-to-preview browser checks; no external inventory is read. */
+export function photoPreviewImage(label:string,color:string) {
+  return 'data:image/svg+xml;charset=utf-8,'+encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1200"><rect width="1200" height="1200" fill="#eeeae3"/><text x="80" y="110" font-size="42" fill="#263d3c">BELLO · ${label}</text><rect x="350" y="250" width="500" height="330" rx="26" fill="${color}"/><rect x="300" y="600" width="600" height="100" rx="20" fill="${color}"/><path d="M350 690v330M850 690v330" stroke="#665d50" stroke-width="35"/><text x="80" y="1130" font-size="32" fill="#555">操作確認用の画像</text></svg>`);
+}
+export function photoPreviewItems():InventoryItem[] {
+  return Array.from({length:24},(_,index)=>({...previewItems[index%3],id:`11111111-1111-4111-8111-${String(index+1).padStart(12,'0')}`,sku:`写真確認${index+1}`,name:`写真確認 ${index+1} チェア`,thumbnailUrl:photoPreviewImage(`${index+1} / 主画像`,'#9b6b53'),photos:undefined,photosComplete:false}));
+}
