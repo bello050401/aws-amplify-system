@@ -2,6 +2,8 @@ import { ALL_EXTENDED_FIELDS } from './extendedFields';
 import { internalInventoryField } from './humanEdits';
 import { validateName, validateCategoryArray } from './editTransform';
 import { inventoryQuantityError } from './quantityValidation';
+import {validateCustomFieldChanges,type CustomFieldValue,type InlineCustomDefinition} from './customFieldEdits';
+export type {CustomFieldValue,InlineCustomDefinition} from './customFieldEdits';
 
 export const INLINE_EDIT_FIELDS = {
   name:{inputType:'text'}, quantity:{inputType:'number'},
@@ -16,7 +18,6 @@ export const INLINE_EDIT_FIELDS = {
 } as const;
 export type StaticInlineEditFieldKey = keyof typeof INLINE_EDIT_FIELDS;
 export type InlineEditFieldKey = StaticInlineEditFieldKey | `cf:${string}`;
-export type CustomFieldValue = string | number | null;
 export type InlineEditChanges = {
   name?:string; quantity?:number|null; locationId?:string|null; categoryIds?:string[];
   plannedSalePrice?:number|null; salePrice?:number|null; purchasePrice?:number|null; saleCommission?:number|null;
@@ -27,7 +28,6 @@ export type InlineEditChanges = {
   /** A patch only. Never replace the complete customFields object or internal metadata. */
   customFieldChanges?:Record<string,CustomFieldValue>;
 };
-export interface InlineCustomDefinition {fieldKey:string;label:string;fieldType:string;required:boolean;options:readonly string[];isActive?:boolean}
 export function isInlineEditableColumn(key:string,defs:readonly InlineCustomDefinition[]=[]):key is InlineEditFieldKey {
   return Object.hasOwn(INLINE_EDIT_FIELDS,key) || key.startsWith('cf:') && !internalInventoryField(key.slice(3)) && defs.some(d=>d.fieldKey===key.slice(3)&&d.isActive!==false);
 }
@@ -41,14 +41,7 @@ export function validateInlineChanges(changes:InlineEditChanges,defs:readonly In
   const fields=new Map(Object.keys(INLINE_EDIT_FIELDS).map(c=>[inlineFieldKey(c as StaticInlineEditFieldKey),c as StaticInlineEditFieldKey]));
   for(const [key,value] of Object.entries(changes)) {
     if(key==='customFieldChanges') {
-      if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).length>100)throw Error('追加項目を確認してください。');
-      for(const [field,v] of Object.entries(value)) {
-        const def=defs.find(d=>d.fieldKey===field&&d.isActive!==false);
-        if(!def||internalInventoryField(field)||['__proto__','constructor','prototype'].includes(field))throw Error('編集できない追加項目です。');
-        if(v===null||v===''){if(def.required)throw Error(`${def.label}は必須です。`);continue;}
-        if(def.fieldType==='NUMBER') {if(typeof v!=='number'||!Number.isFinite(v))throw Error(`${def.label}は数値で入力してください。`);}
-        else if(typeof v!=='string'||v.length>100000||def.fieldType==='DATE'&&!validDate(v)||def.fieldType==='SELECT'&&!def.options.includes(v))throw Error(`${def.label}の入力を確認してください。`);
-      }
+      validateCustomFieldChanges(value,defs);
       continue;
     }
     const column=fields.get(key as Exclude<keyof InlineEditChanges,'customFieldChanges'>);

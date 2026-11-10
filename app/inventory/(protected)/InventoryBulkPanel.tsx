@@ -1,6 +1,8 @@
 "use client";
 import {inventoryEditErrorMessage} from '@/lib/inventory/editErrorMessage';
 import {inventoryFieldLabel} from '@/lib/inventory/fieldLabel';
+import {internalInventoryField} from '@/lib/inventory/humanEdits';
+import type {InlineCustomDefinition} from '@/lib/inventory/customFieldEdits';
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
@@ -197,7 +199,7 @@ export function InventoryBulkControls({
 }: {
   categories: { id: string; name: string }[];
   locations?: { id: string; name: string }[];
-  customFieldDefs?: {fieldKey:string;label:string}[];
+  customFieldDefs?: (Pick<InlineCustomDefinition,'fieldKey'|'label'> & Partial<InlineCustomDefinition>)[];
   embedded?:boolean;
 }) {
   const selection = useInventorySelection(),
@@ -243,7 +245,7 @@ export function InventoryBulkControls({
     completed = useRef(""),
     previewAttempt = useRef<string | null>(null);
   const running = job?.state === "PREPARING" || job?.state === "APPLYING";
-  const edited = rules.categories.mode !== "keep" || rules.names.length > 0 || Boolean(rules.location && rules.location.mode !== "keep");
+  const edited = rules.categories.mode !== "keep" || rules.names.length > 0 || Boolean(rules.location && rules.location.mode !== "keep") || Boolean(Object.keys(rules.customFieldChanges??{}).length);
   const unsaved = open && edited && (!job || job.state === "READY");
   useEffect(() => {
     registerBlocker("inventory-bulk", unsaved ? {discard: () => {
@@ -784,7 +786,7 @@ export function InventoryBulkControls({
                           )}
                           {rules.categories.mode === "clear" && (
                             <p className="text-sm text-red-700">
-                              対象商品のカテゴリをすべて解除します。物品名や在庫数は変更しません。
+                              対象商品のカテゴリをすべて解除します。他の項目は各カードの指定に従います。
                             </p>
                           )}
                         </section>
@@ -800,6 +802,23 @@ export function InventoryBulkControls({
                           </select>}
                           {rules.location?.mode === "clear" && <p className="text-sm text-amber-800">対象商品の保管場所を未設定にします。</p>}
                         </section>}
+                        {customFieldDefs.some(d=>d.fieldType&&d.isActive!==false&&!internalInventoryField(d.fieldKey)) && <details className="space-y-4 rounded-xl border bg-white p-5">
+                          <summary className="cursor-pointer font-semibold">追加項目 <span className="ml-2 text-sm font-normal text-gray-500">{Object.keys(rules.customFieldChanges??{}).length}項目を変更</span></summary>
+                          <p className="text-sm text-gray-500">指定した項目だけを変更します。その他の記録はそのまま残ります。</p>
+                          {customFieldDefs.filter(d=>d.fieldType&&d.isActive!==false&&!internalInventoryField(d.fieldKey)).map(def=>{
+                            const patch=rules.customFieldChanges??{}, value=patch[def.fieldKey];
+                            const mode=Object.hasOwn(patch,def.fieldKey)?value===null?'clear':'set':'keep';
+                            const update=(next:string|number|null|undefined)=>{const fields={...patch};if(next===undefined)delete fields[def.fieldKey];else fields[def.fieldKey]=next;changeRules({...rules,customFieldChanges:fields});};
+                            return <div key={def.fieldKey} className="space-y-2 border-t pt-3">
+                              <label className="block text-sm font-medium" htmlFor={'bulk-custom-mode-'+def.fieldKey}>{def.label}{def.required?'（必須）':''}</label>
+                              <select id={'bulk-custom-mode-'+def.fieldKey} aria-label={'追加項目「'+def.label+'」の一括操作'} className={input} value={mode} onChange={e=>update(e.target.value==='keep'?undefined:e.target.value==='clear'?null:'')}>
+                                <option value="keep">変更しない</option><option value="set">値を指定する</option><option value="clear" disabled={def.required}>空欄にする</option>
+                              </select>
+                              {mode==='set'&&(def.fieldType==='SELECT'?<select aria-label={'追加項目「'+def.label+'」の値'} className={input} value={String(value??'')} onChange={e=>update(e.target.value)}><option value="">選択してください</option>{(def.options??[]).map(v=><option key={v} value={v}>{v}</option>)}</select>:def.fieldType==='TEXTAREA'?<textarea aria-label={'追加項目「'+def.label+'」の値'} className={input} rows={3} value={String(value??'')} onChange={e=>update(e.target.value)}/>:<input aria-label={'追加項目「'+def.label+'」の値'} className={input} type={def.fieldType==='NUMBER'?'number':def.fieldType==='DATE'?'date':'text'} step={def.fieldType==='NUMBER'?'any':undefined} value={value??''} onChange={e=>update(def.fieldType==='NUMBER'&&e.target.value!==''?Number(e.target.value):e.target.value)}/>)}
+                              {mode==='clear'&&<p className="text-sm text-amber-800">選択した商品の「{def.label}」を空欄にします。</p>}
+                            </div>;
+                          })}
+                        </details>}
                         <section className="space-y-4 rounded-xl border bg-white p-5">
                           <h3 className="font-semibold">物品名</h3>
                           {!rules.names.length && (

@@ -27,6 +27,7 @@ import {
 import { sendInventoryTransaction } from "./historyTransaction";
 import { withHumanEdits } from "./humanEdits";
 import { parseCustomFields } from "./customFieldsCodecCore";
+import {validateCustomFieldChanges,type InlineCustomDefinition} from './customFieldEdits';
 
 type Row = Record<string, unknown>;
 export type EditJobMode = "edit" | "undo" | "redo";
@@ -107,6 +108,7 @@ export function createInventoryEditJobs(p: {
   enqueue: (id: string) => Promise<void>;
   authorizeWorker?: (owner: string) => Promise<boolean>;
   verifyRestoredImages?: (before: unknown, after: unknown) => Promise<void>;
+  loadCustomDefinitions?: () => Promise<InlineCustomDefinition[]>;
   now?: () => number;
 }) {
   const { db } = p,
@@ -302,7 +304,7 @@ export function createInventoryEditJobs(p: {
     await p.enqueue(job.id);
     return job;
   }
-  async function preview(job: EditJob, shouldYield: () => boolean) {
+  async function preview(job: EditJob, shouldYield: () => boolean, validateCustom: (before:Row,after:Row)=>Promise<void>) {
     const existing = await rows(job.id),
       done = new Set(existing.map((r) => r.id));
     for (let offset = 0; offset < job.ids.length; offset += 100) {
@@ -348,6 +350,7 @@ export function createInventoryEditJobs(p: {
                       name: String(row.name),
                       categoryIds: inventoryCategoryIds(row),
                       locationId: row.locationId,
+                      customFields: row.customFields,
                     },
                     job.rules!,
                   ).after,
@@ -359,6 +362,7 @@ export function createInventoryEditJobs(p: {
           )
             throw Error("到着確認待ちのためカテゴリ・保管場所を変更できません。");
           await validateLocation(row, after);
+          await validateCustom(row, after);
           base.delta = inventoryDiff(row, after);
           const fields = [...new Set(base.delta.map((d) => d.field))];
           const displayValue = (record: Row, field: string) => {
@@ -399,6 +403,7 @@ export function createInventoryEditJobs(p: {
     job: EditJob,
     preview: EditPreviewRow,
     current: Row | undefined,
+    validateCustom: (before:Row,after:Row)=>Promise<void>,
   ) {
     if (preview.state !== "CHANGE") return;
     const receipt = () =>
@@ -439,6 +444,7 @@ export function createInventoryEditJobs(p: {
         throw Error("CONFLICT");
       validateName(after.name);
       await validateLocation(current, after);
+      await validateCustom(current, after);
       if (restored && preview.delta.some(delta => delta.field === 'images')) {
         if (!p.verifyRestoredImages) throw Error('画像の復元確認が設定されていません。管理者に確認してください。');
         await p.verifyRestoredImages(current.images, after.images);
@@ -618,6 +624,17 @@ export function createInventoryEditJobs(p: {
     }
   }
   async function run(id: string, shouldYield: () => boolean = () => false) {
+    // One fresh master read per worker run, shared across rows. Apply/restore
+    // revalidates independently of preview; inactive or changed definitions fail closed.
+    let definitions:Promise<InlineCustomDefinition[]>|undefined;
+    const validateCustom=async(before:Row,after:Row)=>{
+      const fields=inventoryDiff(before,after).filter(d=>d.field.startsWith('customFields.'));
+      if(!fields.length)return;
+      if(!p.loadCustomDefinitions)throw Error('追加項目の検証が設定されていません。管理者に確認してください。');
+      definitions??=p.loadCustomDefinitions();
+      const values=parseCustomFields(after.customFields)??{};
+      validateCustomFieldChanges(Object.fromEntries(fields.map(d=>{const key=d.field.slice('customFields.'.length);return [key,values[key]??null];})),await definitions);
+    };
     categoryChecks.clear();
     let job = await requireJob(id);
     if (!["PREPARING", "APPLYING"].includes(job.state)) return job;
@@ -664,7 +681,7 @@ export function createInventoryEditJobs(p: {
         return { ...job, state: "FAILED" as const };
       }
       if (job.cancelled) return await summarize(job, "CANCELLED");
-      if (job.state === "PREPARING") return await preview(job, shouldYield);
+      if (job.state === "PREPARING") return await preview(job, shouldYield, validateCustom);
       if (job.state !== "APPLYING") return job;
       const pending = (await rows(id)).filter((r) => r.state === "CHANGE");
       for (let offset = 0; offset < pending.length; offset += 50) {
@@ -676,7 +693,7 @@ export function createInventoryEditJobs(p: {
         const batch = pending.slice(offset, offset + 50),
           current = await p.readBatch(batch.map((r) => r.id));
         await boundedMap(batch, 8, (row) =>
-          applyOne(job, row, current.get(row.id)),
+          applyOne(job, row, current.get(row.id),validateCustom),
         );
         await summarize(job, "APPLYING");
       }

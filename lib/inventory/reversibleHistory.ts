@@ -214,7 +214,7 @@ export function applyInventoryDiff(
   direction: "undo" | "redo",
 ): Row {
   const next = copy(current),
-    custom = parseCustomFields(current.customFields) ?? {};
+    custom = copy(parseCustomFields(current.customFields) ?? {});
   let customChanged = false;
   for (const d of changes) {
     const reverse = direction === "undo";

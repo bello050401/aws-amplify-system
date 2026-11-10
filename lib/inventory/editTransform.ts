@@ -1,11 +1,13 @@
 /** Shared pure preview and validation. Category names are never identifiers. */
+import {validateCustomPatchShape,type CustomFieldValue} from './customFieldEdits';
+import {parseCustomFields} from './customFieldsCodecCore';
 export const INVENTORY_NAME_LIMIT = 2000;
 export const CATEGORY_LIMIT = 20;
 export type CategoryOperation = { mode:'keep' } | { mode:'modify'; add:string[]; remove:string[] } | { mode:'replace'; ids:string[] } | { mode:'clear' };
 export const BRACKETS = { wide:['（','）'], narrow:['(',')'], memo:['【','】'] } as const;
 export type BracketKind = keyof typeof BRACKETS;
 export type NameRule = { kind:'prefix'; text:string; skipExisting:boolean } | { kind:'remove'; text:string } | { kind:'replace'; from:string; to:string } | { kind:'brackets'; bracket:BracketKind; content:boolean } | { kind:'convert'; from:BracketKind; to:BracketKind };
-export interface InventoryEditRules { categories:CategoryOperation; names:NameRule[]; location?: {mode:"keep"|"clear"} | {mode:"set";id:string} }
+export interface InventoryEditRules { categories:CategoryOperation; names:NameRule[]; location?: {mode:"keep"|"clear"} | {mode:"set";id:string}; customFieldChanges?:Record<string,CustomFieldValue> }
 export class InventoryEditValidationError extends Error { constructor(readonly code:string,message:string){super(message);} }
 const invalid=(message:string):never=>{throw new InventoryEditValidationError('INVALID',message);};
 export function validateName(name:unknown):asserts name is string {
@@ -17,6 +19,7 @@ export function validateCategoryArray(ids:unknown):asserts ids is string[] {
 export function validateEditRules(value:unknown):asserts value is InventoryEditRules {
   const r=value as InventoryEditRules;
   if(!r||!r.categories||!Array.isArray(r.names)||r.names.length>30)invalid('編集内容を確認してください。');
+  if(r.customFieldChanges!==undefined)validateCustomPatchShape(r.customFieldChanges);
   if(r.location && (!["keep","clear","set"].includes(r.location.mode) ||
     r.location.mode === "set" && (typeof r.location.id !== "string" || !r.location.id || r.location.id.length > 128)))invalid("保管場所を選択してください。");
   const c=r.categories;
@@ -75,11 +78,12 @@ export function transformName(original:string,rules:readonly NameRule[]):string{
   }
   validateName(name);return name;
 }
-export function transformInventoryEdit(before:{name:string;categoryIds:string[];locationId?:unknown},rules:InventoryEditRules){
+export function transformInventoryEdit(before:{name:string;categoryIds:string[];locationId?:unknown;customFields?:unknown},rules:InventoryEditRules){
   validateEditRules(rules);
   const after={name:transformName(before.name,rules.names),categoryIds:transformCategories(before.categoryIds,rules.categories),
-    ...(rules.location?.mode === "set" ? {locationId:rules.location.id} : rules.location?.mode === "clear" ? {locationId:null} : {})};
+    ...(rules.location?.mode === "set" ? {locationId:rules.location.id} : rules.location?.mode === "clear" ? {locationId:null} : {}),
+    ...(rules.customFieldChanges&&Object.keys(rules.customFieldChanges).length ? {customFields:{...parseCustomFields(before.customFields),...rules.customFieldChanges}}:{})};
   validateCategoryArray(after.categoryIds);
   return {before,after,changed:before.name!==after.name||JSON.stringify(before.categoryIds)!==JSON.stringify(after.categoryIds)||
-    "locationId" in after && before.locationId!==after.locationId};
+    "locationId" in after && before.locationId!==after.locationId || "customFields" in after && JSON.stringify(parseCustomFields(before.customFields))!==JSON.stringify(after.customFields)};
 }

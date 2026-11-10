@@ -3,7 +3,7 @@ import {writeFileSync,mkdirSync} from "node:fs";
 import {validateInlineChanges,isInlineEditableColumn,INLINE_EDIT_FIELDS} from "../lib/inventory/inlineEdit";
 import {browserListRow} from "../lib/inventory/browserListRow";
 import {withHumanEdits,humanEditedFields} from "../lib/inventory/humanEdits";
-import {recordInventorySave,moveInventoryHistory,readEditHistory} from "../lib/inventory/reversibleHistory";
+import {recordInventorySave,moveInventoryHistory,readEditHistory,inventoryDiff,applyInventoryDiff} from "../lib/inventory/reversibleHistory";
 import {createAdvancedSearchMatcher,evaluateCondition,completeConditions,buildSearchFieldDefs,STATIC_SEARCH_FIELDS} from "../lib/inventory/advancedSearch";
 const results:string[]=[];
 function test(name:string,fn:()=>void){fn();results.push(name);console.log("PASS "+name);}
@@ -31,6 +31,16 @@ test("追加項目パッチは他の値・仕入元情報・編集保護を保�
  const next=withHumanEdits({width:"60"},{width:"71.5"},old,{...old,color:"青"});
  assert.equal(next.memo,"手入力");assert.deepEqual(next.__restageImport,old.__restageImport);
  assert.deepEqual([...humanEditedFields(next)].sort(),["customFields.color","note","width"]);
+});
+test("追加項目の差分適用は元オブジェクトを変更せず履歴を保存・復元",()=>{
+ for(const encoded of [false,true]){
+ const values={color:'赤',memo:'残す',__restageImport:{id:'qa'}}, before={name:'椅子',categoryIds:['a'],customFields:encoded?JSON.stringify(values):values};
+ const original=structuredClone(before),target={...before,customFields:{...values,color:'青'}};
+ const after=applyInventoryDiff(before,inventoryDiff(before,target),'redo');assert.deepEqual(before,original);
+ const saved=recordInventorySave(before,after,{id:'qa',operationId:'qa',actor:'QA',source:'試験',at:'2026-11-10'}).row;assert.equal(readEditHistory(saved).entries.length,1);
+ const undone=moveInventoryHistory(saved,'undo').row;assert.deepEqual(undone.customFields,before.customFields);assert.deepEqual(before,original);
+ const redone=moveInventoryHistory(undone,'redo').row;assert.deepEqual(redone.customFields,saved.customFields);
+ }
 });
 test("ブラウザ転送を削減しても全編集値・競合版・画像参照は不変",()=>{
  const row:any={id:"a",name:"チェア",quantity:2,width:"71.5",note:"全文\n".repeat(500),categoryIds:["a","b"],updatedAt:"v1",revision:7,mainImageSignedUrl:"https://example.test/photo",customFields:{memo:"全文",amount:0,__belloEditHistory:{data:"x".repeat(20000)},__restageImport:{sourceId:"secret"}},counterpartyAddress:"detail-only",images:[{data:"detail-only"}]};
