@@ -307,10 +307,16 @@ function renderEditableCell(
         />
       );
     }
-    case "market": {
-      const pending = getValue(row, "market");
-      const value = pending === undefined ? row.market : pending;
-      return <input disabled={saving} type="text" value={value ?? ""} onChange={(e) => setValue(row.id, column, e.target.value || null)} className={inputClass} />;
+    case "market":
+    case "transactionType": {
+      const pending = getValue(row, column);
+      const value = pending === undefined ? row[column] : pending;
+      const options = ALL_EXTENDED_FIELDS.find(field => field.key === column)?.options ?? [];
+      return <select disabled={saving} aria-label={inventoryFieldLabel(column)} value={value ?? ""} onChange={(e) => setValue(row.id, column, e.target.value || null)} className={inputClass}>
+        <option value="">未設定</option>
+        {value && !options.some(option => option.value === value) && <option value={value}>{value}（現在の値）</option>}
+        {options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+      </select>;
     }
     case "note":
     case "conditionRating":

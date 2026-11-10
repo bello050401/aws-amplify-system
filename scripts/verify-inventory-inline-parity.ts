@@ -20,6 +20,9 @@ test("一覧の全編集列と有効な追加項目を認識、内部項目・ID
  for(const key of ["id","sku","updatedAt","cf:old","cf:unknown","cf:__belloEditedFields"])assert(!isInlineEditableColumn(key,defs));
 });
 test("小数寸法・日付・単位・複数カテゴリ・追加項目の型と選択肢",()=>{
+ validateInlineChanges({market:"ヤフオク",transactionType:"買受"},defs);
+ assert.throws(()=>validateInlineChanges({market:"未定義の販売先"},defs));
+ assert.throws(()=>validateInlineChanges({transactionType:"未定義の取引"},defs));
  validateInlineChanges({width:"71.5",height:"約80～90",unit:"脚",barcode:"2026042311254",saleEndDate:"2026-11-10",categoryIds:["a","b"],customFieldChanges:{amount:2.5,date:"2026-11-10",color:"赤",memo:"複数行\n保持"}},defs);
  for(const changes of [{quantity:"2"},{quantity:-1},{salePrice:NaN},{saleEndDate:"2026-02-30"},{id:"hack"},{customFieldChanges:{color:"緑"}},{customFieldChanges:{amount:"2"}},{customFieldChanges:{date:"2026-02-30"}},{customFieldChanges:{memo:null}},{customFieldChanges:{old:"x"}},{customFieldChanges:{__belloEditedFields:"x"}},{customFieldChanges:{constructor:"x"}}])assert.throws(()=>validateInlineChanges(changes as any,defs));
 });

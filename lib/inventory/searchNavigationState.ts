@@ -24,6 +24,23 @@ export function coalesceSearchSubmission(
   return previous !== null && previous.href === href && now >= previous.at && now - previous.at < 1000;
 }
 
+/** A response-received phase must never acknowledge a prefetch/older request,
+ * a different filter, another endpoint, or an external origin. It is not proof
+ * that results rendered or that a server request succeeded. */
+export function isCurrentSearchResource(
+  resource: {name:string;initiatorType:string;startTime:number},
+  active: {href:string;startedAt:number},
+  origin:string,
+): boolean {
+  if(resource.initiatorType!=="fetch"||resource.startTime<active.startedAt)return false;
+  try {
+    const url=new URL(resource.name,origin);
+    if(url.origin!==origin||url.pathname!=="/inventory"||!url.searchParams.has("_rsc"))return false;
+    url.searchParams.delete("_rsc");
+    return searchResultAcknowledges(url.search,active.href);
+  } catch {return false;}
+}
+
 /** A filter follows the committed URL, not React's shared transition lifetime.
  * Another navigation may supersede it; that must not keep the controls locked. */
 export function listNavigationStatus(currentQuery: string, request: { from: string; href: string } | null): "idle" | "waiting" | "complete" | "superseded" {

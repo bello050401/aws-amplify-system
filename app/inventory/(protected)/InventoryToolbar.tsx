@@ -8,7 +8,7 @@ import { useUnsavedChanges } from "../UnsavedChangesProvider";
 import { DirectEditControls } from "./DirectEditControls";
 import { ExportMenu } from "./ExportMenu";
 import { ImportWizard } from "./ImportWizard";
-import {coalesceSearchSubmission, searchResultAcknowledges} from '@/lib/inventory/searchNavigationState';
+import {coalesceSearchSubmission, searchResultAcknowledges, isCurrentSearchResource} from '@/lib/inventory/searchNavigationState';
 import { listFilterHref } from "@/lib/inventory/listFilterNavigation";
 
 interface InventoryToolbarProps {
@@ -67,8 +67,12 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
   const searchSequence = useRef(0), inputAt = useRef(0);
   const lastSearchSubmission = useRef<{href:string; at:number}|null>(null);
   const searchMetric = useRef<HTMLSpanElement>(null);
-  // Local diagnostics only: distinguish server/network waiting from committing
-  // a ready response. Do not retain URLs/search text or send telemetry.
+  const [receivedSearchSequence, setReceivedSearchSequence] = useState(0);
+  // Next 15 can leave a resolved route transition suspended until another
+  // urgent update. Track the actual response as a separate UI phase, once per
+  // search, rather than polling, repeating requests, or claiming completion.
+  // Only resultQuery below acknowledges that the requested results committed.
+  // Timing diagnostics stay local; no search text or telemetry is retained.
   const activeSearchTiming = useRef<{href:string;startedAt:number;sequence:number}|null>(null);
   useEffect(() => {
     if (typeof PerformanceObserver === 'undefined') return;
@@ -77,11 +81,8 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
       if (!active || !searchMetric.current) return;
       for (const entry of list.getEntries()) {
         const resource = entry as PerformanceResourceTiming;
-        if (resource.initiatorType !== 'fetch' || resource.startTime < active.startedAt - 50) continue;
-        const url = new URL(resource.name, window.location.origin);
-        if (url.origin !== window.location.origin || !url.searchParams.has('_rsc')) continue;
-        url.searchParams.delete('_rsc');
-        if (!searchResultAcknowledges(url.search, active.href)) continue;
+        if (!isCurrentSearchResource(resource, active, window.location.origin)) continue;
+        setReceivedSearchSequence(active.sequence);
         searchMetric.current.setAttribute('data-search-resource', JSON.stringify({
           sequence:active.sequence, start:Math.round(resource.startTime-active.startedAt),
           firstByte:Math.round(resource.responseStart-resource.startTime),
@@ -282,7 +283,7 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
           {/* 受付は即時表示し、実際の検索条件が画面に反映されてから解除する。 */}
           {isSearchPending && (
             <span aria-live="polite" className="whitespace-nowrap text-[11px] font-medium text-gray-400">
-              検索中…
+              {receivedSearchSequence === pendingSearch?.sequence ? "結果を表示中…" : "検索中…"}
             </span>
           )}
           {searchDelayed && pendingSearch && (

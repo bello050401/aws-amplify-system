@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {coalesceSearchSubmission as coalesce, searchResultAcknowledges as ack} from '../lib/inventory/searchNavigationState';
+import {coalesceSearchSubmission as coalesce, searchResultAcknowledges as ack,isCurrentSearchResource as received} from '../lib/inventory/searchNavigationState';
 import {inventoryEditErrorMessage} from '../lib/inventory/editErrorMessage';
 assert(ack('q=arper','/inventory?q=arper'));
 assert(!ack('q=chair','/inventory?q=arper'),'old result must not complete latest request');
@@ -23,3 +23,13 @@ assert(!coalesce({href:'/inventory?q=a',at:100},'/inventory?q=b',200));
 assert(!coalesce({href:'/inventory?q=a',at:100},'/inventory?q=a&categoryIds=c',200));
 assert(!coalesce({href:'/inventory?q=a',at:100},'/inventory?q=a',99));
 console.log('PASS automatic/button coalescing without blocking changed filters or later refresh (6 cases)');
+const origin='https://bello.example',active={href:'/inventory?q=arper&categoryIds=a',startedAt:100};
+const response={name:origin+'/inventory?categoryIds=a&q=arper&_rsc=x',initiatorType:'fetch',startTime:101};
+assert(received(response,active,origin));
+for(const patch of [{startTime:99},{initiatorType:'img'},{name:origin+'/inventory?q=arper&_rsc=x'},
+  {name:origin+'/inventory?categoryIds=a&q=chair&_rsc=x'},
+  {name:origin+'/inventory?categoryIds=a&q=arper&offset=50&_rsc=x'},
+  {name:'https://outside.example/inventory?categoryIds=a&q=arper&_rsc=x'},
+  {name:origin+'/api/elsewhere?categoryIds=a&q=arper&_rsc=x'},
+  {name:origin+'/inventory?categoryIds=a&q=arper'}])assert(!received({...response,...patch},active,origin));
+console.log('PASS response phase: matching route only; old requests, other products/filters/pages/origins/resources rejected (9 cases)');
