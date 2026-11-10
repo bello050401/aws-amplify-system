@@ -1,6 +1,6 @@
 import React,{useSyncExternalStore} from "react";
 import {createRoot} from "react-dom/client";
-import {products,categories,subscribe,snapshot} from "../inventory-edit-ui/store";
+import {products,categories,subscribe,snapshot,customDefinitions} from "../inventory-edit-ui/store";
 import {InventoryTable} from "../../../app/inventory/(protected)/InventoryTable";
 import {InventoryBulkControls} from "../../../app/inventory/(protected)/InventoryBulkPanel";
 import {DirectEditProvider} from "../../../app/inventory/(protected)/DirectEditProvider";
@@ -15,7 +15,7 @@ import {buildSearchFieldDefs,evaluateQuery,createQuickSearchMatcher} from "../..
 import {inventoryComparator,parseInventoryListSort} from "../../../lib/inventory/searchSort";
 import {NavigationFaultControl} from "./navigation";
 const locations=[{id:"L1",name:"所沢事務所",parentId:null,sortOrder:1},{id:"L2",name:"検証倉庫",parentId:null,sortOrder:2}];
-const fields=buildSearchFieldDefs([],{categories,locations,statuses:[]}),fieldMap=new Map(fields.map(f=>[f.key,f]));
+const fields=buildSearchFieldDefs(customDefinitions,{categories,locations,statuses:[]}),fieldMap=new Map(fields.map(f=>[f.key,f]));
 function App(){
   useSyncExternalStore(subscribe,snapshot);
   const params=new URLSearchParams(location.search),ids=(params.get("categoryIds")??"").split(",").filter(Boolean);
@@ -29,13 +29,13 @@ function App(){
     <div className="flex h-screen flex-col pb-[var(--inventory-selection-space)]">
       <div className="bg-amber-50 px-4 py-2 text-sm">操作確認用・匿名の商品60件（実在庫・ECは変更しません）<NavigationFaultControl/></div>
       <header className="border-b bg-white p-4"><InventoryToolbar role="EDITOR" q={params.get("q")??undefined} categoryIds={ids} locationId={params.get("locationId")??undefined} advancedOpen={params.has("advanced")} advancedActive={Boolean(advanced)} advRaw={params.get("adv")??undefined} totalLabel={`${all.length}件`} resultQuery={params.toString()}/></header>
-      <InventoryBulkControls categories={categories} locations={locations}/>
-      <InventoryListTools customFieldDefs={[]} categories={categories} locations={locations}/>
+      <InventoryBulkControls categories={categories} locations={locations} customFieldDefs={customDefinitions}/>
+      <InventoryListTools customFieldDefs={customDefinitions} categories={categories} locations={locations}/>
       <div className="flex min-h-0 flex-1">
         <InventorySidebar categories={categories} locations={locations} activeCategoryIds={ids} activeLocationId={params.get("locationId")??undefined}/>
         {params.has("advanced")&&<InventoryAdvancedSearchPanel key={params.get("adv")??"empty"} fieldDefs={fields} initialQuery={advanced}/>}
         <div className="flex min-w-0 flex-1 flex-col">
-          <div className="min-h-0 flex-1 overflow-auto"><InventoryTable rows={rows} categories={categories} locations={locations} categoriesById={Object.fromEntries(categories.map(c=>[c.id,c]))} locationsById={Object.fromEntries(locations.map(l=>[l.id,l]))} statusesById={{}} customFieldDefs={[]} listReturnQuery={params.toString()}/></div>
+          <div className="min-h-0 flex-1 overflow-auto"><InventoryTable rows={rows} categories={categories} locations={locations} categoriesById={Object.fromEntries(categories.map(c=>[c.id,c]))} locationsById={Object.fromEntries(locations.map(l=>[l.id,l]))} statusesById={{}} customFieldDefs={customDefinitions} listReturnQuery={params.toString()}/></div>
           <InventoryPagination baseParams={Object.fromEntries(params)} limit={limit} offset={offset} total={all.length} currentCount={rows.length} hasNext={offset+limit<all.length}/>
         </div>
       </div>

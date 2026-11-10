@@ -1,79 +1,70 @@
-/**
- * 一覧直接編集 (統合改善指示書 §11) — which list columns are safely
- * inline-editable, and how. Deliberately a small, explicit whitelist
- * rather than "every visible column" — spec §11-1 lists exactly which
- * fields are safe for quick inline edits (simple scalars with no
- * multi-step workflow of their own); anything touching images, NORMAL/
- * DAMAGE, custom fields, history, or ZAICO sync metadata stays
- * detail-edit-only (`/inventory/[id]/edit`), matching this app's
- * existing role split between 一覧 (find fast) and 詳細編集 (edit
- * everything).
- *
- * Keyed by the SAME `key` lib/inventory/listColumns.ts's registry uses
- * (name/quantity/location/category/plannedSalePrice/salePrice/
- * purchasePrice/market/note/conditionRating/damageNotes) — a column is
- * inline-editable in the table only when it's ALSO currently visible
- * (統合改善指示書 §11: 表示設定と連動させる), so InventoryTable checks
- * both registries together rather than this one alone.
- *
- * Not `server-only`: read by the client-side table (which input to
- * render) and imported by the Server Action for its own whitelist check
- * (never trust the client's payload shape alone — see
- * app/actions/inventoryBulkEdit.ts).
- */
-export type InlineEditFieldKey =
-  | "name"
-  | "quantity"
-  | "location"
-  | "category"
-  | "plannedSalePrice"
-  | "salePrice"
-  | "purchasePrice"
-  | "market"
-  | "note"
-  | "conditionRating"
-  | "damageNotes";
+import { ALL_EXTENDED_FIELDS } from './extendedFields';
+import { internalInventoryField } from './humanEdits';
+import { validateName, validateCategoryArray } from './editTransform';
+import { inventoryQuantityError } from './quantityValidation';
 
-export type InlineEditInputType = "text" | "number" | "select-category" | "select-location" | "textarea";
-
-export const INLINE_EDIT_FIELDS: Record<InlineEditFieldKey, { inputType: InlineEditInputType }> = {
-  name: { inputType: "text" },
-  quantity: { inputType: "number" },
-  location: { inputType: "select-location" },
-  category: { inputType: "select-category" },
-  plannedSalePrice: { inputType: "number" },
-  salePrice: { inputType: "number" },
-  purchasePrice: { inputType: "number" },
-  market: { inputType: "text" },
-  note: { inputType: "textarea" },
-  conditionRating: { inputType: "textarea" },
-  damageNotes: { inputType: "textarea" },
+export const INLINE_EDIT_FIELDS = {
+  name:{inputType:'text'}, quantity:{inputType:'number'},
+  category:{inputType:'select-category'}, location:{inputType:'select-location'},
+  unit:{inputType:'text'}, barcode:{inputType:'text'},
+  plannedSalePrice:{inputType:'number'}, salePrice:{inputType:'number'}, purchasePrice:{inputType:'number'},
+  saleCommission:{inputType:'number'}, market:{inputType:'text'}, note:{inputType:'textarea'},
+  width:{inputType:'text'}, depth:{inputType:'text'}, height:{inputType:'text'},
+  saleStartDate:{inputType:'date'}, saleEndDate:{inputType:'date'}, transactionDate:{inputType:'date'},
+  transactionType:{inputType:'text'}, adminMemo:{inputType:'textarea'},
+  conditionRating:{inputType:'textarea'}, damageNotes:{inputType:'textarea'},
+} as const;
+export type StaticInlineEditFieldKey = keyof typeof INLINE_EDIT_FIELDS;
+export type InlineEditFieldKey = StaticInlineEditFieldKey | `cf:${string}`;
+export type CustomFieldValue = string | number | null;
+export type InlineEditChanges = {
+  name?:string; quantity?:number|null; locationId?:string|null; categoryIds?:string[];
+  plannedSalePrice?:number|null; salePrice?:number|null; purchasePrice?:number|null; saleCommission?:number|null;
+  unit?:string|null; barcode?:string|null; market?:string|null; note?:string|null;
+  width?:string|null; depth?:string|null; height?:string|null;
+  saleStartDate?:string|null; saleEndDate?:string|null; transactionDate?:string|null;
+  transactionType?:string|null; adminMemo?:string|null; conditionRating?:string|null; damageNotes?:string|null;
+  /** A patch only. Never replace the complete customFields object or internal metadata. */
+  customFieldChanges?:Record<string,CustomFieldValue>;
 };
-
-export function isInlineEditableColumn(key: string): key is InlineEditFieldKey {
-  return Object.prototype.hasOwnProperty.call(INLINE_EDIT_FIELDS, key);
+export interface InlineCustomDefinition {fieldKey:string;label:string;fieldType:string;required:boolean;options:readonly string[];isActive?:boolean}
+export function isInlineEditableColumn(key:string,defs:readonly InlineCustomDefinition[]=[]):key is InlineEditFieldKey {
+  return Object.hasOwn(INLINE_EDIT_FIELDS,key) || key.startsWith('cf:') && !internalInventoryField(key.slice(3)) && defs.some(d=>d.fieldKey===key.slice(3)&&d.isActive!==false);
 }
-
-/**
- * One row's pending inline edits — every value already in the shape
- * `Inventory.update()` expects for that field (categoryId/locationId as
- * an id string or `null` to clear, prices/quantity as `number | null`,
- * the rest as `string | null`). `undefined`/absent key = "not edited,
- * leave alone"; present with `null` = "explicitly cleared".
- */
-export interface InlineEditChanges {
-  name?: string;
-  quantity?: number | null;
-  locationId?: string | null;
-  categoryIds?: string[];
-  plannedSalePrice?: number | null;
-  salePrice?: number | null;
-  purchasePrice?: number | null;
-  market?: string | null;
-  note?: string | null;
-  conditionRating?: string | null;
-  damageNotes?: string | null;
+export function inlineFieldKey(column:StaticInlineEditFieldKey):Exclude<keyof InlineEditChanges,'customFieldChanges'> {
+  return column==='category'?'categoryIds':column==='location'?'locationId':column;
 }
-
-/** InventoryHistory rows written for 一覧直接編集 get this suffix on every field name, so they read distinctly from a 詳細編集 save in the same history list (spec §12: 「一覧直接編集」であることが分かる形で記録). */
-export const INLINE_EDIT_HISTORY_SUFFIX = "（一覧直接編集）";
+const validDate=(value:string)=>/^\d{4}-\d{2}-\d{2}$/.test(value)&&!Number.isNaN(Date.parse(value))&&new Date(value).toISOString().slice(0,10)===value;
+/** Same whitelist/type checks for every directly editable cell; evaluated on the server too. */
+export function validateInlineChanges(changes:InlineEditChanges,defs:readonly InlineCustomDefinition[]=[]):void {
+  if(!changes||typeof changes!=='object'||Array.isArray(changes))throw Error('入力内容を確認してください。');
+  const fields=new Map(Object.keys(INLINE_EDIT_FIELDS).map(c=>[inlineFieldKey(c as StaticInlineEditFieldKey),c as StaticInlineEditFieldKey]));
+  for(const [key,value] of Object.entries(changes)) {
+    if(key==='customFieldChanges') {
+      if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).length>100)throw Error('追加項目を確認してください。');
+      for(const [field,v] of Object.entries(value)) {
+        const def=defs.find(d=>d.fieldKey===field&&d.isActive!==false);
+        if(!def||internalInventoryField(field)||['__proto__','constructor','prototype'].includes(field))throw Error('編集できない追加項目です。');
+        if(v===null||v===''){if(def.required)throw Error(`${def.label}は必須です。`);continue;}
+        if(def.fieldType==='NUMBER') {if(typeof v!=='number'||!Number.isFinite(v))throw Error(`${def.label}は数値で入力してください。`);}
+        else if(typeof v!=='string'||v.length>100000||def.fieldType==='DATE'&&!validDate(v)||def.fieldType==='SELECT'&&!def.options.includes(v))throw Error(`${def.label}の入力を確認してください。`);
+      }
+      continue;
+    }
+    const column=fields.get(key as Exclude<keyof InlineEditChanges,'customFieldChanges'>);
+    if(!column)throw Error('一覧から編集できない項目です。');
+    if(column==='name'){validateName(value);continue;}
+    if(column==='category'){validateCategoryArray(value);continue;}
+    if(column==='quantity'){
+      if(value!==null&&typeof value!=='number')throw Error('数量は数値で入力してください。');
+      const error=inventoryQuantityError(value);if(error)throw Error(error);continue;
+    }
+    if(value===null)continue;
+    const type=INLINE_EDIT_FIELDS[column].inputType;
+    if(type==='number'){if(typeof value!=='number'||!Number.isFinite(value)||value<0)throw Error('金額は0以上の数値で入力してください。');}
+    else if(typeof value!=='string'||value.length>100000||type==='date'&&!validDate(value))throw Error('入力内容を確認してください。');
+    const extended=ALL_EXTENDED_FIELDS.find(d=>d.key===column);
+    if(extended?.type==='select'&&typeof value==='string'&&value&&!extended.options?.some(o=>o.value===value))throw Error(`${extended.label}の選択肢を確認してください。`);
+  }
+}
+export const INLINE_EDIT_HISTORY_SUFFIX = '（一覧直接編集）';

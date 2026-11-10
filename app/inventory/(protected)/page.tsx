@@ -1,5 +1,6 @@
 import {InventoryBulkControls} from "./InventoryBulkPanel";
 import {withListImageUrls} from '@/lib/inventory/listImageUrls';
+import {browserListRow} from '@/lib/inventory/browserListRow';
 import {selectableLocations} from "@/lib/inventory/locationChoices";
 import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import {
@@ -11,7 +12,7 @@ import {
   listLocations,
   listStatuses,
 } from "@/lib/inventory/queries";
-import { buildSearchFieldDefs, completeConditions, type AdvancedSearchQuery } from "@/lib/inventory/advancedSearch";
+import { buildSearchFieldDefs, completeConditions, STATIC_SEARCH_FIELDS, type AdvancedSearchQuery } from "@/lib/inventory/advancedSearch";
 import { listInventoryOffsetPage } from "@/lib/inventory/inventoryPage";
 import { buildListReturnQuery } from "@/lib/inventory/listReturnParams";
 import { InventoryTotalCount } from "./InventoryTotalCount";
@@ -78,9 +79,7 @@ export default async function InventoryListPage(props: InventoryListPageProps) {
   const advancedQuery: AdvancedSearchQuery | null =
     advancedQueryRaw && advancedConditions.length > 0 ? { ...advancedQueryRaw, conditions: advancedConditions } : null;
   const hasQuickSearchText = Boolean(searchParams.q?.trim());
-  // 詳細検索が有効な間はクイック検索(q)の単純条件を無視する(詳細検索
-  // は商品検索ボックスのqを置き換える — 両方を同時に組み合わせるUIは
-  // 今回のスコープ外、混乱を避けるため)。
+  // 商品名・番号、詳細条件、左側の絞り込みをANDで組み合わせる。
   //
   // QA-006 P2: 一方でサイドバーのカテゴリ/保管場所は無視しない —
   // 修正前はここでも「詳細検索中は無視」だったため、詳細検索の結果を
@@ -132,12 +131,24 @@ export default async function InventoryListPage(props: InventoryListPageProps) {
   // 委ねる(rethrowはしない — 同じpromiseをawaitする側に届く)。
   quickSearchPromise?.catch(() => {});
 
+  // Built-in conditions compare stored values/IDs, not master labels. Start
+  // their search beside the masters. Custom definitions must be loaded first.
+  const staticFields = new Map(STATIC_SEARCH_FIELDS.map(f => [f.key,f]));
+  const earlyAdvancedPromise = searchMode === "advanced" &&
+    (!advancedQuery || advancedQuery.conditions.every(c => staticFields.has(c.field))) &&
+    staticFields.has(sort.field)
+      ? listInventoryAdvanced(advancedQuery ?? {combinator:"AND",conditions:[]},staticFields,
+          {offset,limit},{...filters,q:searchParams.q,sort})
+      : null;
+  earlyAdvancedPromise?.catch(() => {});
+
   const [categories, locations, statuses, customFieldDefs] = await Promise.all([
     listCategories(),
     listLocations(),
     listStatuses(),
     listCustomFieldDefinitions(),
   ]);
+  const mastersReadyAt = performance.now();
 
   const fieldDefs = buildSearchFieldDefs(customFieldDefs, { categories, locations, statuses });
   const fieldsByKey = new Map(fieldDefs.map((f) => [f.key, f]));
@@ -158,8 +169,8 @@ export default async function InventoryListPage(props: InventoryListPageProps) {
 
   const listResult =
     searchMode === "advanced"
-      ? await listInventoryAdvanced(advancedQuery ?? {combinator:"AND",conditions:[]}, fieldsByKey, { offset, limit },
-          { ...filters, q: searchParams.q, sort })
+      ? await (earlyAdvancedPromise ?? listInventoryAdvanced(advancedQuery ?? {combinator:"AND",conditions:[]}, fieldsByKey, { offset, limit },
+          { ...filters, q: searchParams.q, sort }))
       : quickSearchPromise
         ? await quickSearchPromise
         : fallbackNeeded
@@ -167,12 +178,16 @@ export default async function InventoryListPage(props: InventoryListPageProps) {
           : null;
 
   const dataReadyAt = performance.now();
-  const rows = await withListImageUrls(listResult ? listResult.items : pagedResult!.items);
+  const signedRows = await withListImageUrls(listResult ? listResult.items : pagedResult!.items);
+  const rows = signedRows.map(browserListRow);
   const timing = {
     auth: Math.round(authorizedAt - started),
     data: Math.round(dataReadyAt - authorizedAt),
+    masters: Math.round(mastersReadyAt - authorizedAt),
     signing: Math.round(performance.now() - dataReadyAt),
     total: Math.round(performance.now() - started),
+    listPayloadBeforeBytes: Buffer.byteLength(JSON.stringify(signedRows)),
+    listPayloadBytes: Buffer.byteLength(JSON.stringify(rows)),
   };
   // 総件数は行の表示を待たせない（Suspenseで後から差し込む）。検索経路は
   // 従来どおり集計済みの値をそのまま使う。
@@ -256,7 +271,7 @@ export default async function InventoryListPage(props: InventoryListPageProps) {
             />
           }
         />
-        <InventoryBulkControls categories={categories} locations={selectableLocations(locations)} />
+        <InventoryBulkControls categories={categories} locations={selectableLocations(locations)} customFieldDefs={customFieldDefs} />
         <InventoryListTools customFieldDefs={customFieldDefs} categories={categories} locations={locations} />
         {role === "ADMIN" && inventorySpeedProbeEnabled() && (
           <InventorySpeedProbeLink href={`/inventory/${SPEED_PROBE_INVENTORY_ID}`}

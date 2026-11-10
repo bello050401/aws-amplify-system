@@ -1,5 +1,6 @@
 "use client";
 import {inventoryEditErrorMessage} from '@/lib/inventory/editErrorMessage';
+import {inventoryFieldLabel} from '@/lib/inventory/fieldLabel';
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
@@ -191,10 +192,12 @@ function NameRuleCard({
 export function InventoryBulkControls({
   categories,
   locations=[],
+  customFieldDefs=[],
   embedded=false,
 }: {
   categories: { id: string; name: string }[];
   locations?: { id: string; name: string }[];
+  customFieldDefs?: {fieldKey:string;label:string}[];
   embedded?:boolean;
 }) {
   const selection = useInventorySelection(),
@@ -431,7 +434,7 @@ export function InventoryBulkControls({
       ? Array.isArray(value) && value.length
         ? value.map((id) => names.get(String(id)) ?? String(id)).join(" / ")
         : "なし"
-      : value === null
+      : value == null
         ? "未設定"
         : typeof value === "object"
           ? JSON.stringify(value)
@@ -670,7 +673,7 @@ export function InventoryBulkControls({
                               )
                               .join("、")}
                           </p>
-                          {item.views.find(v=>v.id===entry.id)?.changes.map(change=><div key={change.field} className="my-3 grid gap-2 border-t pt-2 md:grid-cols-2"><div className="whitespace-pre-wrap break-words text-gray-500"><span className="block text-xs">変更前 · {change.field==='name'?'物品名':change.field==='categoryIds'?'カテゴリ':change.field==='locationId'?'保管場所':change.field}</span>{change.before.present?showValue(change.before.value,change.field):'未設定'}</div><div className="whitespace-pre-wrap break-words text-teal-900"><span className="block text-xs">変更後</span>{change.after.present?showValue(change.after.value,change.field):'未設定'}</div></div>)}
+                          {item.views.find(v=>v.id===entry.id)?.changes.map(change=><div key={change.field} className="my-3 grid gap-2 border-t pt-2 md:grid-cols-2"><div className="whitespace-pre-wrap break-words text-gray-500"><span className="block text-xs">変更前 · {inventoryFieldLabel(change.field,customFieldDefs)}</span>{change.before.present?showValue(change.before.value,change.field):'未設定'}</div><div className="whitespace-pre-wrap break-words text-teal-900"><span className="block text-xs">変更後</span>{change.after.present?showValue(change.after.value,change.field):'未設定'}</div></div>)}
                           {entry.blockedReason?<p className="text-amber-800">{entry.blockedReason}</p>:<div className="flex flex-wrap gap-2">
                            <button type="button" className={button} disabled={i!==item.history.cursor-1&&i!==item.history.cursor} onClick={()=>{launch(i===item.history.cursor?'redo':'undo');setTargetIds([item.id]);setTargetOperationId(entry.operationId);}}>{i<item.history.cursor?'この商品の変更を戻す':'この商品の変更を進める'}</button>
                            {entry.source==='一覧一括編集'&&<button type="button" className={button} disabled={busy} onClick={()=>wholeOperation(entry.operationId,i<item.history.cursor?'undo':'redo')}>{i<item.history.cursor?'この一括操作全体を戻す':'この一括操作全体を進める'}</button>}
@@ -1015,11 +1018,7 @@ export function InventoryBulkControls({
                                     <div className="whitespace-pre-wrap break-words text-gray-500">
                                       <span className="mb-1 block text-xs">
                                         変更前 ·{" "}
-                                        {field === "name"
-                                          ? "物品名"
-                                          : field === "locationId" ? "保管場所" : field === "categoryIds"
-                                            ? "カテゴリ"
-                                            : field}
+                                        {inventoryFieldLabel(field,customFieldDefs)}
                                       </span>
                                       {showValue(row.before[field], field)}
                                     </div>

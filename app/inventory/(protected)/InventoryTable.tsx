@@ -8,7 +8,10 @@ import { useMemo } from "react";
 import Link from "next/link";
 import type { CustomFieldDefinitionRow, InventoryListRow, MasterOption, StatusOption } from "@/lib/inventory/queries";
 import { INVENTORY_LIST_COLUMNS, MIN_COLUMN_WIDTH, dynamicColumnDefsFrom, type InventoryListColumnDef } from "@/lib/inventory/listColumns";
-import { isInlineEditableColumn, type InlineEditFieldKey } from "@/lib/inventory/inlineEdit";
+import { INLINE_EDIT_FIELDS, inlineFieldKey, isInlineEditableColumn, type StaticInlineEditFieldKey, type InlineEditFieldKey } from "@/lib/inventory/inlineEdit";
+import { ALL_EXTENDED_FIELDS } from "@/lib/inventory/extendedFields";
+import {inventoryFieldLabel} from "@/lib/inventory/fieldLabel";
+import {useInventoryListDensity} from "../useInventoryListDensity";
 import { formatJstDate } from "@/lib/inventory/formatJst";
 import { buildDetailHref } from "@/lib/inventory/listReturnParams";
 import { useInventoryListColumns } from "../useInventoryListColumns";
@@ -159,6 +162,8 @@ function renderReadOnlyCell(
       );
     case "updatedAt":
       return formatDate(productUpdatedAt(row));
+    case "unit":
+      return row.unit ?? "-";
     case "barcode":
       return <span className="block truncate font-mono text-[12px] text-gray-600">{row.barcode ?? "-"}</span>;
     case "saleCommission":
@@ -219,6 +224,7 @@ function renderEditableCell(
   getValue: ReturnType<typeof useDirectEdit>["getValue"],
   setValue: ReturnType<typeof useDirectEdit>["setValue"],
   saving: boolean,
+  customFieldDefs: CustomFieldDefinitionRow[],
 ): React.ReactNode {
   // 通常表示の読み取り専用セル(<td>のpx-2 py-1だけがinsetで、中身の
   // <span>自体は余白を持たない)と見た目の密度を揃える(夜間開発の
@@ -229,6 +235,22 @@ function renderEditableCell(
   // な余白が一致する。
   const inputClass = "block w-full border border-gray-300 bg-white px-2 py-1 text-[12px] focus:border-gray-500 focus:outline-none";
 
+  if(column.startsWith("cf:")) {
+    const key=column.slice(3),def=customFieldDefs.find(d=>d.fieldKey===key);
+    if(!def)return null;
+    const patch=getValue(row,"customFieldChanges");
+    const value=patch&&Object.hasOwn(patch,key)?patch[key]:row.customFields?.[key];
+    const common={disabled:saving,className:inputClass,"aria-label":def.label};
+    if(def.fieldType==="SELECT")return <select {...common} value={String(value??"")} onChange={e=>setValue(row.id,column,e.target.value||null)}><option value="">未設定</option>{def.options.map(o=><option key={o} value={o}>{o}</option>)}</select>;
+    if(def.fieldType==="TEXTAREA")return <textarea {...common} rows={3} value={String(value??"")} onChange={e=>setValue(row.id,column,e.target.value||null)} />;
+    return <input {...common} type={def.fieldType==="NUMBER"?"number":def.fieldType==="DATE"?"date":def.fieldType==="URL"?"url":"text"} value={String(value??"")} onChange={e=>setValue(row.id,column,e.target.value===""?null:def.fieldType==="NUMBER"?Number(e.target.value):e.target.value)} />;
+  }
+  const staticColumn=column as StaticInlineEditFieldKey;
+  const extension=ALL_EXTENDED_FIELDS.find(d=>d.key===column);
+  if(extension?.type==="select") {
+    const pending=getValue(row,inlineFieldKey(staticColumn)),value=pending===undefined?row[staticColumn as keyof InventoryListRow]:pending;
+    return <select aria-label={extension.label} disabled={saving} className={inputClass} value={String(value??"")} onChange={e=>setValue(row.id,column,e.target.value||null)}>{extension.options?.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}</select>;
+  }
   switch (column) {
     case "name": {
       const value = getValue(row, "name") ?? row.name;
@@ -306,10 +328,14 @@ function renderEditableCell(
         />
       );
     }
-    default:
-      // Every InlineEditFieldKey is handled above — this branch exists
-      // only so TS sees a return on every path.
-      return null;
+    default: {
+      const field=inlineFieldKey(staticColumn),pending=getValue(row,field);
+      const value=pending===undefined?row[field as keyof InventoryListRow]:pending;
+      const type=INLINE_EDIT_FIELDS[staticColumn].inputType;
+      const common={disabled:saving,className:inputClass,"aria-label":inventoryFieldLabel(field)};
+      if(type==="textarea")return <textarea {...common} rows={1} value={String(value??"")} onChange={e=>setValue(row.id,column,e.target.value||null)}/>;
+      return <input {...common} type={type==="number"?"number":type==="date"?"date":"text"} value={String(value??"")} onChange={e=>setValue(row.id,column,e.target.value===""?null:type==="number"?Number(e.target.value):e.target.value)}/>;
+    }
   }
 }
 
@@ -329,6 +355,7 @@ function renderEditableCell(
  * row.
  */
 export function InventoryTable({ rows, categories, locations, categoriesById, locationsById, statusesById, customFieldDefs, listReturnQuery, photoThumbnails = {} }: InventoryTableProps) {
+  const {density}=useInventoryListDensity();
   // 追加項目(CustomFieldDefinition)を動的な一覧列として扱う(夜間開発
   // 指示書 §11) — customFieldDefsが変わらない限りuseMemoで同じ配列参照
   // を保つ(useInventoryListColumns内のuseEffectの依存に使われるため)。
@@ -369,7 +396,7 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
       </div>
       <div className="hidden h-full overflow-auto md:block">
       {/* Keep configured widths as minima; let the product name use spare desktop space. */}
-      <table className="border-collapse border-r border-gray-200 text-[13px]" style={{ tableLayout: "fixed", width: "100%", minWidth: totalWidth }}>
+      <table data-density={density} className={`border-collapse border-r border-gray-200 text-[13px] ${density==="compact"&&!directEditEnabled?"[&_tbody_.line-clamp-2]:line-clamp-1 [&_tbody_img]:!h-10 [&_tbody_img]:!w-[60px] [&_tbody_td]:!py-1":""}`} style={{ tableLayout: "fixed", width: "100%", minWidth: totalWidth }}>
         <thead className="sticky top-0 z-10 bg-gray-50 text-[11px] text-gray-500">
           <tr className="border-b border-gray-200">
             {selection.editable&&<th style={{width:44}} className="px-3"><input type="checkbox" aria-label="このページを選択" checked={rows.every(row=>selection.selected.has(row.id))} ref={element=>{if(element)element.indeterminate=rows.some(row=>selection.selected.has(row.id))&&!rows.every(row=>selection.selected.has(row.id));}} onChange={()=>selection.toggleAll(rows.map(row=>row.id))} className="h-4 w-4 accent-teal-700" /></th>}
@@ -394,7 +421,7 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
               <tr key={row.id} className={`border-b border-gray-100 ${selection.selected.has(row.id)?"bg-teal-50":dirty ? "bg-amber-50" : directEditEnabled ? "" : "hover:bg-gray-50"}`}>
                 {selection.editable&&<td className="px-3"><input type="checkbox" aria-label={`${row.name}を選択`} checked={selection.selected.has(row.id)} onChange={()=>selection.toggle(row.id)} className="h-4 w-4 accent-teal-700" /></td>}
                 {visibleColumns.map((col) => {
-                  const editable = directEditEnabled && isInlineEditableColumn(col.key);
+                  const editable = directEditEnabled && isInlineEditableColumn(col.key, customFieldDefs);
                   const w = widthFor(col.key);
                   return (
                     <td
@@ -407,7 +434,7 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
                         // isInlineEditableColumn above — TS just can't
                         // track a type guard through an intermediate
                         // boolean variable, hence the assertion.
-                        renderEditableCell(col.key as InlineEditFieldKey, row, categories, locations, getValue, setValue, saving)
+                        renderEditableCell(col.key as InlineEditFieldKey, row, categories, locations, getValue, setValue, saving, customFieldDefs)
                       ) : directEditEnabled ? (
                         renderReadOnlyCell(col.key, row, categoriesById, locationsById, statusesById, photoThumbnails, rowIndex < 12 ? "eager" : "lazy")
                       ) : (

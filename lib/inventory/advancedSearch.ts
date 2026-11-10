@@ -325,14 +325,20 @@ export function evaluateQuery(
   query: AdvancedSearchQuery,
   fieldsByKey: Map<string, SearchFieldDef>,
 ): boolean {
+  return createAdvancedSearchMatcher(query, fieldsByKey)(record);
+}
+
+/** Compile the unchanged condition/definition pairs once, not for every row.
+ * Short-circuit AND/OR; no record/result cache or weaker freshness boundary. */
+export function createAdvancedSearchMatcher(query: AdvancedSearchQuery, fieldsByKey: Map<string, SearchFieldDef>): (record: SearchableRecord) => boolean {
   const conditions = query.conditions.filter(isConditionComplete);
-  if (conditions.length === 0) return true;
-  const results = conditions.map((c) => {
+  if (conditions.length === 0) return () => true;
+  const tests = conditions.map((c) => {
     const def = fieldsByKey.get(c.field);
-    if (!def) return false;
-    return evaluateCondition(record, def, c);
+    if (!def) return () => false;
+    return (record: SearchableRecord) => evaluateCondition(record, def, c);
   });
-  return query.combinator === "OR" ? results.some(Boolean) : results.every(Boolean);
+  return query.combinator === "OR" ? record => tests.some(test => test(record)) : record => tests.every(test => test(record));
 }
 
 /** 在庫ID/SKUは従来の部分一致。商品名はかな・登録ブランドの別表記も照合する。 */

@@ -16,7 +16,7 @@ import { parseCustomFields } from "./customFieldsCodec";
 import type { InventoryExtendedFields } from "./extendedFields";
 import { effectiveListThumbnailKey, normalizeImageRecord, resolveTopImage, type InventoryImageRecord } from "./imageTypes";
 import { resolveDisplayInventoryId } from "./inventoryId";
-import { evaluateQuery, createQuickSearchMatcher, type AdvancedSearchQuery, type SearchFieldDef, type SearchableRecord } from "./advancedSearch";
+import { createAdvancedSearchMatcher, createQuickSearchMatcher, type AdvancedSearchQuery, type SearchFieldDef, type SearchableRecord } from "./advancedSearch";
 import { searchInventoryFast, type FastSearchInput } from "./inventorySearchFast";
 import { inventoryVerifiedReadSession } from "@/lib/inventory/mutationSession";
 import { readVerifiedInventoryDetail } from './detailRead';
@@ -599,7 +599,8 @@ export async function listInventoryAdvanced(
 
   const all = await fetchAllInventoryRecords(conditions);
   const match = createQuickSearchMatcher(extraFilters.q ?? "");
-  const filtered = all.filter((r) => evaluateQuery(r as unknown as SearchableRecord, query, fieldsByKey) && match(r as unknown as SearchableRecord));
+  const matchesAdvanced = createAdvancedSearchMatcher(query,fieldsByKey);
+  const filtered = all.filter((r) => matchesAdvanced(r as unknown as SearchableRecord) && match(r as unknown as SearchableRecord));
   if (extraFilters.sort) {
     const compare = inventoryComparator(extraFilters.sort, fieldsByKey);
     filtered.sort((a,b) => compare(a as unknown as Record<string,unknown>, b as unknown as Record<string,unknown>));
@@ -622,9 +623,11 @@ export async function listInventoryMobileSearch(
   if (input.categoryIds?.length) conditions.push({or:input.categoryIds.map(id=>categoryFilter(id))});
   const all = await fetchAllInventoryRecords(conditions);
   const match = createQuickSearchMatcher(input.q ?? '', true);
-  const filtered = all.filter(row => evaluateQuery(row as unknown as SearchableRecord,input.advanced,fieldsByKey) &&
+  const matchesAdvanced = createAdvancedSearchMatcher(input.advanced,fieldsByKey);
+  const filtered = all.filter(row => matchesAdvanced(row as unknown as SearchableRecord) &&
     match(row as unknown as SearchableRecord));
-  filtered.sort((a,b)=>inventoryComparator(input.sort,fieldsByKey)(a as unknown as Record<string,unknown>,b as unknown as Record<string,unknown>));
+  const compare=inventoryComparator(input.sort,fieldsByKey);
+  filtered.sort((a,b)=>compare(a as unknown as Record<string,unknown>,b as unknown as Record<string,unknown>));
   return {items:filtered.slice(options.offset,options.offset+options.limit),total:filtered.length,
     totalQuantity:filtered.reduce((sum,row)=>sum+row.quantity,0),...options};
 }

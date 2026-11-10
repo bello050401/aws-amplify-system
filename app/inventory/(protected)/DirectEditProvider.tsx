@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { bulkUpdateInventoryListFields, type BulkInventoryEditItemResult } from "@/app/actions/inventoryBulkEdit";
-import type { InlineEditChanges, InlineEditFieldKey } from "@/lib/inventory/inlineEdit";
+import { inlineFieldKey, type StaticInlineEditFieldKey, type CustomFieldValue, type InlineEditChanges, type InlineEditFieldKey } from "@/lib/inventory/inlineEdit";
 import type { InventoryListRow } from "@/lib/inventory/queries";
 import { useUnsavedChanges } from "../UnsavedChangesProvider";
 import { inventoryCategoryIds } from "@/lib/inventory/categories";
@@ -48,21 +48,6 @@ interface DirectEditContextValue {
 
 const DirectEditContext = createContext<DirectEditContextValue | null>(null);
 
-/** Maps a list column key to the actual Inventory field name InlineEditChanges/the bulk Server Action use — the one place this correspondence is declared (InventoryTable and this provider both use it). */
-const COLUMN_TO_FIELD: Record<InlineEditFieldKey, keyof InlineEditChanges> = {
-  name: "name",
-  quantity: "quantity",
-  location: "locationId",
-  category: "categoryIds",
-  plannedSalePrice: "plannedSalePrice",
-  salePrice: "salePrice",
-  purchasePrice: "purchasePrice",
-  market: "market",
-  note: "note",
-  conditionRating: "conditionRating",
-  damageNotes: "damageNotes",
-};
-
 export function DirectEditProvider({ rows, children }: { rows: InventoryListRow[]; children: React.ReactNode }) {
   const { setDirty, registerSaveHandler, registerDiscardHandler } = useUnsavedChanges();
   const [enabled, setEnabled] = useState(false);
@@ -103,7 +88,7 @@ export function DirectEditProvider({ rows, children }: { rows: InventoryListRow[
       case "damageNotes":
         return (value ?? null) !== row.damageNotes;
       default:
-        return true;
+        return JSON.stringify(value ?? null) !== JSON.stringify(row[field as keyof InventoryListRow] ?? null);
     }
   }
 
@@ -112,14 +97,21 @@ export function DirectEditProvider({ rows, children }: { rows: InventoryListRow[
       if (saveInFlight.current) return;
       const row = rowsById.get(rowId);
       if (!row) return;
-      const field = COLUMN_TO_FIELD[column];
+      const isCustom = column.startsWith("cf:");
+      const field = isCustom ? "customFieldChanges" : inlineFieldKey(column as StaticInlineEditFieldKey);
       setEdits((prev) => {
         const rowEdits = { ...(prev[rowId] ?? {}) };
-        if (isFieldChanged(row, field, value)) {
+        const customKey = column.slice(3);
+        const customPatch = {...rowEdits.customFieldChanges};
+        if (isCustom) {
+          if (JSON.stringify(value ?? null) === JSON.stringify(row.customFields?.[customKey] ?? null)) delete customPatch[customKey];
+          else customPatch[customKey] = value as CustomFieldValue;
+        }
+        if (isCustom ? Object.keys(customPatch).length > 0 : isFieldChanged(row, field, value)) {
           // Keep the version at the first edit, even if another row's save refreshes the list.
           editVersions.current[rowId] ??= row.updatedAt;
           editRevisions.current[rowId] ??= row.revision ?? 0;
-          (rowEdits as Record<string, FieldValue>)[field] = value;
+          (rowEdits as Record<string, FieldValue>)[field] = isCustom ? customPatch : value;
         } else {
           delete (rowEdits as Record<string, FieldValue>)[field];
         }

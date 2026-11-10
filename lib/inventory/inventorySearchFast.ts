@@ -6,7 +6,7 @@ import { buildCountExpression } from "./inventoryCountFast";
 import { buildScanProjection } from "./searchScanProjection";
 import { resolveDisplayInventoryId } from "./inventoryId";
 import {
-  evaluateQuery,
+  createAdvancedSearchMatcher,
   createQuickSearchMatcher,
   type AdvancedSearchQuery,
   type SearchFieldDef,
@@ -281,9 +281,10 @@ export async function searchInventoryFast(
   const q = input.q?.trim();
   const matchesText = createQuickSearchMatcher(q ?? '', input.nameOnly);
   const matchesCodeOrName = input.saleRelevance ? createQuickSearchMatcher(q ?? '') : matchesText;
+  const matchesAdvanced = input.advanced ? createAdvancedSearchMatcher(input.advanced.query, input.advanced.fieldsByKey) : null;
   const filtered = candidates.filter((record) => {
     if(input.saleRelevance&&(Number(record.quantity)<=0||inventoryCategoryIds(record).some(id=>input.saleExcludeCategoryIds?.includes(id))))return false;
-    if (input.advanced && !evaluateQuery(record, input.advanced.query, input.advanced.fieldsByKey)) return false;
+    if (matchesAdvanced && !matchesAdvanced(record)) return false;
     if (q && !(input.saleRelevance ? saleNameScore(String(record.name??''),q)>0||matchesCodeOrName(record) : matchesText(record))) return false;
     return true;
   });

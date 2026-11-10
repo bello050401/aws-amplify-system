@@ -8,6 +8,8 @@ import {Agent} from 'node:https';
 import {createInventoryPersistence} from '../lib/inventory/categoryPersistenceCore';
 import {createInventoryEditJobs} from '../lib/inventory/editJobsCore';
 import {readEditHistory} from '../lib/inventory/reversibleHistory';
+import {withHumanEdits} from '../lib/inventory/humanEdits';
+import {parseCustomFields} from '../lib/inventory/customFieldsCodecCore';
 // These isolated tables never contain live inventory or customer information.
 async function main(){
 process.env.AWS_PROFILE='Bello';
@@ -31,7 +33,7 @@ async function preview(ids:string[],rules:any,mode:'edit'|'undo'|'redo'='edit',t
 async function apply(id:string){await runtime.apply(id,'QA_EDITOR');await runtime.run(id);return runtime.status(id,'QA_EDITOR');}
 const keep={categories:{mode:'keep'},names:[]};
 const add=(text:string)=>({categories:{mode:'keep'},names:[{kind:'prefix',text,skipExisting:true}]});
-async function test(name:string,fn:()=>Promise<void>){const at=performance.now();await fn();results.push({test:name,ms:Math.round(performance.now()-at),status:'PASS'});console.log('PASS '+name);}
+async function test(name:string,fn:()=>Promise<void>){if(process.env.INVENTORY_QA_FILTER&&!name.includes(process.env.INVENTORY_QA_FILTER))return;const at=performance.now();await fn();results.push({test:name,ms:Math.round(performance.now()-at),status:'PASS'});console.log('PASS '+name);}
 await test('直接保存：複数カテゴリ、関連リンク、無変更保存',async()=>{const id=await seed(),a=await read(id);const saved=await persistence.persistInventoryWithCategories({id,categoryIds:['selling','check']},a.updatedAt);let b=await read(id);assert.deepEqual(b.categoryIds,['selling','check']);assert.equal(b.revision,1);const links=await real.send(new ScanCommand({TableName:table('InventoryCategory'),FilterExpression:'inventoryId=:i',ExpressionAttributeValues:{':i':id}}));assert.equal(links.Items?.length,2);const noChange=await persistence.persistInventoryWithCategories({id,categoryIds:['selling','check']},saved.updatedAt);assert.equal(noChange.changed,false);b=await read(id);assert.equal(b.revision,1);assert.equal(readEditHistory(b).entries.length,1);});
 await test('カテゴリ追加・解除・置換・全解除、他カテゴリ保持',async()=>{const a=await seed('A',['selling']),b=await seed('B',['selling','new']);let j=await preview([a,b],{categories:{mode:'modify',add:['check'],remove:[]},names:[]});assert.equal((await apply(j)).job.counts.SAVED,2);assert.deepEqual((await read(a)).categoryIds,['selling','check']);assert.deepEqual((await read(b)).categoryIds,['selling','new','check']);j=await preview([a,b],{categories:{mode:'modify',add:['check'],remove:['new']},names:[]});const result=await apply(j);assert.equal(result.job.counts.SAVED,1);assert.equal(result.job.counts.UNCHANGED,1);j=await preview([a,b],{categories:{mode:'replace',ids:['other']},names:[]});await apply(j);assert.deepEqual((await read(a)).categoryIds,['other']);j=await preview([a,b],{categories:{mode:'clear'},names:[]});await apply(j);assert.deepEqual((await read(a)).categoryIds,[]);assert.equal((await read(a)).categoryId,undefined);});
 await test('2回戻る・2回進む・再読み込み・枝分岐・2差分上限',async()=>{const id=await seed();await apply(await preview([id],add('A')));await apply(await preview([id],add('B')));assert.equal((await read(id)).name,'BAチェア');await apply(await preview([id],keep,'undo'));await apply(await preview([id],keep,'undo'));assert.equal((await read(id)).name,'チェア');await apply(await preview([id],keep,'redo'));await apply(await preview([id],keep,'redo'));assert.equal((await read(id)).name,'BAチェア');assert.equal(readEditHistory(await read(id)).entries.length,2);await apply(await preview([id],keep,'undo'));await apply(await preview([id],add('C')));const h=readEditHistory(await read(id));assert.equal(h.cursor,2);assert.equal(h.entries.length,2);assert.equal((await read(id)).name,'CAチェア');const failed=await preview([id],keep,'redo');assert.equal((await runtime.status(failed,'QA_EDITOR')).job.counts.ERROR,1);});
@@ -94,6 +96,24 @@ await test('保管場所・カテゴリ同時保存、履歴で復元、無効�
  const invalid=await preview([id],{...rules,location:{mode:'set',id:'missing'}});assert.equal((await runtime.status(invalid,'QA_EDITOR')).job.counts.ERROR,1);
  await real.send(new UpdateCommand({TableName:table('Inventory'),Key:{id},UpdateExpression:'SET outboundArrivalBatchId=:b',ExpressionAttributeValues:{':b':'qa-transit'}}));
  const transit=await preview([id],{...keep,location:{mode:'set',id:'L1'}});assert.equal((await runtime.status(transit,'QA_EDITOR')).job.counts.ERROR,1);
+});
+await test('一覧の寸法・日付・追加項目を保存し、再取得と戻る・進むで完全復元',async()=>{
+ const id=await seed(),first=await read(id);
+ const priorCustom={color:'赤',memo:'スタッフの記録',__restageImport:{sourceId:'qa-only'}};
+ await persistence.persistInventoryWithCategories({id,width:'60',saleEndDate:null,customFields:JSON.stringify(priorCustom)},first.updatedAt);
+ const before=await read(id),custom=parseCustomFields(before.customFields)!;
+ const values={width:'71.5',saleEndDate:'2026-11-10',categoryIds:['selling','check']};
+ await persistence.persistInventoryWithCategories({id,...values,customFields:JSON.stringify(withHumanEdits(before,values,custom,{...custom,color:'青'}))},before.updatedAt);
+ const saved=await read(id);assert.equal(saved.width,'71.5');assert.equal(saved.saleEndDate,'2026-11-10');
+ assert.deepEqual(saved.categoryIds,['selling','check']);assert.equal(parseCustomFields(saved.customFields)!.color,'青');
+ assert.equal(parseCustomFields(saved.customFields)!.memo,'スタッフの記録');
+ assert.deepEqual(parseCustomFields(saved.customFields)!.__restageImport,{sourceId:'qa-only'});
+ await apply(await preview([id],keep,'undo'));const undone=await read(id);
+ assert.equal(undone.width,'60');assert.equal(undone.saleEndDate,before.saleEndDate);assert.equal(Object.hasOwn(undone,'saleEndDate'),Object.hasOwn(before,'saleEndDate'));assert.equal(parseCustomFields(undone.customFields)!.color,'赤');
+ assert.deepEqual(undone.categoryIds,['selling']);
+ await apply(await preview([id],keep,'redo'));const redone=await read(id);
+ assert.equal(redone.width,'71.5');assert.equal(redone.saleEndDate,'2026-11-10');assert.equal(parseCustomFields(redone.customFields)!.color,'青');
+ assert.equal(readEditHistory(redone).entries.length,2);
 });
 mkdirSync('artifacts/inventory-edit-20261109',{recursive:true});
 const percentile=(values:number[],p:number)=>[...values].sort((a,b)=>a-b)[Math.min(values.length-1,Math.ceil(values.length*p)-1)];

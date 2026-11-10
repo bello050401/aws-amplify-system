@@ -47,6 +47,7 @@ export const INVENTORY_LIST_COLUMNS: InventoryListColumnDef[] = [
   // 値であることに変わりはない。
   { key: "name", label: "物品名", defaultVisible: true, defaultWidth: 180 },
   { key: "quantity", label: "数量", defaultVisible: true, defaultWidth: 64 },
+  { key: "unit", label: "単位", defaultVisible: false, defaultWidth: 64 },
   { key: "location", label: "保管場所", defaultVisible: true, defaultWidth: 112 },
   { key: "category", label: "カテゴリ", defaultVisible: true, defaultWidth: 112 },
   // 追加修正指示 §9-§11: 「原価」は今後purchasePriceを唯一のデータソー
