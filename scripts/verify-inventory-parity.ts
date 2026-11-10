@@ -7,7 +7,7 @@ import {inventoryComparator,parseInventoryListSort} from "../lib/inventory/searc
 import {transformInventoryEdit} from "../lib/inventory/editTransform";
 import {recordInventorySave,moveInventoryHistory} from "../lib/inventory/reversibleHistory";
 import {writeFileSync,mkdirSync} from "node:fs";
-import {searchResultAcknowledges} from "../lib/inventory/searchNavigationState";
+import {searchResultAcknowledges,listNavigationStatus} from "../lib/inventory/searchNavigationState";
 import {createQuickSearchMatcher} from "../lib/inventory/advancedSearch";
 let n=0;const results:string[]=[];
 function test(name:string,run:()=>void){run();n++;results.push(name);console.log("PASS "+name);}
@@ -85,6 +85,14 @@ test("保管場所とカテゴリ・名前を同じ保存として戻す・進�
 test("カテゴリ絞り込みが複数値と旧データの両方を対象にする",()=>{
   const f=categoryFilter("b");assert.deepEqual(f.or[0],{categoryIds:{contains:"b"}});
   assert.deepEqual(inventoryCategoryIds({categoryIds:["a","b","b"],categoryId:"a"}),["a","b"]);
+});
+test("連続ナビゲーション：結果未着は待機、確定・別検索への切替で操作ロックを解除",()=>{
+  const req={from:"q=chair&limit=50",href:"/inventory?q=chair&categoryIds=a%2Cb"};
+  assert.equal(listNavigationStatus("q=chair",req),"waiting");
+  assert.equal(listNavigationStatus("categoryIds=a%2Cb&q=chair&offset=0",req),"complete");
+  assert.equal(listNavigationStatus("q=desk",req),"superseded");
+  assert.equal(listNavigationStatus("q=chair",null),"idle");
+  assert.equal(listNavigationStatus("q=chair&categoryIds=a",req),"superseded");
 });
 mkdirSync("artifacts/inventory-parity-20261110",{recursive:true});
 writeFileSync("artifacts/inventory-parity-20261110/logic-tests.json",JSON.stringify({at:new Date().toISOString(),passed:n,results},null,2));

@@ -13,6 +13,7 @@ import {InventoryPagination} from "../../../app/inventory/(protected)/InventoryP
 import {InventoryToolbar} from "../../../app/inventory/(protected)/InventoryToolbar";
 import {buildSearchFieldDefs,evaluateQuery,createQuickSearchMatcher} from "../../../lib/inventory/advancedSearch";
 import {inventoryComparator,parseInventoryListSort} from "../../../lib/inventory/searchSort";
+import {NavigationFaultControl} from "./navigation";
 const locations=[{id:"L1",name:"所沢事務所",parentId:null,sortOrder:1},{id:"L2",name:"検証倉庫",parentId:null,sortOrder:2}];
 const fields=buildSearchFieldDefs([],{categories,locations,statuses:[]}),fieldMap=new Map(fields.map(f=>[f.key,f]));
 function App(){
@@ -26,7 +27,7 @@ function App(){
   const offset=Number(params.get("offset")??0),limit=params.get("limit")==="100"?100:50,rows=all.slice(offset,offset+limit);
   return <UnsavedChangesProvider><InventorySelectionProvider editable><DirectEditProvider rows={rows}>
     <div className="flex h-screen flex-col pb-[var(--inventory-selection-space)]">
-      <div className="bg-amber-50 px-4 py-2 text-sm">操作確認用・匿名の商品60件（実在庫・ECは変更しません）</div>
+      <div className="bg-amber-50 px-4 py-2 text-sm">操作確認用・匿名の商品60件（実在庫・ECは変更しません）<NavigationFaultControl/></div>
       <header className="border-b bg-white p-4"><InventoryToolbar role="EDITOR" q={params.get("q")??undefined} categoryIds={ids} locationId={params.get("locationId")??undefined} advancedOpen={params.has("advanced")} advancedActive={Boolean(advanced)} advRaw={params.get("adv")??undefined} totalLabel={`${all.length}件`} resultQuery={params.toString()}/></header>
       <InventoryBulkControls categories={categories} locations={locations}/>
       <InventoryListTools customFieldDefs={[]} categories={categories} locations={locations}/>

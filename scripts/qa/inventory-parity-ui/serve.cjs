@@ -4,7 +4,7 @@ const path=require('node:path'),fs=require('node:fs'),http=require('node:http'),
 const here=__dirname,existing=path.resolve(here,'../inventory-edit-ui'),out=path.resolve('artifacts/inventory-parity-20261110/ui');
 fs.mkdirSync(out,{recursive:true});
 const build=()=>esbuild.build({entryPoints:[path.join(here,'main.tsx')],bundle:true,outfile:path.join(out,'ui.js'),platform:'browser',format:'iife',jsx:'automatic',define:{'process.env.NODE_ENV':'"development"'},plugins:[{name:'no-external-imports',setup(b){b.onResolve({filter:/^\.\/ImportWizard$/},()=>({path:'import',namespace:'qa'}));b.onLoad({filter:/.*/,namespace:'qa'},()=>({contents:'export function ImportWizard(){return null}',loader:'js'}));}}],alias:{
-  'next/navigation':path.join(existing,'navigation.tsx'),'next/link':path.join(existing,'navigation.tsx'),
+  'next/navigation':path.join(here,'navigation.tsx'),'next/link':path.join(here,'navigation.tsx'),
   '@/app/actions/inventoryEditJobs':path.join(existing,'store.ts'),'@/app/actions/inventoryBulkEdit':path.join(existing,'store.ts'),
   '@/app/inventory/InventoryThumbnail':path.join(existing,'thumbnail.tsx')
 }});

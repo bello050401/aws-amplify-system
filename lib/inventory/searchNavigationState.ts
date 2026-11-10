@@ -23,3 +23,12 @@ export function coalesceSearchSubmission(
 ): boolean {
   return previous !== null && previous.href === href && now >= previous.at && now - previous.at < 1000;
 }
+
+/** A filter follows the committed URL, not React's shared transition lifetime.
+ * Another navigation may supersede it; that must not keep the controls locked. */
+export function listNavigationStatus(currentQuery: string, request: { from: string; href: string } | null): "idle" | "waiting" | "complete" | "superseded" {
+  if (!request) return "idle";
+  if (searchResultAcknowledges(currentQuery, request.href)) return "complete";
+  if (!searchResultAcknowledges(currentQuery, `/inventory?${request.from}`)) return "superseded";
+  return "waiting";
+}
