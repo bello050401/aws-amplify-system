@@ -574,7 +574,7 @@ export async function listInventoryAdvanced(
   query: AdvancedSearchQuery,
   fieldsByKey: Map<string, SearchFieldDef>,
   options: { offset: number; limit: number },
-  extraFilters: { categoryIds?: string[]; locationId?: string } = {},
+  extraFilters: { categoryIds?: string[]; locationId?: string; statusId?: string; q?: string; sort?: InventorySort } = {},
 ): Promise<SearchPage<InventoryListRow>> {
   if (isE2EFixtureModeActive()) return e2eListPage(options.offset, options.limit); // 第五ラウンド§7/P1-A、listInventoryと同じ安全ゲート
   // 2026-09-04 性能改善 第2フェーズ§1(クイック検索と同じ理由・同じ扱い)。
@@ -584,7 +584,8 @@ export async function listInventoryAdvanced(
   // が同じ`filters`引数をqと組み合わせているのと同じ仕組みで、ここでは
   // advancedと組み合わせる。
   const fast = await trySearchFast(
-    { filters: { categoryIds: extraFilters.categoryIds, locationId: extraFilters.locationId }, advanced: { query, fieldsByKey } },
+    { filters: { categoryIds: extraFilters.categoryIds, locationId: extraFilters.locationId, statusId: extraFilters.statusId },
+      q: extraFilters.q, sort: extraFilters.sort, fieldsByKey, advanced: { query, fieldsByKey } },
     options,
   );
   if (fast) return fast;
@@ -594,9 +595,15 @@ export async function listInventoryAdvanced(
     conditions.push({ or: extraFilters.categoryIds.map((id) => categoryFilter(id)) });
   }
   if (extraFilters.locationId) conditions.push({ locationId: { eq: extraFilters.locationId } });
+  if (extraFilters.statusId) conditions.push({ statusId: { eq: extraFilters.statusId } });
 
   const all = await fetchAllInventoryRecords(conditions);
-  const filtered = all.filter((r) => evaluateQuery(r as unknown as SearchableRecord, query, fieldsByKey));
+  const match = createQuickSearchMatcher(extraFilters.q ?? "");
+  const filtered = all.filter((r) => evaluateQuery(r as unknown as SearchableRecord, query, fieldsByKey) && match(r as unknown as SearchableRecord));
+  if (extraFilters.sort) {
+    const compare = inventoryComparator(extraFilters.sort, fieldsByKey);
+    filtered.sort((a,b) => compare(a as unknown as Record<string,unknown>, b as unknown as Record<string,unknown>));
+  }
 
   const total = filtered.length;
   const page = filtered.slice(options.offset, options.offset + options.limit);

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { INVENTORY_LIST_COLUMNS, defaultColumnWidths, dynamicColumnDefsFrom, type InventoryListColumnDef } from "@/lib/inventory/listColumns";
+import { INVENTORY_LIST_COLUMNS, dynamicColumnDefsFrom, type InventoryListColumnDef } from "@/lib/inventory/listColumns";
 import type { CustomFieldDefinitionRow } from "@/lib/inventory/queries";
 import { useInventoryListColumns } from "../../useInventoryListColumns";
 
@@ -36,7 +36,7 @@ interface ListColumnSettingsProps {
  */
 export function ListColumnSettings({ customFieldDefs }: ListColumnSettingsProps) {
   const dynamicColumns: InventoryListColumnDef[] = useMemo(() => dynamicColumnDefsFrom(customFieldDefs), [customFieldDefs]);
-  const { visibility, order, setVisibility, setOrder, setWidths, hydrated } = useInventoryListColumns(dynamicColumns);
+  const { visibility, order, setVisibility, setOrder, reset, hydrated } = useInventoryListColumns(dynamicColumns);
   const columnByKey = new Map([...INVENTORY_LIST_COLUMNS, ...dynamicColumns].map((c) => [c.key, c]));
   const orderedColumns = order.map((key) => columnByKey.get(key)).filter((c): c is NonNullable<typeof c> => Boolean(c));
 
@@ -54,10 +54,7 @@ export function ListColumnSettings({ customFieldDefs }: ListColumnSettingsProps)
   }
 
   function resetToDefaults() {
-    const allColumns = [...INVENTORY_LIST_COLUMNS, ...dynamicColumns];
-    setVisibility(Object.fromEntries(allColumns.map((c) => [c.key, c.defaultVisible])));
-    setOrder(allColumns.map((c) => c.key));
-    setWidths(defaultColumnWidths(dynamicColumns));
+    reset();
   }
 
   return (
@@ -97,6 +94,7 @@ export function ListColumnSettings({ customFieldDefs }: ListColumnSettingsProps)
             <label className="inline-flex cursor-pointer items-center gap-1.5">
               <input
                 type="checkbox"
+                aria-label={`${col.label}を表示`}
                 checked={visibility[col.key] ?? col.defaultVisible}
                 onChange={() => toggle(col.key)}
                 disabled={!hydrated}

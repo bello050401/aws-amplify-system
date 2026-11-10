@@ -1,80 +1,52 @@
 "use client";
-
-import Link from "next/link";
+import { useEffect, useState, useTransition } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import type { MasterOption } from "@/lib/inventory/queries";
-import { buildSidebarFilterHref } from "@/lib/inventory/sidebarFilterHref";
+import { listFilterHref } from "@/lib/inventory/listFilterNavigation";
 import { useUnsavedChanges } from "../UnsavedChangesProvider";
 
 interface CategoryFilterListProps {
-  categories: MasterOption[];
-  activeCategoryIds: string[];
-  activeLocationId?: string;
-  q?: string;
-  /** QA-006: InventorySidebar.tsxの同名propと同じ — lib/inventory/sidebarFilterHref.ts参照。 */
-  advanced?: string;
-  adv?: string;
-  limit?: string;
+  categories: MasterOption[]; activeCategoryIds: string[];
+  activeLocationId?: string; q?: string; advanced?: string; adv?: string; limit?: string;
 }
 
-/**
- * カテゴリの複数選択ORフィルタ (統合改善指示書 §9)。「カテゴリを検索」
- * inputは廃止 — カテゴリ数が絞り込みを要するほど多い場合は将来的な課
- * 題とし、今回は単純な複数選択チェックボックスリストのみ。
- *
- * 各行はチェックボックスの見た目を持つ<Link>（実際にトグルするのは
- * href — クリックでこのカテゴリをactiveCategoryIdsへ追加/削除した新
- * しいURLへ遷移する、既存の「フィルタ行＝Link」パターンをそのまま踏
- * 襲）。実際の絞り込みはサーバー側(lib/inventory/queries.ts)のOR条件
- * で行われ、ここは見た目のトグルではない。
- */
-export function CategoryFilterList({ categories, activeCategoryIds, activeLocationId, q, advanced, adv, limit }: CategoryFilterListProps) {
+/** Keep the draft local until Apply: consecutive clicks cannot overwrite a
+ * previous selection using stale server props. */
+export function CategoryFilterList({ categories, activeCategoryIds }: CategoryFilterListProps) {
+  const router = useRouter(), params = useSearchParams();
   const { isDirty, guardedNavigate } = useUnsavedChanges();
-
-  function toggledIds(id: string): string[] {
-    return activeCategoryIds.includes(id) ? activeCategoryIds.filter((x) => x !== id) : [...activeCategoryIds, id];
+  const [selected, setSelected] = useState(activeCategoryIds);
+  const [pending, startTransition] = useTransition();
+  const appliedKey = JSON.stringify(activeCategoryIds);
+  useEffect(() => { setSelected(JSON.parse(appliedKey)); }, [appliedKey]);
+  const changed = JSON.stringify(selected) !== appliedKey;
+  function apply() {
+    const href = listFilterHref(params.toString(), { categoryIds: selected.join(",") });
+    if (isDirty) guardedNavigate(href);
+    else startTransition(() => router.push(href));
   }
-
-  function handleClick(e: React.MouseEvent, href: string) {
-    if (!isDirty) return;
-    e.preventDefault();
-    guardedNavigate(href);
-  }
-
-  // QA-006: 「すべて解除」はカテゴリだけを外す既存の意図(q/保管場所は
-  // 元々ここでも維持されていた)を変えない——新たに引き継ぐのは
-  // advanced/adv/limitだけ。
-  const clearHref = buildSidebarFilterHref({ q, categoryIds: [], locationId: activeLocationId, advanced, adv, limit });
-
-  return (
-    <div>
-      {categories.length === 0 && <p className="px-2 py-1 text-[12px] text-gray-300">未登録</p>}
-      <ul>
-        {categories.map((cat) => {
-          const checked = activeCategoryIds.includes(cat.id);
-          const href = buildSidebarFilterHref({ q, categoryIds: toggledIds(cat.id), locationId: activeLocationId, advanced, adv, limit });
-          return (
-            <li key={cat.id}>
-              <Link
-                href={href}
-                prefetch={false}
-                onClick={(e) => handleClick(e, href)}
-                className={`flex items-center gap-1.5 truncate px-2 py-1 text-[13px] ${
-                  checked ? "bg-gray-100 font-bold text-gray-900" : "text-gray-700 hover:bg-gray-50"
-                }`}
-                title={cat.name}
-              >
-                <input type="checkbox" checked={checked} readOnly tabIndex={-1} className="pointer-events-none h-3 w-3 shrink-0" />
-                <span className="truncate">{cat.name}</span>
-              </Link>
-            </li>
-          );
-        })}
-      </ul>
-      {activeCategoryIds.length > 0 && (
-        <Link href={clearHref} prefetch={false} onClick={(e) => handleClick(e, clearHref)} className="mt-1 block px-2 py-1 text-[11px] text-gray-400 hover:text-gray-700">
-          すべて解除
-        </Link>
-      )}
+  return <div>
+    <p className="mb-2 px-2 text-xs text-gray-500">複数選択可・いずれかに一致</p>
+    {categories.length === 0 && <p className="px-2 py-1 text-xs text-gray-500">未登録</p>}
+    <ul>
+      {categories.map(cat => <li key={cat.id}>
+        <label className={`flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-[13px] hover:bg-gray-50 ${selected.includes(cat.id) ? "bg-teal-50 font-semibold text-teal-900" : "text-gray-700"}`}>
+          <input type="checkbox" checked={selected.includes(cat.id)} disabled={pending}
+            onChange={e => { const checked = e.target.checked; setSelected(prev => checked ? [...prev, cat.id] : prev.filter(id => id !== cat.id)); }}
+            className="h-4 w-4 shrink-0 accent-teal-800" />
+          <span className="truncate" title={cat.name}>{cat.name}</span>
+        </label>
+      </li>)}
+    </ul>
+    <div className="sticky bottom-0 space-y-1 border-t bg-white px-1 py-2">
+      <button type="button" onClick={apply} disabled={pending}
+        className="w-full rounded bg-teal-900 px-2 py-2 text-sm font-semibold text-white disabled:opacity-50">
+        {pending ? "検索中…" : `カテゴリで検索${selected.length ? `（${selected.length}）` : ""}`}
+      </button>
+      <div className="flex items-center justify-between px-1 text-xs">
+        <span role="status" className="text-gray-500">{changed ? "選択を変更中・検索で反映" : ""}</span>
+        {selected.length > 0 && <button type="button" disabled={pending} onClick={() => setSelected([])} className="py-1 text-gray-600 underline">選択解除</button>}
+      </div>
     </div>
-  );
+  </div>;
 }

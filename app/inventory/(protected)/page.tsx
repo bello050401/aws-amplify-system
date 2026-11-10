@@ -22,6 +22,8 @@ import { InventoryToolbar } from "./InventoryToolbar";
 import { InventoryAdvancedSearchPanel } from "./InventoryAdvancedSearchPanel";
 import { InventoryTableWithPhotos } from "./InventoryTableWithPhotos";
 import { InventoryPagination } from "./InventoryPagination";
+import { InventoryListTools } from "./InventoryListTools";
+import { parseInventoryListSort } from "@/lib/inventory/searchSort";
 import { InventorySpeedProbeLink } from "./InventorySpeedProbeLink";
 import { inventorySpeedProbeEnabled, SPEED_PROBE_INVENTORY_ID } from "@/lib/inventory/speedProbeGate";
 
@@ -36,6 +38,8 @@ interface InventoryListPageProps {
     adv?: string;
     limit?: string;
     offset?: string;
+    sort?: string;
+    direction?: string;
   }>;
 }
 
@@ -64,6 +68,8 @@ export default async function InventoryListPage(props: InventoryListPageProps) {
   const advancedOpen = searchParams.advanced === "1";
   const categoryIds = searchParams.categoryIds ? searchParams.categoryIds.split(",").filter(Boolean) : [];
   const offset = Math.max(0, Number(searchParams.offset) || 0);
+  const sort = parseInventoryListSort(searchParams.sort, searchParams.direction);
+  const customSort = sort.field !== "updatedAt" || sort.direction !== "desc";
 
   const advancedQueryRaw = parseAdvancedQuery(searchParams.adv);
   const advancedConditions = advancedQueryRaw ? completeConditions(advancedQueryRaw) : [];
@@ -89,7 +95,7 @@ export default async function InventoryListPage(props: InventoryListPageProps) {
   // A sparse category/location filter otherwise walks every GSI page in
   // sequence. Reuse the existing projected, parallel search for filters too.
   const hasSidebarFilter = categoryIds.length > 0 || Boolean(searchParams.locationId || searchParams.statusId);
-  const searchMode: "advanced" | "quick" | "plain" = advancedQuery ? "advanced" : hasQuickSearchText || hasSidebarFilter ? "quick" : "plain";
+  const searchMode: "advanced" | "quick" | "plain" = advancedQuery || customSort ? "advanced" : hasQuickSearchText || hasSidebarFilter ? "quick" : "plain";
 
   // 2026-09-04 性能総点検: マスタ4種と在庫の取得を**同時に**始める。
   //
@@ -151,8 +157,9 @@ export default async function InventoryListPage(props: InventoryListPageProps) {
   const fallbackNeeded = pagedResult !== null && !pagedResult.usedIndex;
 
   const listResult =
-    searchMode === "advanced" && advancedQuery
-      ? await listInventoryAdvanced(advancedQuery, fieldsByKey, { offset, limit }, { categoryIds, locationId: searchParams.locationId })
+    searchMode === "advanced"
+      ? await listInventoryAdvanced(advancedQuery ?? {combinator:"AND",conditions:[]}, fieldsByKey, { offset, limit },
+          { ...filters, q: searchParams.q, sort })
       : quickSearchPromise
         ? await quickSearchPromise
         : fallbackNeeded
@@ -187,6 +194,8 @@ export default async function InventoryListPage(props: InventoryListPageProps) {
     statusId: searchParams.statusId,
     advanced: searchParams.advanced,
     adv: searchParams.adv,
+    sort: searchParams.sort,
+    direction: searchParams.direction,
   };
 
   // QA005: 一覧→詳細→(一覧へ戻る)で検索条件が消える不具合の修正。
@@ -241,13 +250,14 @@ export default async function InventoryListPage(props: InventoryListPageProps) {
               locationId={searchParams.locationId}
               statusId={searchParams.statusId}
               advancedOpen={advancedOpen}
-              advancedActive={searchMode === "advanced"}
+              advancedActive={Boolean(advancedQuery)}
               advRaw={searchParams.adv}
               totalLabel={totalLabel}
             />
           }
         />
-        <InventoryBulkControls categories={categories} />
+        <InventoryBulkControls categories={categories} locations={selectableLocations(locations)} />
+        <InventoryListTools customFieldDefs={customFieldDefs} categories={categories} locations={locations} />
         {role === "ADMIN" && inventorySpeedProbeEnabled() && (
           <InventorySpeedProbeLink href={`/inventory/${SPEED_PROBE_INVENTORY_ID}`}
             endAt={process.env.INVENTORY_SPEED_PROBE_END_AT!} />
@@ -280,7 +290,7 @@ export default async function InventoryListPage(props: InventoryListPageProps) {
             limit={limit !== 50 ? String(limit) : undefined}
           />
           {advancedOpen ? (
-            <InventoryAdvancedSearchPanel fieldDefs={fieldDefs} initialQuery={advancedQueryRaw} />
+            <InventoryAdvancedSearchPanel key={searchParams.adv ?? "empty"} fieldDefs={fieldDefs} initialQuery={advancedQueryRaw} />
           ) : null}
           <div className="flex min-w-0 flex-1 flex-col">
             <div className="min-h-0 flex-1">

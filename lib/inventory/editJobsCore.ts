@@ -113,6 +113,11 @@ export function createInventoryEditJobs(p: {
     now = p.now ?? Date.now,
     store = createInventoryPersistence(db, p.table);
   const categoryChecks = new Map<string, Promise<void>>();
+  async function validateLocation(before: Row, after: Row) {
+    if (sameValue(before.locationId, after.locationId) || !after.locationId) return;
+    const record = (await db.send(new GetCommand({TableName:p.table("Location"),Key:{id:after.locationId},ConsistentRead:true}))).Item;
+    if (!record || record.isActive === false || record.deletedAt) throw Error("保管場所が無効です。選び直してください。");
+  }
   const validateCategories = (ids: string[]) => {
     const key = JSON.stringify([...ids].sort());
     let checked = categoryChecks.get(key);
@@ -342,6 +347,7 @@ export function createInventoryEditJobs(p: {
                     {
                       name: String(row.name),
                       categoryIds: inventoryCategoryIds(row),
+                      locationId: row.locationId,
                     },
                     job.rules!,
                   ).after,
@@ -349,9 +355,10 @@ export function createInventoryEditJobs(p: {
               : moveInventoryHistory(row, job.mode, job.targetOperationId).row;
           if (
             row.outboundArrivalBatchId &&
-            !sameValue(row.categoryIds, after.categoryIds)
+            (!sameValue(row.categoryIds, after.categoryIds) || !sameValue(row.locationId, after.locationId))
           )
-            throw Error("到着確認待ちのためカテゴリを変更できません。");
+            throw Error("到着確認待ちのためカテゴリ・保管場所を変更できません。");
+          await validateLocation(row, after);
           base.delta = inventoryDiff(row, after);
           const fields = [...new Set(base.delta.map((d) => d.field))];
           const displayValue = (record: Row, field: string) => {
@@ -431,6 +438,7 @@ export function createInventoryEditJobs(p: {
       if (!sameValue(inventoryDiff(normalized, after), preview.delta))
         throw Error("CONFLICT");
       validateName(after.name);
+      await validateLocation(current, after);
       if (restored && preview.delta.some(delta => delta.field === 'images')) {
         if (!p.verifyRestoredImages) throw Error('画像の復元確認が設定されていません。管理者に確認してください。');
         await p.verifyRestoredImages(current.images, after.images);

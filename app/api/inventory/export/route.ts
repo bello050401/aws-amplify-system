@@ -3,6 +3,7 @@ import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { buildInventoryExport } from "@/lib/inventory/inventoryExport";
 import { buildSearchFieldDefs, completeConditions, type AdvancedSearchQuery } from "@/lib/inventory/advancedSearch";
 import { listCategories, listCustomFieldDefinitions, listLocations, listStatuses } from "@/lib/inventory/queries";
+import { parseInventoryListSort } from "@/lib/inventory/searchSort";
 
 /**
  * A plain Route Handler (not a Server Action) so the browser gets a real
@@ -35,12 +36,7 @@ export async function GET(request: NextRequest) {
           statusId: sp.get("statusId") ?? undefined,
         };
 
-  // 詳細検索(adv)が有効な場合、`filters.q`は無視してこちら(advanced)を
-  // 使う。`filters.categoryIds`/`filters.locationId`は無視しない——
-  // buildInventoryExport側がANDで組み合わせる(QA-006追加レビュー、
-  // lib/inventory/inventoryExport.tsのbuildInventoryExportコメント参照)
-  // ので、ここで`filters`自体を空にする必要は無い(scope==="filtered"
-  // であればこれまでどおりsearchParamsからそのまま組み立てる)。
+  // 詳細条件も通常の検索・カテゴリ・保管場所条件と併用する。
   let advanced: Parameters<typeof buildInventoryExport>[2];
   if (scope === "filtered" && advRaw) {
     try {
@@ -63,7 +59,8 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const { buffer, filename, contentType } = await buildInventoryExport(format, filters, advanced);
+    const { buffer, filename, contentType } = await buildInventoryExport(format, filters, advanced,
+      parseInventoryListSort(sp.get("sort")??undefined,sp.get("direction")??undefined));
     return new NextResponse(new Uint8Array(buffer), {
       headers: {
         "Content-Type": contentType,

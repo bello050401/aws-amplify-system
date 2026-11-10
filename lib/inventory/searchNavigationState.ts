@@ -4,6 +4,9 @@ export function searchResultAcknowledges(resultQuery: string, requestedHref: str
   const requested = new URL(requestedHref, 'https://bello.invalid');
   if (requested.pathname !== '/inventory' || requested.origin !== 'https://bello.invalid') return false;
   const canonical = (query: URLSearchParams) => {
+    // The list omits default paging values from its canonical return URL.
+    if (query.get('offset') === '0') query.delete('offset');
+    if (query.get('limit') === '50') query.delete('limit');
     query.sort();
     return query.toString();
   };

@@ -1,5 +1,5 @@
 import {productDateValue} from "./productDates";
-import {createNameSearchMatcher, normalizeNameSearch} from './nameSearch';
+import {createNameKeywordSearchMatcher, normalizeNameSearch} from './nameSearch';
 /**
  * ZAICO同等の汎用詳細検索エンジン(夜間開発指示書 §7)。
  *
@@ -29,6 +29,9 @@ import {createNameSearchMatcher, normalizeNameSearch} from './nameSearch';
  */
 
 export type SearchOperator =
+  | "anyOf"
+  | "allOf"
+  | "noneOf"
   | "contains"
   | "notContains"
   | "equals"
@@ -93,6 +96,15 @@ export const SELECT_OPERATORS: { value: SearchOperator; label: string }[] = [
   { value: "isNotEmpty", label: "空欄ではない" },
 ];
 
+export const CATEGORY_OPERATORS: { value: SearchOperator; label: string }[] = [
+  { value: "anyOf", label: "選択したカテゴリのいずれか" },
+  { value: "allOf", label: "選択したカテゴリをすべて含む" },
+  { value: "noneOf", label: "選択したカテゴリを含まない" },
+  { value: "equals", label: "一致（保存済みの条件）" },
+  { value: "isEmpty", label: "空欄" },
+  { value: "isNotEmpty", label: "空欄ではない" },
+];
+
 export function operatorsForType(valueType: SearchFieldValueType): { value: SearchOperator; label: string }[] {
   switch (valueType) {
     case "number":
@@ -101,6 +113,7 @@ export function operatorsForType(valueType: SearchFieldValueType): { value: Sear
     case "datetime":
       return DATE_OPERATORS;
     case "category":
+      return CATEGORY_OPERATORS;
     case "location":
     case "status":
     case "select":
@@ -126,6 +139,8 @@ export interface AdvancedSearchCondition {
   operator: SearchOperator;
   value?: string;
   value2?: string;
+  /** Category IDs, never category labels or comma-separated display text. */
+  values?: string[];
 }
 
 export interface AdvancedSearchQuery {
@@ -139,10 +154,15 @@ export function emptyAdvancedQuery(): AdvancedSearchQuery {
 
 /** 条件が判定可能な状態か(値が必要な演算子で値が空、など不完全な条件を検索実行前に弾く)。 */
 export function isConditionComplete(condition: AdvancedSearchCondition): boolean {
+  if (!condition || typeof condition !== "object") return false;
   if (!condition.field || !condition.operator) return false;
   if (operatorNeedsNoValue(condition.operator)) return true;
-  if (operatorNeedsSecondValue(condition.operator)) return Boolean(condition.value?.trim()) && Boolean(condition.value2?.trim());
-  return Boolean(condition.value?.trim());
+  if (["anyOf", "allOf", "noneOf"].includes(condition.operator)) {
+    return Array.isArray(condition.values) && condition.values.length > 0 &&
+      condition.values.length <= 100 && condition.values.every(v => typeof v === "string" && v.trim().length > 0);
+  }
+  if (operatorNeedsSecondValue(condition.operator)) return typeof condition.value === "string" && Boolean(condition.value.trim()) && typeof condition.value2 === "string" && Boolean(condition.value2.trim());
+  return typeof condition.value === "string" && Boolean(condition.value.trim());
 }
 
 /** 送信前フィルタ — 空欄のまま追加されただけの行(値未入力)は検索条件として送らない。 */
@@ -264,10 +284,18 @@ export interface SearchableRecord {
 }
 
 export function evaluateCondition(record: SearchableRecord, def: SearchFieldDef, condition: AdvancedSearchCondition): boolean {
-  if(def.key === "categoryId" && Array.isArray(record.categoryIds)) {
-    if(condition.operator === "isEmpty") return record.categoryIds.length === 0;
-    if(condition.operator === "isNotEmpty") return record.categoryIds.length > 0;
-    return condition.operator === "equals" && record.categoryIds.includes(condition.value);
+  if(def.key === "categoryId") {
+    const ids = Array.isArray(record.categoryIds) ? record.categoryIds :
+      typeof record.categoryId === "string" && record.categoryId ? [record.categoryId] : [];
+    if(condition.operator === "isEmpty") return ids.length === 0;
+    if(condition.operator === "isNotEmpty") return ids.length > 0;
+    if(condition.operator === "equals") return ids.includes(condition.value);
+    const values = condition.values;
+    if(!Array.isArray(values) || !values.length) return false;
+    if(condition.operator === "anyOf") return values.some(id => ids.includes(id));
+    if(condition.operator === "allOf") return values.every(id => ids.includes(id));
+    if(condition.operator === "noneOf") return values.every(id => !ids.includes(id));
+    return false;
   }
   const raw = def.key.startsWith("cf:") ? record.customFields?.[def.key.slice(3)] : productDateValue(record,def.key);
   switch (def.valueType) {
@@ -333,7 +361,7 @@ function keysForQuickSearch(record: SearchableRecord) {
 export function createQuickSearchMatcher(q: string, nameOnly = false): (record: SearchableRecord) => boolean {
   const needle = searchText(q.trim());
   if (!needle) return () => true;
-  const matchesName = createNameSearchMatcher(q);
+  const matchesName = createNameKeywordSearchMatcher(q);
   return record => {
     const keys = keysForQuickSearch(record);
     return (!nameOnly && (keys.normalizedDisplay.includes(needle) || keys.normalizedSku.includes(needle)))

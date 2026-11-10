@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
+import { listFilterHref } from "@/lib/inventory/listFilterNavigation";
 import type { MasterOption } from "@/lib/inventory/queries";
-import { buildSidebarFilterHref } from "@/lib/inventory/sidebarFilterHref";
 import { useUnsavedChanges } from "../UnsavedChangesProvider";
 import { CategoryFilterList } from "./CategoryFilterList";
 
@@ -30,6 +31,7 @@ interface InventorySidebarProps {
 function FilterContent({ categories, locations, activeCategoryIds, activeLocationId, q, advanced, adv, limit, onNavigate }: InventorySidebarProps & { onNavigate?: () => void }) {
   const isAll = activeCategoryIds.length === 0 && !activeLocationId;
   const { isDirty, guardedNavigate } = useUnsavedChanges();
+  const currentParams = useSearchParams();
 
   function handleClick(e: React.MouseEvent, href: string) {
     onNavigate?.();
@@ -43,7 +45,7 @@ function FilterContent({ categories, locations, activeCategoryIds, activeLocatio
   // advanced/adv/limitだけ。詳細検索の明示的な全解除は
   // InventoryAdvancedSearchPanelの「リセット」ボタン(素の"/inventory"
   // へ遷移)が別途担っており、そちらは今回変更しない。
-  const allHref = buildSidebarFilterHref({ q, advanced, adv, limit });
+  const allHref = listFilterHref(currentParams.toString(), {categoryIds:null, locationId:null});
 
   return (
     <>
@@ -63,7 +65,7 @@ function FilterContent({ categories, locations, activeCategoryIds, activeLocatio
         <ul>
           {locations.length === 0 && <li className="px-2 py-1 text-[12px] text-gray-300">未登録</li>}
           {locations.map((loc) => {
-            const href = buildSidebarFilterHref({ q, categoryIds: activeCategoryIds, locationId: loc.id, advanced, adv, limit });
+            const href = listFilterHref(currentParams.toString(), {locationId:activeLocationId === loc.id ? null : loc.id});
             return (
               <li key={loc.id}>
                 <Link

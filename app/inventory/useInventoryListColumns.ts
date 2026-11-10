@@ -108,7 +108,12 @@ export function useInventoryListColumns(dynamicColumns: InventoryListColumnDef[]
       if (e.key === INVENTORY_LIST_COLUMNS_STORAGE_KEY) setPreferencesState(readStored(dynamicColumns, knownKeys));
     }
     window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
+    const onLocalChange = (event: Event) => setPreferencesState((event as CustomEvent<ColumnPreferences>).detail);
+    window.addEventListener("inventory-columns-changed", onLocalChange);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("inventory-columns-changed", onLocalChange);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [knownKeys]);
 
@@ -121,6 +126,7 @@ export function useInventoryListColumns(dynamicColumns: InventoryListColumnDef[]
       // just keeps this session's in-memory value instead of persisting
       // it; the list still renders correctly either way.
     }
+    window.dispatchEvent(new CustomEvent("inventory-columns-changed", {detail: next}));
   }
 
   const setVisibility = useCallback(
@@ -151,6 +157,7 @@ export function useInventoryListColumns(dynamicColumns: InventoryListColumnDef[]
     setVisibility,
     setOrder,
     setWidths,
+    reset: () => persist(defaultColumnPreferences(dynamicColumns)),
     hydrated,
   };
 }

@@ -21,7 +21,7 @@
  */
 
 /** 一覧側で検索条件の復元に使う、URL上のキー一覧(この配列が唯一の許可リスト)。 */
-const ALLOWED_KEYS = ["q", "categoryIds", "locationId", "statusId", "advanced", "adv", "offset", "limit"] as const;
+const ALLOWED_KEYS = ["q", "categoryIds", "locationId", "statusId", "advanced", "adv", "offset", "limit", "sort", "direction"] as const;
 
 type AllowedKey = (typeof ALLOWED_KEYS)[number];
 

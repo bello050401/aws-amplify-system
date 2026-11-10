@@ -9,6 +9,7 @@ import { DirectEditControls } from "./DirectEditControls";
 import { ExportMenu } from "./ExportMenu";
 import { ImportWizard } from "./ImportWizard";
 import {coalesceSearchSubmission, searchResultAcknowledges} from '@/lib/inventory/searchNavigationState';
+import { listFilterHref } from "@/lib/inventory/listFilterNavigation";
 
 interface InventoryToolbarProps {
   role: InventoryRole;
@@ -123,13 +124,14 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
   }, [pendingSearch]);
 
   function buildHref(overrides: Partial<{ q: string; advanced: string }> = {}) {
-    const sp = new URLSearchParams();
+    const sp = new URLSearchParams(resultQuery);
     const nextQ = overrides.q ?? q;
     if (nextQ) sp.set("q", nextQ);
     if (categoryIds.length > 0) sp.set("categoryIds", categoryIds.join(","));
     if (locationId) sp.set("locationId", locationId);
     if (statusId) sp.set("statusId", statusId);
     if (overrides.advanced) sp.set("advanced", overrides.advanced);
+    else sp.delete("advanced");
     // パネルの開閉トグル自体は検索条件を消さない — 既に適用中の詳細検索
     // 条件(adv)があればそのまま引き継ぐ。
     if (advRaw) sp.set("adv", advRaw);
@@ -157,13 +159,7 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
   }
   function executeSearch(value:string,automatic:boolean){
     if(composing.current||automatic&&isDirty)return;
-    const sp = new URLSearchParams();
-    if(value)sp.set('q',value);
-    if(categoryIds.length)sp.set('categoryIds',categoryIds.join(','));
-    if(locationId)sp.set('locationId',locationId);
-    if(statusId)sp.set('statusId',statusId);
-    const qs = sp.toString();
-    const href = qs ? `/inventory?${qs}` : "/inventory";
+    const href = listFilterHref(resultQuery, { q: value });
 
     if (isDirty) {
       // 未保存の直接編集がある間は既存の3択ガードへ委ねる(保存して
@@ -309,6 +305,7 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
         )}
         <ExportMenu
           currentFilterParams={{
+            ...Object.fromEntries(new URLSearchParams(resultQuery)),
             q,
             categoryIds: categoryIds.length > 0 ? categoryIds.join(",") : undefined,
             locationId,

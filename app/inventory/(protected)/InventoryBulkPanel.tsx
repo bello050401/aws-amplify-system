@@ -190,9 +190,11 @@ function NameRuleCard({
 }
 export function InventoryBulkControls({
   categories,
+  locations=[],
   embedded=false,
 }: {
   categories: { id: string; name: string }[];
+  locations?: { id: string; name: string }[];
   embedded?:boolean;
 }) {
   const selection = useInventorySelection(),
@@ -238,7 +240,7 @@ export function InventoryBulkControls({
     completed = useRef(""),
     previewAttempt = useRef<string | null>(null);
   const running = job?.state === "PREPARING" || job?.state === "APPLYING";
-  const edited = rules.categories.mode !== "keep" || rules.names.length > 0;
+  const edited = rules.categories.mode !== "keep" || rules.names.length > 0 || Boolean(rules.location && rules.location.mode !== "keep");
   const unsaved = open && edited && (!job || job.state === "READY");
   useEffect(() => {
     registerBlocker("inventory-bulk", unsaved ? {discard: () => {
@@ -424,6 +426,7 @@ export function InventoryBulkControls({
   const pendingErrors = rows.filter((r) => r.state === "ERROR"),
     changed = job?.counts.CHANGE ?? 0;
   const showValue = (value: unknown, field: string) =>
+    field === "locationId" ? locations.find(l=>l.id===value)?.name ?? (value ? String(value) : "未設定") :
     field === "categoryIds"
       ? Array.isArray(value) && value.length
         ? value.map((id) => names.get(String(id)) ?? String(id)).join(" / ")
@@ -661,13 +664,13 @@ export function InventoryBulkControls({
                               .map((c) =>
                                 c.field === "name"
                                   ? "物品名"
-                                  : c.field === "categoryIds"
+                                  : c.field === "locationId" ? "保管場所" : c.field === "categoryIds"
                                     ? "カテゴリ"
                                     : c.field,
                               )
                               .join("、")}
                           </p>
-                          {item.views.find(v=>v.id===entry.id)?.changes.map(change=><div key={change.field} className="my-3 grid gap-2 border-t pt-2 md:grid-cols-2"><div className="whitespace-pre-wrap break-words text-gray-500"><span className="block text-xs">変更前 · {change.field==='name'?'物品名':change.field==='categoryIds'?'カテゴリ':change.field}</span>{change.before.present?showValue(change.before.value,change.field):'未設定'}</div><div className="whitespace-pre-wrap break-words text-teal-900"><span className="block text-xs">変更後</span>{change.after.present?showValue(change.after.value,change.field):'未設定'}</div></div>)}
+                          {item.views.find(v=>v.id===entry.id)?.changes.map(change=><div key={change.field} className="my-3 grid gap-2 border-t pt-2 md:grid-cols-2"><div className="whitespace-pre-wrap break-words text-gray-500"><span className="block text-xs">変更前 · {change.field==='name'?'物品名':change.field==='categoryIds'?'カテゴリ':change.field==='locationId'?'保管場所':change.field}</span>{change.before.present?showValue(change.before.value,change.field):'未設定'}</div><div className="whitespace-pre-wrap break-words text-teal-900"><span className="block text-xs">変更後</span>{change.after.present?showValue(change.after.value,change.field):'未設定'}</div></div>)}
                           {entry.blockedReason?<p className="text-amber-800">{entry.blockedReason}</p>:<div className="flex flex-wrap gap-2">
                            <button type="button" className={button} disabled={i!==item.history.cursor-1&&i!==item.history.cursor} onClick={()=>{launch(i===item.history.cursor?'redo':'undo');setTargetIds([item.id]);setTargetOperationId(entry.operationId);}}>{i<item.history.cursor?'この商品の変更を戻す':'この商品の変更を進める'}</button>
                            {entry.source==='一覧一括編集'&&<button type="button" className={button} disabled={busy} onClick={()=>wholeOperation(entry.operationId,i<item.history.cursor?'undo':'redo')}>{i<item.history.cursor?'この一括操作全体を戻す':'この一括操作全体を進める'}</button>}
@@ -782,6 +785,18 @@ export function InventoryBulkControls({
                             </p>
                           )}
                         </section>
+                        {locations.length > 0 && <section className="space-y-3 rounded-xl border bg-white p-5">
+                          <h3 className="font-semibold">保管場所</h3>
+                          <select aria-label="保管場所の一括操作" className={input} value={rules.location?.mode ?? "keep"} onChange={e=>changeRules({...rules,location:e.target.value==="set"?{mode:"set",id:""}:{mode:e.target.value as "keep"|"clear"}})}>
+                            <option value="keep">変更しない</option>
+                            <option value="set">選択した保管場所に変更</option>
+                            <option value="clear">保管場所を解除</option>
+                          </select>
+                          {rules.location?.mode === "set" && <select aria-label="変更先の保管場所" className={input} value={rules.location.id} onChange={e=>changeRules({...rules,location:{mode:"set",id:e.target.value}})}>
+                            <option value="">選択してください</option>{locations.map(l=><option key={l.id} value={l.id}>{l.name}</option>)}
+                          </select>}
+                          {rules.location?.mode === "clear" && <p className="text-sm text-amber-800">対象商品の保管場所を未設定にします。</p>}
+                        </section>}
                         <section className="space-y-4 rounded-xl border bg-white p-5">
                           <h3 className="font-semibold">物品名</h3>
                           {!rules.names.length && (
@@ -1002,7 +1017,7 @@ export function InventoryBulkControls({
                                         変更前 ·{" "}
                                         {field === "name"
                                           ? "物品名"
-                                          : field === "categoryIds"
+                                          : field === "locationId" ? "保管場所" : field === "categoryIds"
                                             ? "カテゴリ"
                                             : field}
                                       </span>

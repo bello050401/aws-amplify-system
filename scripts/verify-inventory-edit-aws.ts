@@ -12,13 +12,16 @@ import {readEditHistory} from '../lib/inventory/reversibleHistory';
 async function main(){
 process.env.AWS_PROFILE='Bello';
 const region='us-west-2',client=new DynamoDBClient({region,requestHandler:new NodeHttpHandler({httpsAgent:new Agent({keepAlive:false})})}),real=DynamoDBDocumentClient.from(client,{marshallOptions:{removeUndefinedValues:true}});
-const suffix='BELLO-EditQA-20261109',table=(model:string)=>model+'-'+suffix,jobsTable=table('InventoryEditJobs');
+const suffix=process.env.INVENTORY_QA_SUFFIX||'BELLO-EditQA-20261109';
+assert(/^BELLO-EditQA-[a-zA-Z0-9-]+$/.test(suffix));
+const table=(model:string)=>model+'-'+suffix,jobsTable=table('InventoryEditJobs');
 process.env.INVENTORY_EDIT_JOBS_TABLE=jobsTable;process.env.INVENTORY_HISTORY_TABLE=table('Inventory');
-const metrics:Record<string,number[]>={},results:{test:string;ms:number;status:string}[]=[],report='artifacts/inventory-edit-20261109/aws-tests.json';
+const metrics:Record<string,number[]>={},results:{test:string;ms:number;status:string}[]=[],report=process.env.INVENTORY_QA_REPORT||'artifacts/inventory-edit-20261109/aws-tests.json';
 let lostResponse=false,failBefore=false;
 const db={send:async(command:any)=>{const label=command.constructor.name,at=performance.now();if(label==='TransactWriteCommand'&&failBefore){throw Object.assign(Error('injected sustained outage before commit'),{name:'InternalServerError'});}try{const result=await real.send(command);if(label==='TransactWriteCommand'&&lostResponse){lostResponse=false;throw Object.assign(Error('injected lost response after commit'),{name:'TimeoutError'});}return result;}finally{(metrics[label]??=[]).push(performance.now()-at);}}} as unknown as DynamoDBDocumentClient;
-for(const model of ['Inventory','InventoryCategory','Category','InventoryEditJobs']){const name=table(model);assert(name.endsWith(suffix));try{await client.send(new DescribeTableCommand({TableName:name}));}catch(error){if((error as Error).name!=='ResourceNotFoundException')throw error;await client.send(new CreateTableCommand({TableName:name,BillingMode:'PAY_PER_REQUEST',AttributeDefinitions:model==='InventoryEditJobs'?[{AttributeName:'pk',AttributeType:'S'},{AttributeName:'sk',AttributeType:'S'}]:[{AttributeName:'id',AttributeType:'S'}],KeySchema:model==='InventoryEditJobs'?[{AttributeName:'pk',KeyType:'HASH'},{AttributeName:'sk',KeyType:'RANGE'}]:[{AttributeName:'id',KeyType:'HASH'}],Tags:[{Key:'Purpose',Value:'BELLO inventory isolated correctness test'},{Key:'DeleteAfter',Value:'2026-11-16'}]}));await waitUntilTableExists({client,maxWaitTime:60},{TableName:name});}}
+for(const model of ['Inventory','InventoryCategory','Category','Location','InventoryEditJobs']){const name=table(model);assert(name.endsWith(suffix));try{await client.send(new DescribeTableCommand({TableName:name}));}catch(error){if((error as Error).name!=='ResourceNotFoundException')throw error;await client.send(new CreateTableCommand({TableName:name,BillingMode:'PAY_PER_REQUEST',AttributeDefinitions:model==='InventoryEditJobs'?[{AttributeName:'pk',AttributeType:'S'},{AttributeName:'sk',AttributeType:'S'}]:[{AttributeName:'id',AttributeType:'S'}],KeySchema:model==='InventoryEditJobs'?[{AttributeName:'pk',KeyType:'HASH'},{AttributeName:'sk',KeyType:'RANGE'}]:[{AttributeName:'id',KeyType:'HASH'}],Tags:[{Key:'Purpose',Value:'BELLO inventory isolated correctness test'},{Key:'DeleteAfter',Value:'2026-11-16'}]}));await waitUntilTableExists({client,maxWaitTime:60},{TableName:name});}}
 for(const id of ['selling','new','check','other'])await real.send(new PutCommand({TableName:table('Category'),Item:{id,name:id,isActive:true}}));
+for(const id of ['L1','L2'])await real.send(new PutCommand({TableName:table('Location'),Item:{id,name:id,isActive:true}}));
 const persistence=createInventoryPersistence(db,table);
 const read=async(id:string)=>(await real.send(new GetCommand({TableName:table('Inventory'),Key:{id},ConsistentRead:true}))).Item!;
 const seed=async(name='チェア',categoryIds=['selling'],quantity=5)=>{const id=randomUUID(),at=new Date().toISOString();await real.send(new PutCommand({TableName:table('Inventory'),Item:{id,sku:'QA-'+id.slice(0,8),name,quantity,categoryIds,categoryId:categoryIds[0],updatedAt:at,listingPartition:'ACTIVE'}}));for(const categoryId of categoryIds)await real.send(new PutCommand({TableName:table('InventoryCategory'),Item:{id:id+':'+categoryId,inventoryId:id,categoryId}}));return id;};
@@ -80,9 +83,21 @@ await test('途中で実行時間を区切って再開、進捗のみ取得、�
  const denied=randomUUID();await runtime.create({id:denied,ids:[id],mode:'edit',rules:add('拒否') as any},'QA_VIEWER','QA_VIEWER');
  assert.equal((await runtime.run(denied)).state,'FAILED');assert.equal((await read(id)).name,'継続チェア');
 });
+await test('保管場所・カテゴリ同時保存、履歴で復元、無効場所・到着待ちを拒否',async()=>{
+ const id=await seed('場所試験'),initial=await read(id);
+ await persistence.persistInventoryWithCategories({id,locationId:'L1'},initial.updatedAt);
+ const rules={categories:{mode:'modify',add:['check'],remove:[]},names:[],location:{mode:'set',id:'L2'}};
+ const j=await preview([id],rules);assert.equal((await apply(j)).job.counts.SAVED,1);
+ const saved=await read(id);assert.equal(saved.locationId,'L2');assert.deepEqual(saved.categoryIds,['selling','check']);
+ await apply(await preview([id],keep,'undo'));assert.equal((await read(id)).locationId,'L1');assert.deepEqual((await read(id)).categoryIds,['selling']);
+ await apply(await preview([id],keep,'redo'));assert.equal((await read(id)).locationId,'L2');
+ const invalid=await preview([id],{...rules,location:{mode:'set',id:'missing'}});assert.equal((await runtime.status(invalid,'QA_EDITOR')).job.counts.ERROR,1);
+ await real.send(new UpdateCommand({TableName:table('Inventory'),Key:{id},UpdateExpression:'SET outboundArrivalBatchId=:b',ExpressionAttributeValues:{':b':'qa-transit'}}));
+ const transit=await preview([id],{...keep,location:{mode:'set',id:'L1'}});assert.equal((await runtime.status(transit,'QA_EDITOR')).job.counts.ERROR,1);
+});
 mkdirSync('artifacts/inventory-edit-20261109',{recursive:true});
 const percentile=(values:number[],p:number)=>[...values].sort((a,b)=>a-b)[Math.min(values.length-1,Math.ceil(values.length*p)-1)];
-writeFileSync(report,JSON.stringify({at:new Date().toISOString(),environment:'isolated AWS DynamoDB us-west-2; Windows Japan to US-West; no production writes',tables:['Inventory','Category','InventoryCategory','InventoryEditJobs'].map(table),results,metrics:Object.fromEntries(Object.entries(metrics).map(([name,values])=>[name,{n:values.length,p50:percentile(values,.5),p95:percentile(values,.95),p99:percentile(values,.99)}]))},null,2));console.log('RESULT '+results.length+' PASS '+report);
+writeFileSync(report,JSON.stringify({at:new Date().toISOString(),environment:'isolated AWS DynamoDB us-west-2; Windows Japan to US-West; no production writes',tables:['Inventory','Category','Location','InventoryCategory','InventoryEditJobs'].map(table),results,metrics:Object.fromEntries(Object.entries(metrics).map(([name,values])=>[name,{n:values.length,p50:percentile(values,.5),p95:percentile(values,.95),p99:percentile(values,.99)}]))},null,2));console.log('RESULT '+results.length+' PASS '+report);
 
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});

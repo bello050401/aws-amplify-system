@@ -3,6 +3,17 @@ import {productDateValue} from './productDates';
 
 export interface InventorySort { field: string; direction: "asc" | "desc" }
 export const DEFAULT_INVENTORY_SORT: InventorySort = { field: "updatedAt", direction: "desc" };
+export const INVENTORY_SORT_OPTIONS = [
+  {value:"updatedAt",label:"更新日"}, {value:"createdAt",label:"作成日"},
+  {value:"name",label:"物品名"}, {value:"displayId",label:"在庫ID"},
+  {value:"sku",label:"管理番号"}, {value:"quantity",label:"数量"},
+  {value:"purchasePrice",label:"購入価格"}, {value:"plannedSalePrice",label:"販売予定価格"},
+  {value:"salePrice",label:"販売価格"},
+] as const;
+export function parseInventoryListSort(field?: string, direction?: string): InventorySort {
+  return {field: INVENTORY_SORT_OPTIONS.some(o => o.value === field) ? field! : "updatedAt",
+    direction: direction === "asc" ? "asc" : "desc"};
+}
 const collator = new Intl.Collator("ja", { numeric: true, sensitivity: "base" });
 
 /** Sort the entire matching set before pagination. Master IDs sort by visible names. */

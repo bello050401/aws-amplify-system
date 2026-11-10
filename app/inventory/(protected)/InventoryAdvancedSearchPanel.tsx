@@ -1,7 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
+import { listFilterHref } from "@/lib/inventory/listFilterNavigation";
+import { CategoryMultiSelect } from "../CategoryMultiSelect";
 import {
   operatorNeedsNoValue,
   operatorNeedsSecondValue,
@@ -42,8 +44,8 @@ function emptyCondition(field: SearchFieldDef): AdvancedSearchCondition {
  * 要はない。
  *
  * 送信すると`/inventory?adv=<JSON>&advanced=1`へ遷移する。既存のクイッ
- * ク検索(`q`)・サイドバー(`categoryIds`/`locationId`)とは独立した経路
- * — 詳細検索が有効な間はそちらを無視する(page.tsxのsearchMode参照)。
+ * ク検索(`q`)・サイドバー(`categoryIds`/`locationId`)の条件も保持し、
+ * それらを満たす在庫に詳細条件を適用する。
  *
  * A Client Component (既存同様) — 条件行の追加/削除/入力はすべてこの
  * コンポーネント内のローカルstateで完結させ、実際にDBへ問い合わせるの
@@ -51,6 +53,7 @@ function emptyCondition(field: SearchFieldDef): AdvancedSearchCondition {
  */
 export function InventoryAdvancedSearchPanel({ fieldDefs, initialQuery }: InventoryAdvancedSearchPanelProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { isDirty, guardedNavigate } = useUnsavedChanges();
   const fieldsByGroup = useMemo(() => {
     const groups = new Map<string, SearchFieldDef[]>();
@@ -85,34 +88,26 @@ export function InventoryAdvancedSearchPanel({ fieldDefs, initialQuery }: Invent
   function handleFieldChange(id: string, fieldKey: string) {
     const field = fieldsByKey.get(fieldKey);
     if (!field) return;
-    updateCondition(id, { field: fieldKey, operator: firstOperatorFor(field), value: undefined, value2: undefined });
+    updateCondition(id, { field: fieldKey, operator: firstOperatorFor(field), value: undefined, value2: undefined, values: undefined });
   }
 
   function reset() {
     setCombinator("AND");
     setConditions(firstField ? [emptyCondition(firstField)] : []);
-    const href = "/inventory";
+    const href = listFilterHref(searchParams.toString(), { adv: null });
     if (isDirty) guardedNavigate(href);
     else router.push(href);
   }
 
   function submit() {
     const query: AdvancedSearchQuery = { combinator, conditions };
-    const sp = new URLSearchParams();
-    sp.set("adv", JSON.stringify(query));
-    sp.set("advanced", "1");
-    const href = `/inventory?${sp.toString()}`;
+    const href = listFilterHref(searchParams.toString(), { adv: JSON.stringify(query), advanced: "1" });
     if (isDirty) guardedNavigate(href);
     else router.push(href);
   }
 
   function closePanel() {
-    const sp = new URLSearchParams();
-    // 「閉じる」だけでは検索条件を消さない — adv/advancedをそのまま
-    // 保持しつつパネルだけ閉じる(spec: 「閉じる」だけでは検索条件を
-    // 消さないこと)。実際に条件を消すのは「リセット」ボタン。
-    if (initialQuery) sp.set("adv", JSON.stringify(initialQuery));
-    const href = sp.toString() ? `/inventory?${sp.toString()}` : "/inventory";
+    const href = listFilterHref(searchParams.toString(), { advanced: null }, false);
     if (isDirty) {
       guardedNavigate(href);
       return;
@@ -163,8 +158,12 @@ export function InventoryAdvancedSearchPanel({ fieldDefs, initialQuery }: Invent
             fieldsByGroup={fieldsByGroup}
             fieldsByKey={fieldsByKey}
             onChangeField={(key) => handleFieldChange(condition.id, key)}
-            onChangeOperator={(op) => updateCondition(condition.id, { operator: op, value: undefined, value2: undefined })}
+            onChangeOperator={(op) => updateCondition(condition.id, { operator: op,
+              ...(fieldsByKey.get(condition.field)?.valueType === "category"
+                ? { values: condition.values ?? (condition.value ? [condition.value] : []), value: condition.value ?? condition.values?.[0] }
+                : { value: undefined, value2: undefined }) })}
             onChangeValue={(value) => updateCondition(condition.id, { value })}
+            onChangeValues={(values) => updateCondition(condition.id, { values })}
             onChangeValue2={(value2) => updateCondition(condition.id, { value2 })}
             onRemove={() => removeCondition(condition.id)}
             removable={conditions.length > 1}
@@ -196,6 +195,7 @@ interface ConditionRowProps {
   onChangeField: (key: string) => void;
   onChangeOperator: (op: AdvancedSearchCondition["operator"]) => void;
   onChangeValue: (value: string) => void;
+  onChangeValues: (values: string[]) => void;
   onChangeValue2: (value: string) => void;
   onRemove: () => void;
   removable: boolean;
@@ -212,6 +212,7 @@ function ConditionRow({
   onChangeField,
   onChangeOperator,
   onChangeValue,
+  onChangeValues,
   onChangeValue2,
   onRemove,
   removable,
@@ -232,7 +233,7 @@ function ConditionRow({
         )}
       </div>
       <div className="space-y-1.5">
-        <select value={condition.field} onChange={(e) => onChangeField(e.target.value)} className={selectClass}>
+        <select aria-label={`条件${index + 1}の項目`} value={condition.field} onChange={(e) => onChangeField(e.target.value)} className={selectClass}>
           {[...fieldsByGroup.entries()].map(([group, fields]) => (
             <optgroup key={group} label={group}>
               {fields.map((f) => (
@@ -244,7 +245,7 @@ function ConditionRow({
           ))}
         </select>
 
-        <select value={condition.operator} onChange={(e) => onChangeOperator(e.target.value as AdvancedSearchCondition["operator"])} className={selectClass}>
+        <select aria-label={`条件${index + 1}の比較方法`} value={condition.operator} onChange={(e) => onChangeOperator(e.target.value as AdvancedSearchCondition["operator"])} className={selectClass}>
           {operators.map((op) => (
             <option key={op.value} value={op.value}>
               {op.label}
@@ -252,7 +253,11 @@ function ConditionRow({
           ))}
         </select>
 
-        {needsValue && field && (
+        {needsValue && field?.valueType === "category" && ["anyOf", "allOf", "noneOf"].includes(condition.operator) ? (
+          <CategoryMultiSelect value={condition.values ?? (condition.value ? [condition.value] : [])}
+            options={(field.options ?? []).map(o => ({ id: o.value, name: o.label }))}
+            onChange={onChangeValues} />
+        ) : needsValue && field && (
           <ValueInput field={field} value={condition.value ?? ""} onChange={onChangeValue} label={needsSecondValue ? "開始" : undefined} />
         )}
         {needsValue && needsSecondValue && field && (

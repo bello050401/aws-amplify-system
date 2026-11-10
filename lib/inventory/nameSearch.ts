@@ -48,3 +48,22 @@ export function createNameSearchMatcher(query: string): (normalizedName: string)
   const expression = new RegExp(pattern + escape(literal), 'u');
   return name => expression.test(name);
 }
+
+/** Quick search treats spaces as AND. Consume multi-word brand aliases before
+ * splitting so Japanese/English equivalents still form one search term. */
+export function createNameKeywordSearchMatcher(query: string): (normalizedName: string) => boolean {
+  const key=normalizeNameSearch(query.trim()),terms:string[]=[];
+  let literal='';
+  const flush=()=>{terms.push(...literal.split(/\s+/u).filter(Boolean));literal='';};
+  for(let i=0;i<key.length;){
+    const alias=byFirstChar.get(key[i])?.find(name=>key.startsWith(name,i)
+      && !(word(name[0])&&word(key[i-1]))
+      && !(word(name[name.length-1])&&word(key[i+name.length])));
+    if(alias){flush();terms.push(alias);i+=alias.length;}
+    else literal+=key[i++];
+  }
+  flush();
+  if(!/\s/u.test(key))return createNameSearchMatcher(query);
+  const matchers=terms.map(createNameSearchMatcher);
+  return name=>matchers.every(match=>match(name));
+}
