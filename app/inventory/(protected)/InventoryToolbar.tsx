@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { InventoryRole } from "@/lib/amplify/requireInventoryUser";
@@ -63,7 +63,6 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
   // のがQA-002の実体。router.pushでのSPA遷移に統一し、他のツールバー
   // 操作(詳細検索トグル・ページング・サイドバーの絞り込み、いずれも
   // 既存のLink/guardedNavigate経由)と同じ経路に揃える。
-  const [, startSearchTransition] = useTransition();
   const [pendingSearch, setPendingSearch] = useState<{ href: string; text: string; sequence: number; startedAt: number } | null>(null);
   const searchSequence = useRef(0), inputAt = useRef(0);
   const lastSearchSubmission = useRef<{href:string; at:number}|null>(null);
@@ -178,9 +177,9 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
     setPendingSearch({href, text:value, sequence:++searchSequence.current, startedAt:automatic?inputAt.current:submittedAt});
     // App Router discards an older navigation when a new navigation is queued.
     // Each input sequence replaces the pending destination; Enter remains immediate.
-    startSearchTransition(() => {
-      if(automatic)router.replace(href,{scroll:false});else router.push(href,{scroll:false});
-    });
+    // App Router owns its navigation transition. Avoid a second transition
+    // around it: our completion signal is the committed query above.
+    if(automatic)router.replace(href,{scroll:false});else router.push(href,{scroll:false});
   }
   latestSearch.current=executeSearch;
 
@@ -251,10 +250,7 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
               検索
             </button>
           </form>
-          {/* 検索受付がすぐ分かる表示(QA-002)。router.pushの直後に同期
-              でtrueになる自前のuseTransitionを使っており、Suspenseの
-              loading.tsx(ツールバーごと骨格に差し替わる、もっと遅れて
-              出る方のフィードバック)より先に出る。 */}
+          {/* 受付は即時表示し、実際の検索条件が画面に反映されてから解除する。 */}
           {isSearchPending && (
             <span aria-live="polite" className="whitespace-nowrap text-[11px] font-medium text-gray-400">
               検索中…
