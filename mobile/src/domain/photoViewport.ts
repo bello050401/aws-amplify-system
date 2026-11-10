@@ -20,3 +20,7 @@ export function zoomPhoto(t:PhotoTransform,scale:number,anchor:{x:number;y:numbe
 export function photoSwipe(start:PhotoTransform,dx:number,dy:number):'previous'|'next'|null {
   return start.scale<=1.01&&Math.abs(dx)>70&&Math.abs(dx)>Math.abs(dy)*1.5?(dx<0?'next':'previous'):null;
 }
+/** Downward dismissal is distinct from paging and never applies while zoomed. */
+export function photoDismiss(start:PhotoTransform,dx:number,dy:number):boolean {
+  return start.scale<=1.01&&dy>80&&dy>Math.abs(dx)*1.5;
+}

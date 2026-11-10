@@ -17,11 +17,11 @@ export function InventoryPhotoViewer({photos,index,onIndexChange,onClose,title,l
       {!!title&&<Text numberOfLines={2} style={s.title}>{title}</Text>}
       {loading&&<View style={s.status}><ActivityIndicator color="white"/><Text style={s.hint}>写真を読み込み中…</Text></View>}
       {!!notice&&<View style={s.status}><Text accessibilityRole="alert" style={s.notice}>{notice}</Text>{onRetry&&<Pressable accessibilityRole="button" onPress={onRetry} style={s.button}><Text style={s.text}>写真を再取得</Text></Pressable>}</View>}
-      {uri ? <ZoomablePhoto key={selected.id} uri={uri}
+      {uri ? <ZoomablePhoto key={selected.id} uri={uri} onDismiss={onClose}
         onPrevious={index>0?()=>onIndexChange(index-1):undefined}
         onNext={index<photos.length-1?()=>onIndexChange(index+1):undefined}/>
         : <View style={s.empty}><Text style={s.text}>{loading?'':'表示できる写真がありません。'}</Text></View>}
-      <Text style={s.hint}>指で拡大・移動 / ダブルタップで拡大・元に戻す</Text>
+      <Text style={s.hint}>下にスワイプで閉じる · ピンチ・ダブルタップで拡大</Text>
       {photos.length>1&&<View style={s.bar}>
         <Pressable accessibilityRole="button" accessibilityLabel="前の画像" disabled={index<=0} onPress={()=>onIndexChange(index-1)} style={[s.button,index<=0&&s.disabled]}><Text style={s.text}>前へ</Text></Pressable>
         <Pressable accessibilityRole="button" accessibilityLabel="次の画像" disabled={index>=photos.length-1} onPress={()=>onIndexChange(index+1)} style={[s.button,index>=photos.length-1&&s.disabled]}><Text style={s.text}>次へ</Text></Pressable>

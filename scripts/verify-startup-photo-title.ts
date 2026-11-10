@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {singleFlight} from '../mobile/src/domain/singleFlight';
-import {boundPhoto,zoomPhoto,photoSwipe,PHOTO_IDENTITY} from '../mobile/src/domain/photoViewport';
+import {boundPhoto,zoomPhoto,photoSwipe,photoDismiss,PHOTO_IDENTITY} from '../mobile/src/domain/photoViewport';
 import {importedStockTitle,managedStockTitleChange,STOCK_TITLE_META,stockTitleQuantity} from '../lib/inventory/managedStockTitle';
 const stock=(q=8)=>{const s=importedStockTitle('【要検品】椅子',q,'脚','RESTAGE');return {quantity:q,name:s.name,customFields:JSON.stringify({memo:'維持',[STOCK_TITLE_META]:s.metadata})};};
 test('同時の認証要求20件を1回に集約し、完了後は改めて認証する',async()=>{let calls=0;const f=singleFlight(async()=>++calls);assert.deepEqual(await Promise.all(Array.from({length:20},()=>f.run())),Array(20).fill(1));assert.equal(await f.run(),2);});
@@ -9,6 +9,13 @@ test('認証失敗後に復旧できる',async()=>{let calls=0;const f=singleFli
 test('ログアウト前の認証応答を新しい利用者へ引き継がない',async()=>{let finish!:(s:string)=>void;const f=singleFlight(()=>new Promise<string>(r=>{finish=r;}));const old=f.run();await Promise.resolve();f.clear();finish('old-user');await assert.rejects(old);});
 test('写真の倍率・縦横余白・移動を画像の実寸で制限',()=>{assert.deepEqual(boundPhoto({scale:2,x:900,y:900},400,800,800,400),{scale:2,x:200,y:0});assert.deepEqual(boundPhoto({scale:0,x:30,y:30},400,800),PHOTO_IDENTITY);assert.equal(boundPhoto({scale:20,x:0,y:0},400,800).scale,5);});
 test('指の位置で拡大し、拡大中は横送りしない',()=>{assert.deepEqual(zoomPhoto(PHOTO_IDENTITY,2,{x:80,y:20},400,800),{scale:2,x:-80,y:-20});assert.equal(photoSwipe(PHOTO_IDENTITY,-100,5),'next');assert.equal(photoSwipe({scale:2,x:0,y:0},-200,0),null);assert.equal(photoSwipe(PHOTO_IDENTITY,5,100),null);});
+test('下方向だけで写真を閉じ、短い操作・横送り・拡大中の移動では閉じない',()=>{
+  assert.equal(photoDismiss(PHOTO_IDENTITY,5,120),true);
+  for(const [dx,dy] of [[0,80],[0,20],[0,-140],[120,20],[-120,20],[100,100],[100,150]])assert.equal(photoDismiss(PHOTO_IDENTITY,dx,dy),false);
+  assert.equal(photoDismiss({scale:2.5,x:0,y:0},0,300),false);
+  assert.equal(photoSwipe(PHOTO_IDENTITY,5,120),null);
+  assert.equal(photoSwipe(PHOTO_IDENTITY,-120,20),'next');
+});
 test('数量8・7・1・0と不明を区別する',()=>{for(const q of [8,7,1,0]){const s=stock(q);assert.equal(s.name,(q>=2?`【在庫${q}】`:'')+'【要検品】椅子');}for(const q of [null,undefined,NaN,-1,1.5,'8'])assert.throws(()=>stockTitleQuantity(q));});
 test('数量分割の両方のタイトルと履歴用メタデータを更新',()=>{const source=stock(5);for(const q of [3,2]){const result=managedStockTitleChange({quantity:q},source);assert.equal(result.name,`【在庫${q}】【要検品】椅子`);assert.equal(JSON.parse(String(result.customFields))[STOCK_TITLE_META].lastQuantity,q);assert.equal(JSON.parse(String(result.customFields)).memo,'維持');}});
 test('単数・ゼロでは自動接頭辞だけを削除し、人のメモを維持',()=>{const source=stock();for(const quantity of [0,1])assert.equal(managedStockTitleChange({quantity},source).name,'【要検品】椅子');const plain={quantity:8,name:'【在庫8】【社内】手入力',customFields:'{}'};assert.deepEqual(managedStockTitleChange({quantity:1},plain),{quantity:1});});
