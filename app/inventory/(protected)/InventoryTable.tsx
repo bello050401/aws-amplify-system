@@ -1,4 +1,5 @@
 "use client";
+import {useInventoryView} from "../useInventoryView";
 import { useInventorySelection } from "./InventorySelectionProvider";
 import { CategoryMultiSelect } from "../CategoryMultiSelect";
 import {productUpdatedAt} from "@/lib/inventory/productDates";
@@ -365,16 +366,17 @@ function renderEditableCell(
 export function InventoryTable({ rows, categories, locations, categoriesById, locationsById, statusesById, customFieldDefs, listReturnQuery, photoThumbnails = {} }: InventoryTableProps) {
   const [preview,setPreview]=useState<{id:string;name:string}|null>(null);
   const {density}=useInventoryListDensity();
+  const {view}=useInventoryView();
   // 追加項目(CustomFieldDefinition)を動的な一覧列として扱う(夜間開発
   // 指示書 §11) — customFieldDefsが変わらない限りuseMemoで同じ配列参照
   // を保つ(useInventoryListColumns内のuseEffectの依存に使われるため)。
   const dynamicColumns: InventoryListColumnDef[] = useMemo(() => dynamicColumnDefsFrom(customFieldDefs), [customFieldDefs]);
   const { visibility, order, widths } = useInventoryListColumns(dynamicColumns);
   const columnByKey = new Map([...INVENTORY_LIST_COLUMNS, ...dynamicColumns].map((c) => [c.key, c]));
-  const visibleColumns = order.map((key) => columnByKey.get(key)).filter((c): c is NonNullable<typeof c> => Boolean(c) && visibility[c!.key]);
+  const { enabled: directEditEnabled, getValue, setValue, isRowDirty, saving } = useDirectEdit();
+  const visibleColumns = order.map((key) => columnByKey.get(key)).filter((c): c is NonNullable<typeof c> => Boolean(c) && visibility[c!.key] && !(!directEditEnabled && view.categoryPlacement==="name" && visibility.name && c!.key==="category"));
 
   const selection=useInventorySelection();
-  const { enabled: directEditEnabled, getValue, setValue, isRowDirty, saving } = useDirectEdit();
 
   // 列幅はlib/inventory/listColumns.tsのdefaultWidth(表示設定の「初期
   // 設定に戻す」で使う既定値)を基準に、useInventoryListColumns経由の
@@ -408,12 +410,12 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
       <table data-density={density} className={`border-collapse border-r border-gray-200 text-[13px] ${density==="compact"&&!directEditEnabled?"[&_tbody_.inventory-product-name]:line-clamp-1 [&_tbody_img]:!h-10 [&_tbody_img]:!w-[60px] [&_tbody_td]:!py-1":""}`} style={{ tableLayout: "fixed", width: "100%", minWidth: totalWidth }}>
         <thead className="sticky top-0 z-10 bg-gray-50 text-[11px] text-gray-500">
           <tr className="border-b border-gray-200">
-            {selection.editable&&<th style={{width:44}} className="px-3"><input type="checkbox" aria-label="このページを選択" checked={rows.every(row=>selection.selected.has(row.id))} ref={element=>{if(element)element.indeterminate=rows.some(row=>selection.selected.has(row.id))&&!rows.every(row=>selection.selected.has(row.id));}} onChange={()=>selection.toggleAll(rows.map(row=>row.id))} className="h-4 w-4 accent-teal-700" /></th>}
-            {visibleColumns.map((col) => {
+            {selection.editable&&<th style={{width:44}} className={view.pinFirstColumn?"sticky left-0 z-[2] bg-gray-50 px-3":"px-3"}><input type="checkbox" aria-label="このページを選択" checked={rows.every(row=>selection.selected.has(row.id))} ref={element=>{if(element)element.indeterminate=rows.some(row=>selection.selected.has(row.id))&&!rows.every(row=>selection.selected.has(row.id));}} onChange={()=>selection.toggleAll(rows.map(row=>row.id))} className="h-4 w-4 accent-teal-700" /></th>}
+            {visibleColumns.map((col, columnIndex) => {
               const w = widthFor(col.key);
               const align = RIGHT_ALIGN_COLUMNS.has(col.key) ? "text-right" : "text-left";
               return (
-                <th key={col.key} style={{ width: col.key === "name" ? undefined : w, minWidth: col.key === "name" ? w : MIN_COLUMN_WIDTH }} className={`px-2 py-1.5 ${align}`}>
+                <th key={col.key} style={{ width: col.key === "name" ? undefined : w, minWidth: col.key === "name" ? w : MIN_COLUMN_WIDTH, ...(view.pinFirstColumn && columnIndex===0?{position:"sticky",left:selection.editable?44:0,zIndex:1,background:"#f9fafb"}:{}) }} className={`px-2 py-1.5 ${align}`}>
                   <span className="block truncate" title={col.label}>
                     {col.label}
                   </span>
@@ -426,18 +428,20 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
           {rows.map((row, rowIndex) => {
             const href = buildDetailHref(row.id, listReturnQuery);
             const dirty = directEditEnabled && isRowDirty(row.id);
+            const pinnedBackground=selection.selected.has(row.id)?"#f0fdfa":dirty?"#fffbeb":"#ffffff";
             return (
               <tr key={row.id} className={`border-b border-gray-100 ${selection.selected.has(row.id)?"bg-teal-50":dirty ? "bg-amber-50" : directEditEnabled ? "" : "hover:bg-gray-50"}`}>
-                {selection.editable&&<td className="px-3"><input type="checkbox" aria-label={`${row.name}を選択`} checked={selection.selected.has(row.id)} onChange={()=>selection.toggle(row.id)} className="h-4 w-4 accent-teal-700" /></td>}
-                {visibleColumns.map((col) => {
+                {selection.editable&&<td style={view.pinFirstColumn?{background:pinnedBackground}:undefined} className={view.pinFirstColumn?"sticky left-0 z-[2] bg-inherit px-3":"px-3"}><input type="checkbox" aria-label={`${row.name}を選択`} checked={selection.selected.has(row.id)} onChange={()=>selection.toggle(row.id)} className="h-4 w-4 accent-teal-700" /></td>}
+                {visibleColumns.map((col, columnIndex) => {
                   const editable = directEditEnabled && isInlineEditableColumn(col.key, customFieldDefs);
                   const w = widthFor(col.key);
                   return (
                     <td
                       key={col.key}
-                      style={{ width: col.key === "name" ? undefined : w, minWidth: col.key === "name" ? w : MIN_COLUMN_WIDTH }}
+                      style={{ width: col.key === "name" ? undefined : w, minWidth: col.key === "name" ? w : MIN_COLUMN_WIDTH, ...(view.pinFirstColumn && columnIndex===0?{position:"sticky",left:selection.editable?44:0,zIndex:1,background:pinnedBackground}:{}) }}
                       className={editable ? editableCell : RIGHT_ALIGN_COLUMNS.has(col.key) ? numCell : cell}
                     >
+                      {col.key==="name"&&view.categoryPlacement==="name"&&visibility.category&&!directEditEnabled&&<div className="mb-1 flex flex-wrap gap-1">{renderReadOnlyCell("category",row,categoriesById,locationsById,statusesById,photoThumbnails)}</div>}
                       {col.key==="image" ? (
                         <button type="button" aria-label={row.name+"の写真を拡大"} title="写真を拡大" className="block rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-teal-700" onClick={()=>setPreview({id:row.id,name:row.name})}>
                           {renderReadOnlyCell(col.key, row, categoriesById, locationsById, statusesById, photoThumbnails, rowIndex < 12 ? "eager" : "lazy")}

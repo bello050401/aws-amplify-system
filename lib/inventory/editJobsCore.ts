@@ -347,6 +347,7 @@ export function createInventoryEditJobs(p: {
                   ...row,
                   ...transformInventoryEdit(
                     {
+                      ...row,
                       name: String(row.name),
                       categoryIds: inventoryCategoryIds(row),
                       locationId: row.locationId,
@@ -358,9 +359,9 @@ export function createInventoryEditJobs(p: {
               : moveInventoryHistory(row, job.mode, job.targetOperationId).row;
           if (
             row.outboundArrivalBatchId &&
-            (!sameValue(row.categoryIds, after.categoryIds) || !sameValue(row.locationId, after.locationId))
+            (!sameValue(row.categoryIds, after.categoryIds) || !sameValue(row.locationId, after.locationId) || !sameValue(row.quantity,after.quantity))
           )
-            throw Error("到着確認待ちのためカテゴリ・保管場所を変更できません。");
+            throw Error("到着確認待ちのためカテゴリ・保管場所・数量を変更できません。");
           await validateLocation(row, after);
           await validateCustom(row, after);
           base.delta = inventoryDiff(row, after);

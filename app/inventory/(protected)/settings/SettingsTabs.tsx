@@ -1,4 +1,5 @@
 "use client";
+import { InventoryViewSettings } from "./InventoryViewSettings";
 
 import Link from "next/link";
 
@@ -91,7 +92,7 @@ export function SettingsTabs({
     "unit",
     "location",
     "customFields",
-    "columns",
+    "columns", "view",
     "zaico",
     "images",
     "base",
@@ -192,6 +193,7 @@ export function SettingsTabs({
             Photo Profile
           </button>
         )}
+        <button type="button" onClick={() => setTab("view")} className={tabClass(tab === "view")}>表示・操作設定</button>
       </div>
 
       <div className="pt-4">
@@ -203,6 +205,7 @@ export function SettingsTabs({
         {tab === "location" && <MasterList model="Location" label="保管場所" entries={locations} readOnly={readOnly} />}
         {tab === "customFields" && <CustomFieldSettings fields={customFields} readOnly={readOnly} />}
         {/* 一覧表示設定の列候補には無効化された追加項目を含めない(新規登録/編集/詳細検索から消えるのと同じ扱い)。 */}
+        {tab === "view" && <InventoryViewSettings categories={categories} locations={locations} />}
         {tab === "columns" && <ListColumnSettings customFieldDefs={customFields.filter((f) => f.isActive)} />}
         {tab === "zaico" && isAdmin && (
           <div className="space-y-6">

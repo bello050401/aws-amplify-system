@@ -1,6 +1,7 @@
 "use client";
 
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, usePathname } from "next/navigation";
+import {useInventoryView} from "../useInventoryView";
 import { createContext, useCallback, useContext, useMemo, useState, useEffect, useRef } from "react";
 
 /** Selection is keyed by immutable product IDs and survives pagination. Only filter changes clear it. */
@@ -19,10 +20,16 @@ const InventorySelectionContext = createContext<InventorySelectionContextValue |
 export function InventorySelectionProvider({ children, editable, initialIds=[] }: { children: React.ReactNode; editable:boolean; initialIds?:string[] }) {
   const [selected, setSelected] = useState<Set<string>>(()=>new Set(initialIds));
 
-  const params=useSearchParams();
+  const params=useSearchParams(),pathname=usePathname();
+  const {view}=useInventoryView();
   const filterKey=JSON.stringify([params.get("q"),params.get("categoryIds"),params.get("locationId"),params.get("statusId"),params.get("adv")]);
-  const previousFilter=useRef(filterKey);
-  useEffect(()=>{if(previousFilter.current!==filterKey){previousFilter.current=filterKey;setSelected(new Set());}},[filterKey]);
+  const previousFilter=useRef(filterKey),previousPath=useRef(pathname);
+  useEffect(()=>{
+    const cameFromList=previousPath.current==="/inventory"||previousPath.current==="/";
+    const pathChanged=previousPath.current!==pathname;previousPath.current=pathname;
+    if(pathname!=="/inventory"&&pathname!=="/"){if(pathChanged&&cameFromList&&!view.keepSelection)setSelected(new Set());return;}
+    if(previousFilter.current!==filterKey){previousFilter.current=filterKey;setSelected(new Set());}
+  },[filterKey,pathname,view.keepSelection]);
   const remove=useCallback((ids:string[])=>setSelected(prev=>new Set([...prev].filter(id=>!ids.includes(id)))),[]);
   const isSelected = useCallback((id: string) => selected.has(id), [selected]);
 

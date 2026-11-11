@@ -1,4 +1,6 @@
 "use client";
+import {SelectedInventoryExport} from "./SelectedInventoryExport";
+import {BulkScalarFields} from "./BulkScalarFields";
 import type {SelectionRequest} from '@/lib/inventory/selectionRequest';
 import {inventoryEditErrorMessage} from '@/lib/inventory/editErrorMessage';
 import {inventoryFieldLabel} from '@/lib/inventory/fieldLabel';
@@ -470,9 +472,11 @@ export function InventoryBulkControls({
         <div className={"flex shrink-0 flex-wrap items-center gap-2 border-b bg-white px-4 "+(selectedCount?'py-2':'py-1')} role="toolbar" aria-label="選択商品の操作">
           <span className="mr-2 text-sm text-gray-500">{selectedCount ? selectedCount+'件選択中' : '行のチェックで商品を選択'}</span>
           {selectedCount>0&&<><button type="button" className={primaryButton} disabled={disabled} onClick={()=>launch('edit')}>選択商品を編集</button>
+          <button type="button" className={button} disabled={disabled} onClick={()=>{launch("edit");setRules({...emptyRules(),location:{mode:"set",id:""}});}}>保管場所を変更</button>
           <button type="button" className={button} disabled={disabled} onClick={()=>launch('undo')}>戻る</button>
           <button type="button" className={button} disabled={disabled} onClick={()=>launch('redo')}>進む</button>
           <button type="button" className={button} disabled={disabled} onClick={()=>void recent()}>変更履歴</button></>}
+          {selectedCount>0&&<SelectedInventoryExport ids={[...selection.selected]} disabled={disabled}/>}
           {selectedCount>0&&<button type="button" className="min-h-11 px-3 text-sm text-gray-600 underline" disabled={busy} onClick={selection.clear}>選択解除</button>}
           <button type="button" className={selectedCount?button+' ml-auto':'ml-auto min-h-8 rounded px-3 text-xs text-gray-600 underline hover:bg-gray-50'} disabled={busy} onClick={resume}>前回の操作結果</button>
           {direct.dirtyCount>0&&<span className="text-xs text-amber-800">編集中の内容を保存またはキャンセルしてください</span>}
@@ -761,6 +765,7 @@ export function InventoryBulkControls({
                         </section>
                         {locations.length > 0 && <section className="space-y-3 rounded-xl border bg-white p-5">
                           <h3 className="font-semibold">保管場所</h3>
+                          <p className="text-sm text-gray-500">所在を訂正します。配送のための移動は「出庫」を使ってください。到着確認待ちの商品はここで変更できません。</p>
                           <select aria-label="保管場所の一括操作" className={input} value={rules.location?.mode ?? "keep"} onChange={e=>changeRules({...rules,location:e.target.value==="set"?{mode:"set",id:""}:{mode:e.target.value as "keep"|"clear"}})}>
                             <option value="keep">変更しない</option>
                             <option value="set">選択した保管場所に変更</option>
@@ -771,6 +776,7 @@ export function InventoryBulkControls({
                           </select>}
                           {rules.location?.mode === "clear" && <p className="text-sm text-amber-800">対象商品の保管場所を未設定にします。</p>}
                         </section>}
+                        <BulkScalarFields fields={rules.fields??{}} onChange={fields=>changeRules({...rules,fields})}/>
                         {customFieldDefs.some(d=>d.fieldType&&d.isActive!==false&&!internalInventoryField(d.fieldKey)) && <details className="space-y-4 rounded-xl border bg-white p-5">
                           <summary className="cursor-pointer font-semibold">追加項目 <span className="ml-2 text-sm font-normal text-gray-500">{Object.keys(rules.customFieldChanges??{}).length}項目を変更</span></summary>
                           <p className="text-sm text-gray-500">指定した項目だけを変更します。その他の記録はそのまま残ります。</p>

@@ -6,6 +6,7 @@ import { INVENTORY_SORT_OPTIONS, parseInventoryListSort } from "@/lib/inventory/
 import { buildListReturnQuery } from "@/lib/inventory/listReturnParams";
 import { listFilterHref } from "@/lib/inventory/listFilterNavigation";
 import { useUnsavedChanges } from "../UnsavedChangesProvider";
+import { InventoryViewSettings } from "./settings/InventoryViewSettings";
 import { ListColumnSettings } from "./settings/ListColumnSettings";
 import {useInventoryListDensity} from "../useInventoryListDensity";
 
@@ -18,7 +19,7 @@ export function InventoryListTools({customFieldDefs,categories,locations}:{
   const params=useSearchParams(),router=useRouter();
   const {density,setDensity}=useInventoryListDensity();
   const {isDirty,guardedNavigate}=useUnsavedChanges();
-  const [open,setOpen]=useState<"columns"|"saved"|null>(null),[saved,setSaved]=useState<Saved[]>([]);
+  const [open,setOpen]=useState<"columns"|"saved"|"environment"|null>(null),[saved,setSaved]=useState<Saved[]>([]);
   const [name,setName]=useState(""),[error,setError]=useState("");
   const [editing,setEditing]=useState<{id:string;name:string}|null>(null);
   const [overwriteId,setOverwriteId]=useState<string|null>(null);
@@ -81,16 +82,17 @@ export function InventoryListTools({customFieldDefs,categories,locations}:{
         <select aria-label="行の表示" className={button} value={density} onChange={e=>setDensity(e.target.value as "normal"|"compact")}>
           <option value="normal">標準表示</option><option value="compact">コンパクト表示</option>
         </select>
-        <button type="button" className={button} onClick={()=>setOpen("columns")}>表示項目</button>
+        <button type="button" className={button} onClick={()=>setOpen("columns")}>表示項目・順序</button>
+        <button type="button" className={button} onClick={()=>setOpen("environment")}>表示・操作設定</button>
       </div>
     </div>
     <dialog ref={dialog} onCancel={()=>setOpen(null)} onClose={()=>setOpen(null)} className="max-h-[85vh] w-[560px] max-w-[calc(100vw-32px)] rounded-xl p-0 shadow-xl backdrop:bg-black/30" aria-labelledby="inventory-list-tools-title">
       <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-white p-4">
-        <h2 id="inventory-list-tools-title" className="font-bold">{open==="columns"?"一覧の表示項目":"保存した検索条件"}</h2>
+        <h2 id="inventory-list-tools-title" className="font-bold">{open==="columns"?"一覧の表示項目":open==="environment"?"表示・操作設定":"保存した検索条件"}</h2>
         <button type="button" onClick={()=>setOpen(null)} className={button}>閉じる</button>
       </div>
       <div className="p-4">
-        {open==="columns"?<ListColumnSettings customFieldDefs={customFieldDefs}/>:open==="saved"?<>
+        {open==="columns"?<ListColumnSettings customFieldDefs={customFieldDefs}/>:open==="environment"?<InventoryViewSettings categories={categories} locations={locations}/>:open==="saved"?<>
           <p className="mb-4 text-sm text-gray-600">現在の検索・絞り込み・並べ替えを、このブラウザに10件まで保存できます。</p>
           <form className="mb-4 flex gap-2" onSubmit={e=>{e.preventDefault();saveSearch();}}>
             <input aria-label="検索条件の名前" placeholder="例：出品待ちのチェア" maxLength={60} value={name} onChange={e=>setName(e.target.value)} className="min-w-0 flex-1 rounded-lg border px-3 py-2"/>

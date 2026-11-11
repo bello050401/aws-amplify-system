@@ -1,6 +1,6 @@
 import { ALL_EXTENDED_FIELDS } from './extendedFields';
 import { internalInventoryField } from './humanEdits';
-import { validateName, validateCategoryArray } from './editTransform';
+import { validateName, validateCategoryArray } from './editValidation';
 import { inventoryQuantityError } from './quantityValidation';
 import {validateCustomFieldChanges,type CustomFieldValue,type InlineCustomDefinition} from './customFieldEdits';
 export type {CustomFieldValue,InlineCustomDefinition} from './customFieldEdits';

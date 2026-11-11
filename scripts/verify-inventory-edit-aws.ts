@@ -132,6 +132,25 @@ await test('追加項目一括：プレビュー後の定義変更はカテゴ�
  await real.send(new UpdateCommand({TableName:table('CustomFieldDefinition'),Key:{id:'color'},UpdateExpression:'SET isActive=:v',ExpressionAttributeValues:{':v':false}}));
  try{assert.equal((await apply(j)).job.counts.FAILED,1);const r=await read(id);assert.deepEqual(r.categoryIds,['selling']);assert.equal(parseCustomFields(r.customFields)?.color,undefined);}finally{await real.send(new UpdateCommand({TableName:table('CustomFieldDefinition'),Key:{id:'color'},UpdateExpression:'SET isActive=:v',ExpressionAttributeValues:{':v':true}}));}
 });
+
+await test('通常項目一括：数量・寸法・価格・備考・場所・カテゴリを原子的に保存と復元',async()=>{
+ const a=await seed(),b=await seed(),rules={categories:{mode:'modify',add:['check'],remove:[]},names:[],location:{mode:'set',id:'L2'},fields:{quantity:2,width:'71.5',plannedSalePrice:22800,note:'検証用\nメモ',saleEndDate:null}};
+ const j=await preview([a,b],rules);assert.equal((await apply(j)).job.counts.SAVED,2);await runtime.run(j);
+ for(const id of [a,b]){const row=await read(id);assert.equal(row.quantity,2);assert.equal(row.width,'71.5');assert.equal(row.plannedSalePrice,22800);assert.equal(row.note,'検証用\nメモ');assert.equal(row.locationId,'L2');assert.equal(row.revision,1);assert.deepEqual(row.categoryIds,['selling','check']);}
+ await apply(await preview([a,b],keep,'undo'));
+ for(const id of [a,b]){const row=await read(id);assert.equal(row.quantity,5);assert.equal(row.width,undefined);assert.equal(row.locationId,undefined);assert.deepEqual(row.categoryIds,['selling']);}
+ await apply(await preview([a,b],keep,'redo'));assert.equal((await read(a)).quantity,2);
+ const conflict=await preview([a],{...keep,fields:{quantity:4}}),before=await read(a);await persistence.persistInventoryWithCategories({id:a,quantity:3},before.updatedAt);assert.equal((await apply(conflict)).job.counts.CONFLICT,1);assert.equal((await read(a)).quantity,3);
+ await real.send(new UpdateCommand({TableName:table('Inventory'),Key:{id:b},UpdateExpression:'SET outboundArrivalBatchId=:b',ExpressionAttributeValues:{':b':'qa-transit'}}));
+ const transit=await preview([b],{...keep,fields:{quantity:0}});assert.equal((await runtime.status(transit,'QA_EDITOR')).job.counts.ERROR,1);await assert.rejects(runtime.apply(transit,'QA_EDITOR'));assert.equal((await read(b)).quantity,2);
+});
+await test('通常項目一括：自動生成の在庫タイトルと数量の整合・戻る進む',async()=>{
+ const id=await seed('【在庫5】チェア'),custom={__belloStockTitle:{version:1,baseName:'チェア',prefix:'【在庫5】',lastQuantity:5,sourceQuantity:5,source:'qa',unit:'脚'}};
+ await real.send(new UpdateCommand({TableName:table('Inventory'),Key:{id},UpdateExpression:'SET customFields=:v',ExpressionAttributeValues:{':v':JSON.stringify(custom)}}));
+ const j=await preview([id],{...keep,fields:{quantity:2}});assert.equal((await apply(j)).job.counts.SAVED,1);assert.equal((await read(id)).name,'【在庫2】チェア');
+ await apply(await preview([id],keep,'undo'));assert.equal((await read(id)).name,'【在庫5】チェア');assert.equal((await read(id)).quantity,5);
+ await apply(await preview([id],keep,'redo'));assert.equal((await read(id)).name,'【在庫2】チェア');
+});
 mkdirSync('artifacts/inventory-edit-20261109',{recursive:true});
 const percentile=(values:number[],p:number)=>[...values].sort((a,b)=>a-b)[Math.min(values.length-1,Math.ceil(values.length*p)-1)];
 writeFileSync(report,JSON.stringify({at:new Date().toISOString(),complete:true,environment:'isolated AWS DynamoDB us-west-2; Windows Japan to US-West; no production writes',tables:['Inventory','Category','Location','CustomFieldDefinition','InventoryCategory','InventoryEditJobs'].map(table),results,metrics:Object.fromEntries(Object.entries(metrics).map(([name,values])=>[name,{n:values.length,p50:percentile(values,.5),p95:percentile(values,.95),p99:percentile(values,.99)}]))},null,2));console.log('RESULT '+results.length+' PASS '+report);client.destroy();

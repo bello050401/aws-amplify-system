@@ -26,7 +26,7 @@ interface ExtendedFieldsSummaryProps {
   extra?: Partial<Record<string, ExtraSectionField[]>>;
 }
 
-function formatFieldValue(field: ExtendedFieldDef, value: string | number | null): React.ReactNode {
+export function formatFieldValue(field: ExtendedFieldDef, value: string | number | null): React.ReactNode {
   if (value === null || value === undefined || value === "") return "-";
   if (field.type === "number" && typeof value === "number") return `${value.toLocaleString("ja-JP")}${field.unit ?? ""}`;
   if (field.type === "date" && typeof value === "string") return value.replace(/-/g, "/"); // AWSDate "YYYY-MM-DD" → "YYYY/MM/DD"; plain string replace, never Date-parsed, so this can never shift a day from a timezone conversion

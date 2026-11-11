@@ -1,3 +1,5 @@
+import {readInventoryBatch} from './batchRead';
+import {inventoryDdb,inventoryTable} from './categoryPersistence';
 import {formatJstDateTime} from "@/lib/inventory/formatJst";
 import {productUpdatedAt} from "./productDates";
 import {NOT_MERGED_FILTER} from "@/lib/outbound/mergeInventory";
@@ -119,6 +121,7 @@ export async function buildInventoryExport(
   filters: InventoryListFilters,
   advanced?: { query: AdvancedSearchQuery; fieldsByKey: Map<string, SearchFieldDef> },
   sort?: InventorySort,
+  selectedIds?: readonly string[],
 ): Promise<InventoryExportResult> {
   const conditions = buildFilterConditions(filters);
   const [categories, locations, statuses, customFieldDefs, items] = await Promise.all([
@@ -126,7 +129,7 @@ export async function buildInventoryExport(
     listLocations(),
     listStatuses(),
     listCustomFieldDefinitions(),
-    fetchAllForExport(conditions),
+    selectedIds ? fetchSelectedForExport(selectedIds) : fetchAllForExport(conditions),
   ]);
   const categoriesById = new Map(categories.map((c) => [c.id, c]));
   const locationsById = new Map(locations.map((l) => [l.id, l]));
@@ -231,4 +234,11 @@ export async function buildInventoryExport(
     filename: `bello-inventory-${timestamp}.xlsx`,
     contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   };
+}
+
+/** Fixed selection: never fall back to a full scan if an ID has disappeared. */
+async function fetchSelectedForExport(ids:readonly string[]):Promise<InventoryModel[]> {
+ if(!ids.length||ids.length>1000||new Set(ids).size!==ids.length||ids.some(id=>typeof id!=='string'||!id||id.length>128))throw Error('選択した商品を確認してください。');
+ const found=await readInventoryBatch(inventoryDdb,inventoryTable('Inventory'),ids);
+ return ids.map(id=>{const row=found.get(id);if(!row||row.deletedAt||row.mergedIntoId||row.listingPartition==='MERGED')throw Error('選択した商品の一部が削除・統合されています。選び直してください。');return row as unknown as InventoryModel;});
 }

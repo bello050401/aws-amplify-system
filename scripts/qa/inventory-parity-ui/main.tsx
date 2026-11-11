@@ -1,3 +1,4 @@
+import {InventoryDetailDisplay} from '../../../app/inventory/(protected)/[id]/InventoryDetailDisplay';
 import {StaffInventorySelectedEditor} from '../../../app/staff-inventory-edit/StaffInventorySelectedEditor';
 import React,{useState,useSyncExternalStore} from "react";
 import {createRoot} from "react-dom/client";
@@ -45,10 +46,11 @@ function App(){
     </div>
   </DirectEditProvider></InventorySelectionProvider></UnsavedChangesProvider>;
 }
+function DetailSettingsPreview(){return <main className="mx-auto max-w-3xl p-6"><p className="mb-6">在庫詳細の表示確認・匿名データ</p><InventoryDetailDisplay groups={[{title:'基本情報',rows:[{label:'物品名',value:'検証用チェア'},{label:'カテゴリ',value:'販売中、確認'},{label:'保管場所',value:'所沢事務所'},{label:'数量',value:'5'},{label:'備考',value:'自社の検品メモ'}]},{title:'商品・売却情報',rows:[{label:'幅（cm）',value:'71.5'},{label:'販売予定価格',value:'22,800円'}]}]}/></main>;}
 function NameFieldPreview(){
   const [name,setName]=useState('【確認用】Cassina ixc. TULU ダイニングチェア / ミッドセンチュリー モダン 名作 デザイナーズ チェア カッシーナ ツル / 高濱和秀（Knoll,B&B Italia）');
   return <main className="max-w-md space-y-6 p-6"><p>商品名入力の確認専用・保存なし</p><LabeledInput label="新規登録の物品名" required multiline value={name} onChange={setName}/><LabeledInput label="詳細編集の物品名" required multiline value={name} onChange={setName} size="large"/></main>;
 }
 // These additional IDs match the anonymous mobile photo fixture only.
 for(let i=1;i<=24;i++){const id='11111111-1111-4111-8111-'+String(i).padStart(12,'0');if(!products.has(id))products.set(id,{...products.get('qa-0'),id,name:'写真確認 '+i+' チェア',sku:'写真確認'+i});}
-createRoot(document.getElementById("root")!).render(location.pathname==='/staff-inventory-edit'?<UnsavedChangesProvider><StaffInventorySelectedEditor categories={categories} locations={locations} customFieldDefs={customDefinitions}/></UnsavedChangesProvider>:new URLSearchParams(location.search).has('name-field-test')?<NameFieldPreview/>:<App/>);
+createRoot(document.getElementById("root")!).render(location.pathname==='/staff-inventory-edit'?<UnsavedChangesProvider><StaffInventorySelectedEditor categories={categories} locations={locations} customFieldDefs={customDefinitions}/></UnsavedChangesProvider>:new URLSearchParams(location.search).has('detail-settings-test')?<DetailSettingsPreview/>:new URLSearchParams(location.search).has('name-field-test')?<NameFieldPreview/>:<App/>);

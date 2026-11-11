@@ -1,8 +1,8 @@
+import {InventoryDetailDisplay} from "./InventoryDetailDisplay";
 import {productUpdatedAt} from "@/lib/inventory/productDates";
 import {mergedInventoryTarget} from "@/lib/outbound/mergeInventory";
 import {unconvertedZaicoValues} from "@/lib/zaico/transition/rawValues";
 import {categoryLabels} from "@/lib/inventory/categories";
-import { getShippingReferencePriceForInventory } from "@/lib/shipping/service";
 import { ShippingReferencePriceSection } from "./listing/ShippingReferencePriceSection";
 import Link from "next/link";
 import SoldOutButton from './SoldOutButton';
@@ -22,7 +22,7 @@ import { InventoryHeader } from "../../InventoryHeader";
 import { DeleteInventoryButton } from "./DeleteInventoryButton";
 import { InventoryHistoryTable } from "./InventoryHistoryTable";
 import { DetailSection } from "./DetailSection";
-import { ExtendedFieldsSummary, type ExtraSectionField } from "./ExtendedFieldsSummary";
+import { formatFieldValue, type ExtraSectionField } from "./ExtendedFieldsSummary";
 import { DetailInfoTable, type DetailInfoRow } from "./DetailInfoTable";
 import {
   ALL_EXTENDED_FIELDS,
@@ -162,14 +162,13 @@ export default async function InventoryDetailPage(
     relatedRead = await Promise.all([
       item.categoryId && !activeCategories.some(category => category.id === item.categoryId) ? listCategories(item.categoryId) : activeCategories,
       item.locationId && !activeLocations.some(location => location.id === item.locationId) ? listLocations(item.locationId) : activeLocations,
-      getShippingReferencePriceForInventory(item).catch(() => null),
       signInventoryPreviews(item.images),
     ] as const);
   } catch (error) {
     if (isCognitoRateLimitError(error)) return <InventoryAuthTemporarilyUnavailable />;
     throw error;
   }
-  const [categories, locations, shippingReference, previewUrls] = relatedRead;
+  const [categories, locations, previewUrls] = relatedRead;
 
   const location = item.locationId ? locations.find((l) => l.id === item.locationId) : undefined;
   const status = item.statusId ? statuses.find((s) => s.id === item.statusId) : undefined;
@@ -355,36 +354,17 @@ export default async function InventoryDetailPage(
           {/* 右カラム: 商品情報を1列で縦積み。基本情報→販売情報→サイズ
               情報→コンディション→古物台帳・仕入情報→管理情報→追加項目。 */}
           <div>
-            <DetailSection title="基本情報">
-              <DetailInfoTable rows={basicRows} />
-            </DetailSection>
-            {unconvertedZaicoValues(item.customFields).length>0&&<DetailSection title="ZAICOの元の値">
-              <p className="mb-2 text-xs text-gray-600">数値・日付として扱えない値を、そのまま保持しています。</p>
-              <DetailInfoTable rows={unconvertedZaicoValues(item.customFields).map(v=>({label:v.name,value:v.value}))}/>
-            </DetailSection>}
-            <ShippingReferencePriceSection key={item.id} inventoryId={item.id} initialResult={shippingReference} />
+            <InventoryDetailDisplay groups={[
+              {title:"基本情報",rows:basicRows},
+              ...generalExtendedSections.map(section=>({title:section.title,rows:[...section.fields.map(field=>({label:field.label,value:formatFieldValue(field,extendedRecord[field.key])})),...(extendedExtra[section.id]??[]).map(field=>({label:field.label,value:field.rawValue==null||field.rawValue===""?"-":field.display??String(field.rawValue)}))]})),
+              {title:"古物台帳・仕入情報",rows:usedGoodsLedgerRows},
+              {title:"管理情報",rows:managementRows},
+              {title:"追加項目",rows:customFieldRows},
+            ]}/>
+            {unconvertedZaicoValues(item.customFields).length>0&&<DetailSection title="ZAICOの元の値"><DetailInfoTable rows={unconvertedZaicoValues(item.customFields).map(v=>({label:v.name,value:v.value}))}/></DetailSection>}
+            <ShippingReferencePriceSection key={item.id} inventoryId={item.id}/>
+            {sourceIdentity(item as unknown as Record<string,unknown>)&&<SupplierExtractionPanel inventoryId={item.id} canEdit={canEditInventory(role)}/>}
 
-            {/* 販売情報 / サイズ情報 / コンディション — レジストリ駆動、
-                並び順・ラベル・型・単位の定義はextendedFields.tsの1箇所
-                のみ (Single Source of Truth)。 */}
-            <ExtendedFieldsSummary sections={generalExtendedSections} record={extendedRecord} extra={extendedExtra} />
-
-            <DetailSection title="古物台帳・仕入情報">
-              <DetailInfoTable rows={usedGoodsLedgerRows} />
-            </DetailSection>
-            {sourceIdentity(item as unknown as Record<string,unknown>)&&<SupplierExtractionPanel inventoryId={item.id} canEdit={canEditInventory(role)} />}
-
-            <DetailSection title="管理情報">
-              <DetailInfoTable rows={managementRows} />
-            </DetailSection>
-
-            <DetailSection title="追加項目">
-              {customFieldRows.length > 0 ? (
-                <DetailInfoTable rows={customFieldRows} />
-              ) : (
-                <p className="text-[12px] text-gray-400">追加項目は登録されていません。</p>
-              )}
-            </DetailSection>
           </div>
         </div>
 

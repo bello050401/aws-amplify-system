@@ -42,7 +42,7 @@ function readStored(dynamicColumns: InventoryListColumnDef[], knownKeys: Set<str
     if (Array.isArray(parsed.order)) {
       const savedKnown = parsed.order.filter((k): k is string => typeof k === "string" && knownKeys.has(k));
       const missing = merged.order.filter((k) => !savedKnown.includes(k));
-      merged.order = [...savedKnown, ...missing];
+      merged.order = [...new Set([...savedKnown, ...missing])];
     }
 
     // Widths (夜間開発指示書 §13) — 既存のv2形式にはこのキーが存在しな
@@ -57,6 +57,7 @@ function readStored(dynamicColumns: InventoryListColumnDef[], knownKeys: Set<str
       }
     }
 
+    merged.visibility.name = true;
     return merged;
   } catch {
     return merged;
@@ -131,7 +132,7 @@ export function useInventoryListColumns(dynamicColumns: InventoryListColumnDef[]
 
   const setVisibility = useCallback(
     (next: ColumnVisibility) => {
-      persist({ ...preferences, visibility: next });
+      persist({ ...preferences, visibility: {...next,name:true} });
     },
     [preferences],
   );

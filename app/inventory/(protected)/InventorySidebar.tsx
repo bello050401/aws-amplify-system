@@ -6,6 +6,8 @@ import { useSearchParams } from "next/navigation";
 import { listFilterHref } from "@/lib/inventory/listFilterNavigation";
 import type { MasterOption } from "@/lib/inventory/queries";
 import { useUnsavedChanges } from "../UnsavedChangesProvider";
+import {useInventoryView} from "../useInventoryView";
+import {orderedVisibleOptions} from "@/lib/inventory/viewPreferences";
 import { CategoryFilterList } from "./CategoryFilterList";
 
 interface InventorySidebarProps {
@@ -29,6 +31,9 @@ interface InventorySidebarProps {
 
 /** すべての在庫/保管場所/カテゴリの中身 — デスクトップの常設サイドバーとモバイルのボトムシートで全く同じものを表示する。 */
 function FilterContent({ categories, locations, activeCategoryIds, activeLocationId, q, advanced, adv, limit, onNavigate }: InventorySidebarProps & { onNavigate?: () => void }) {
+  const {view}=useInventoryView();
+  const visibleLocations=orderedVisibleOptions(locations,view.locationOrder,view.hiddenLocations,activeLocationId?[activeLocationId]:[]);
+  const visibleCategories=orderedVisibleOptions(categories,view.categoryOrder,view.hiddenCategories,activeCategoryIds);
   const isAll = activeCategoryIds.length === 0 && !activeLocationId;
   const { isDirty, guardedNavigate } = useUnsavedChanges();
   const currentParams = useSearchParams();
@@ -64,7 +69,7 @@ function FilterContent({ categories, locations, activeCategoryIds, activeLocatio
         <p className="px-2 py-1 text-[11px] font-bold text-gray-400">保管場所</p>
         <ul>
           {locations.length === 0 && <li className="px-2 py-1 text-[12px] text-gray-300">未登録</li>}
-          {locations.map((loc) => {
+          {visibleLocations.map((loc) => {
             const href = listFilterHref(currentParams.toString(), {locationId:activeLocationId === loc.id ? null : loc.id});
             return (
               <li key={loc.id}>
@@ -88,7 +93,7 @@ function FilterContent({ categories, locations, activeCategoryIds, activeLocatio
       <div className="p-2">
         <p className="px-2 py-1 text-[11px] font-bold text-gray-400">カテゴリ</p>
         <CategoryFilterList
-          categories={categories}
+          categories={visibleCategories}
           activeCategoryIds={activeCategoryIds}
           activeLocationId={activeLocationId}
           q={q}
@@ -97,6 +102,7 @@ function FilterContent({ categories, locations, activeCategoryIds, activeLocatio
           limit={limit}
         />
       </div>
+      <Link prefetch={false} href="/inventory/settings?tab=view" className="mx-4 my-3 text-xs text-gray-500 underline">表示するカテゴリ・場所を設定</Link>
     </>
   );
 }

@@ -73,3 +73,15 @@ export async function GET(request: NextRequest) {
     return new NextResponse(err instanceof Error ? err.message : "エクスポートに失敗しました。", { status: 500 });
   }
 }
+
+/** Selected IDs are sent in the body to avoid URL/proxy length limits. */
+export async function POST(request:NextRequest){
+ const role=await getInventoryRole();if(!role)return new NextResponse('Unauthorized',{status:401});
+ try {
+  const body=await request.text();if(body.length>150000)return new NextResponse('選択件数が多すぎます。',{status:400});
+  const {ids,format}=JSON.parse(body);
+  if(!Array.isArray(ids)||!ids.length||ids.length>1000||new Set(ids).size!==ids.length||ids.some(id=>typeof id!=='string'||!id||id.length>128)||!['csv','xlsx'].includes(format))return new NextResponse('選択した商品と形式を確認してください。',{status:400});
+  const result=await buildInventoryExport(format,{},undefined,undefined,ids);
+  return new NextResponse(new Uint8Array(result.buffer),{headers:{'Content-Type':result.contentType,'Content-Disposition':'attachment; filename="'+result.filename+'"','Cache-Control':'no-store'}});
+ }catch{return new NextResponse('選択商品の出力に失敗しました。削除・統合された商品がないか確認し、再試行してください。',{status:400});}
+}
