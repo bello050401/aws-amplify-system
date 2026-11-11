@@ -2,7 +2,7 @@ import "server-only";
 import {persistInventoryWithCategories} from "./categoryPersistence";
 import {normalizeCalendarDate} from "./calendarDate";
 import {splitCategoryNames,inventoryCategoryIds} from "./categories";
-import ExcelJS from "exceljs";
+import type ExcelJS from "exceljs";
 import { inventoryAuthMode, serverDataClient } from "@/lib/amplify/dataClient";
 import { clearInventoryCountCache } from "./inventoryCountCache";
 import type { Schema } from "@/amplify/data/resource";
@@ -261,6 +261,7 @@ function readXlsxCell(cell: ExcelJS.Cell): string {
 }
 
 export async function parseXlsxFile(buffer: ArrayBuffer): Promise<{ headers: string[]; rows: Record<string, string>[] }> {
+  const { default: ExcelJS } = await import("exceljs");
   const workbook = new ExcelJS.Workbook();
   try {
     await workbook.xlsx.load(buffer);

@@ -3,14 +3,10 @@
 import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { canEditInventory, getCurrentInventoryUserEmail, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
-import {
-  executeImportRows,
-  parseImportFile,
-  resolveImportRows,
-  summarizeImportOutcomes,
-  type ImportExecuteResult,
-  type ImportSummary,
-  type ParsedImportFile,
+import type {
+  ImportExecuteResult,
+  ImportSummary,
+  ParsedImportFile,
 } from "@/lib/inventory/inventoryImport";
 
 /**
@@ -73,6 +69,8 @@ export async function parseInventoryImportFileAction(formData: FormData): Promis
       return { ok: false, error: "CSV(.csv)またはExcel(.xlsx)ファイルを選択してください。", correlationId };
     }
 
+    // Keep import parsing and its workbook dependencies off the list/search path.
+    const { parseImportFile } = await import("@/lib/inventory/inventoryImport");
     const bytes = await file.arrayBuffer();
     const data = await parseImportFile(file.name, bytes);
     return { ok: true, data };
@@ -91,6 +89,7 @@ export async function previewInventoryImportAction(rows: Record<string, string>[
     const permissionError = requireImportPermission(role);
     if (permissionError) return { ok: false, error: permissionError, correlationId };
 
+    const { resolveImportRows, summarizeImportOutcomes } = await import("@/lib/inventory/inventoryImport");
     const outcomes = await resolveImportRows(rows, mapping);
     const data = summarizeImportOutcomes(outcomes);
     return { ok: true, data };
@@ -113,6 +112,7 @@ export async function executeInventoryImportAction(
     const permissionError = requireImportPermission(role);
     if (permissionError) return { ok: false, error: permissionError, correlationId };
 
+    const { resolveImportRows, executeImportRows } = await import("@/lib/inventory/inventoryImport");
     const who = await getCurrentInventoryUserEmail();
     // 実行の直前に、DBの最新状態へ対して改めて解決し直す — プレビュー
     // 時点のoutcomeをそのまま信用しない(他ユーザーによる変更が間に
