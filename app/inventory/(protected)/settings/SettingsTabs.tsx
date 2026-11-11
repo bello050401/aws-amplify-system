@@ -1,5 +1,6 @@
 "use client";
 import { InventoryViewSettings } from "./InventoryViewSettings";
+import {selectableLocations} from '@/lib/inventory/locationChoices';
 
 import Link from "next/link";
 
@@ -205,7 +206,7 @@ export function SettingsTabs({
         {tab === "location" && <MasterList model="Location" label="保管場所" entries={locations} readOnly={readOnly} />}
         {tab === "customFields" && <CustomFieldSettings fields={customFields} readOnly={readOnly} />}
         {/* 一覧表示設定の列候補には無効化された追加項目を含めない(新規登録/編集/詳細検索から消えるのと同じ扱い)。 */}
-        {tab === "view" && <InventoryViewSettings categories={categories} locations={locations} />}
+        {tab === "view" && <InventoryViewSettings categories={categories.filter(value=>value.isActive)} locations={selectableLocations(locations.filter(value=>value.isActive))} />}
         {tab === "columns" && <ListColumnSettings customFieldDefs={customFields.filter((f) => f.isActive)} />}
         {tab === "zaico" && isAdmin && (
           <div className="space-y-6">
