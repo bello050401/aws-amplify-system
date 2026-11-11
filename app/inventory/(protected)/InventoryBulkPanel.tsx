@@ -1,6 +1,7 @@
 "use client";
 import {SelectedInventoryExport} from "./SelectedInventoryExport";
 import {BulkScalarFields} from "./BulkScalarFields";
+import {hasInventoryEditDraft} from '@/lib/inventory/editDraft';
 import type {SelectionRequest} from '@/lib/inventory/selectionRequest';
 import {inventoryEditErrorMessage} from '@/lib/inventory/editErrorMessage';
 import {inventoryFieldLabel} from '@/lib/inventory/fieldLabel';
@@ -257,14 +258,23 @@ export function InventoryBulkControls({
     completed = useRef(""),
     previewAttempt = useRef<string | null>(null);
   const running = job?.state === "PREPARING" || job?.state === "APPLYING";
-  const edited = rules.categories.mode !== "keep" || rules.names.length > 0 || Boolean(rules.location && rules.location.mode !== "keep") || Boolean(Object.keys(rules.customFieldChanges??{}).length);
-  const unsaved = open && edited && (!job || job.state === "READY");
+  const edited = hasInventoryEditDraft(rules);
+  const unsaved = open && ((!job && edited) || job?.state === "READY");
+  function forgetPreview(id?: string) {
+    // Only remove this preview's pointer. Another tab may have started a job.
+    try {
+      if (id && localStorage.getItem("bello.inventory.lastEditJob") === id)
+        localStorage.removeItem("bello.inventory.lastEditJob");
+    } catch { /* Browser storage is optional; the server still requires Apply. */ }
+  }
   useEffect(() => {
     registerBlocker("inventory-bulk", unsaved ? {discard: () => {
+      if (job?.state === "READY") forgetPreview(job.id);
       setOpen(false); setRules(emptyRules()); setJob(null); setRows([]);
+      previewAttempt.current = null;
     }} : null);
     return () => registerBlocker("inventory-bulk", null);
-  }, [registerBlocker, unsaved]);
+  }, [registerBlocker, unsaved, job?.id, job?.state]);
   useEffect(() => {
     if (!open) return;
     const old = document.body.style.overflow;
@@ -1072,13 +1082,23 @@ export function InventoryBulkControls({
                     </button>
                   ) : job?.state === "READY" ? (
                     <>
+                      <button className={button} disabled={busy} onClick={() => action(async () => {
+                        await cancelInventoryEdits(job.id);
+                        forgetPreview(job.id);
+                        setJob(null); setRows([]); setRules(emptyRules());
+                        previewAttempt.current = null;
+                        setOpen(false); onDismiss?.();
+                      })}>変更案を破棄</button>
                       <button
                         className={button}
-                        onClick={() => {
+                        disabled={busy}
+                        onClick={() => action(async () => {
+                          await cancelInventoryEdits(job.id);
+                          forgetPreview(job.id);
                           setJob(null);
                           setRows([]);
                           previewAttempt.current = null;
-                        }}
+                        })}
                       >
                         編集に戻る
                       </button>

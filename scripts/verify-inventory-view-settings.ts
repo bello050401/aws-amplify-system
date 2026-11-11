@@ -4,9 +4,18 @@ import {defaultInventoryView,sanitizeInventoryView,orderedVisibleOptions} from '
 import {transformInventoryEdit,validateEditRules} from '../lib/inventory/editTransform';
 import {importedStockTitle,STOCK_TITLE_META} from '../lib/inventory/managedStockTitle';
 import {inventoryDiff,applyInventoryDiff,recordInventorySave,moveInventoryHistory} from '../lib/inventory/reversibleHistory';
+import {hasInventoryEditDraft} from '../lib/inventory/editDraft';
 const results:string[]=[];
 function test(name:string,fn:()=>void){fn();results.push(name);console.log('PASS '+name);}
 const keep={categories:{mode:'keep' as const},names:[]};
+test('通常項目だけ・0・空欄化も未保存として保護し、変更なしは警告しない',()=>{
+ assert.equal(hasInventoryEditDraft(keep),false);
+ assert.equal(hasInventoryEditDraft({...keep,fields:{},customFieldChanges:{},location:{mode:'keep'}}),false);
+ for(const fields of [{quantity:0},{width:'71.5'},{salePrice:0},{note:null}])assert.equal(hasInventoryEditDraft({...keep,fields}),true);
+ assert.equal(hasInventoryEditDraft({...keep,location:{mode:'clear'}}),true);
+ assert.equal(hasInventoryEditDraft({...keep,categories:{mode:'clear'}}),true);
+ assert.equal(hasInventoryEditDraft({...keep,customFieldChanges:{memo:null}}),true);
+});
 test('表示設定の不正値・重複・容量上限',()=>{
  assert.deepEqual(sanitizeInventoryView(null),defaultInventoryView());
  const v=sanitizeInventoryView({pinFirstColumn:'true',keepSelection:true,categoryPlacement:'unknown',hiddenCategories:['a','a',5,''],detailOrder:Array.from({length:2000},(_,i)=>String(i))});
