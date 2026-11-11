@@ -109,7 +109,7 @@ export function useInventoryListColumns(dynamicColumns: InventoryListColumnDef[]
       if (e.key === INVENTORY_LIST_COLUMNS_STORAGE_KEY) setPreferencesState(readStored(dynamicColumns, knownKeys));
     }
     window.addEventListener("storage", onStorage);
-    const onLocalChange = (event: Event) => setPreferencesState((event as CustomEvent<ColumnPreferences>).detail);
+    const onLocalChange = () => setPreferencesState(readStored(dynamicColumns, knownKeys));
     window.addEventListener("inventory-columns-changed", onLocalChange);
     return () => {
       window.removeEventListener("storage", onStorage);

@@ -1,4 +1,5 @@
 "use client";
+import {SelectedInventoryActions} from "./SelectedInventoryActions";
 import {SelectedInventoryExport} from "./SelectedInventoryExport";
 import {BulkScalarFields} from "./BulkScalarFields";
 import {hasInventoryEditDraft} from '@/lib/inventory/editDraft';
@@ -475,17 +476,21 @@ export function InventoryBulkControls({
         : typeof value === "object"
           ? JSON.stringify(value)
           : String(value);
+  const toolbarRef=useRef<HTMLDivElement>(null);
+  useEffect(()=>{const bar=toolbarRef.current,layout=bar?.closest<HTMLElement>('[data-inventory-selection-layout]');if(!bar||!layout)return;const update=()=>layout.style.setProperty('--inventory-selection-space',selectedCount?Math.ceil(bar.getBoundingClientRect().height)+'px':'0px');update();const observer=new ResizeObserver(update);observer.observe(bar);return()=>{observer.disconnect();layout.style.setProperty('--inventory-selection-space','0px');};},[selectedCount]);
   const disabled = !selectedCount || direct.dirtyCount > 0 || busy || running;
   return (
     <>
       {selection.editable && !initialRequest && (
-        <div className={"flex shrink-0 flex-wrap items-center gap-2 border-b bg-white px-4 "+(selectedCount?'py-2':'py-1')} role="toolbar" aria-label="選択商品の操作">
+        <div ref={toolbarRef} className={"flex shrink-0 flex-wrap items-center gap-2 bg-white px-4 "+(selectedCount?'fixed inset-x-0 bottom-14 z-40 border-t py-3 shadow-lg md:bottom-0 md:left-16':'border-b py-1')} role="toolbar" aria-label="選択商品の操作">
           <span className="mr-2 text-sm text-gray-500">{selectedCount ? selectedCount+'件選択中' : '行のチェックで商品を選択'}</span>
           {selectedCount>0&&<><button type="button" className={primaryButton} disabled={disabled} onClick={()=>launch('edit')}>選択商品を編集</button>
           <button type="button" className={button} disabled={disabled} onClick={()=>{launch("edit");setRules({...emptyRules(),location:{mode:"set",id:""}});}}>保管場所を変更</button>
+          <button type="button" className={button} disabled={disabled} onClick={()=>{launch("edit");setRules({...emptyRules(),quantityIncrease:1});}}>入庫</button>
           <button type="button" className={button} disabled={disabled} onClick={()=>launch('undo')}>戻る</button>
           <button type="button" className={button} disabled={disabled} onClick={()=>launch('redo')}>進む</button>
           <button type="button" className={button} disabled={disabled} onClick={()=>void recent()}>変更履歴</button></>}
+          {<SelectedInventoryActions ids={[...selection.selected]} disabled={disabled} onDeleted={ids=>{selection.remove(ids);router.refresh();}}/>}
           {selectedCount>0&&<SelectedInventoryExport ids={[...selection.selected]} disabled={disabled}/>}
           {selectedCount>0&&<button type="button" className="min-h-11 px-3 text-sm text-gray-600 underline" disabled={busy} onClick={selection.clear}>選択解除</button>}
           <button type="button" className={selectedCount?button+' ml-auto':'ml-auto min-h-8 rounded px-3 text-xs text-gray-600 underline hover:bg-gray-50'} disabled={busy} onClick={resume}>前回の操作結果</button>
@@ -786,7 +791,8 @@ export function InventoryBulkControls({
                           </select>}
                           {rules.location?.mode === "clear" && <p className="text-sm text-amber-800">対象商品の保管場所を未設定にします。</p>}
                         </section>}
-                        <BulkScalarFields fields={rules.fields??{}} onChange={fields=>changeRules({...rules,fields})}/>
+                        <section className="space-y-3 rounded-xl border bg-white p-4"><label className="flex gap-3 font-semibold"><input type="checkbox" checked={rules.quantityIncrease!==undefined} onChange={e=>{const fields={...rules.fields};delete fields.quantity;changeRules({...rules,fields,quantityIncrease:e.target.checked?1:undefined});}}/>入庫：現在の数量に加算する</label>{rules.quantityIncrease!==undefined&&<><label className="block text-sm">各商品に加算する数量<input type="number" min="1" step="1" className={input} value={rules.quantityIncrease} onChange={e=>changeRules({...rules,quantityIncrease:Number(e.target.value)})}/></label><p className="text-sm text-gray-500">商品ごとの現在数量に加算します。変更前後は次のプレビューで確認できます。</p></>}</section>
+                        <BulkScalarFields fields={rules.fields??{}} onChange={fields=>changeRules({...rules,fields,quantityIncrease:Object.hasOwn(fields,"quantity")?undefined:rules.quantityIncrease})}/>
                         {customFieldDefs.some(d=>d.fieldType&&d.isActive!==false&&!internalInventoryField(d.fieldKey)) && <details className="space-y-4 rounded-xl border bg-white p-5">
                           <summary className="cursor-pointer font-semibold">追加項目 <span className="ml-2 text-sm font-normal text-gray-500">{Object.keys(rules.customFieldChanges??{}).length}項目を変更</span></summary>
                           <p className="text-sm text-gray-500">指定した項目だけを変更します。その他の記録はそのまま残ります。</p>

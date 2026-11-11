@@ -26,15 +26,15 @@ export function InventoryListTools({customFieldDefs,categories,locations}:{
   const dialog=useRef<HTMLDialogElement>(null);
   const sort=parseInventoryListSort(params.get("sort")??undefined,params.get("direction")??undefined);
   const categoryIds=(params.get("categoryIds")??"").split(",").filter(Boolean);
-  useEffect(()=>{try {
+  useEffect(()=>{const read=()=>{try {
     const value=JSON.parse(localStorage.getItem(key)??"[]");
     if(Array.isArray(value))setSaved(value.filter(v=>v&&typeof v.id==="string"&&typeof v.name==="string"&&typeof v.query==="string"&&v.query.length<=12000).slice(0,10));
-  }catch{}},[]);
+  }catch{}};read();window.addEventListener('inventory-saved-searches-changed',read);return()=>window.removeEventListener('inventory-saved-searches-changed',read);},[]);
   useEffect(()=>{if(open)dialog.current?.showModal();else dialog.current?.close();},[open]);
   function navigate(href:string){ if(isDirty)guardedNavigate(href);else router.push(href); }
   function change(values:Record<string,string|null>){navigate(listFilterHref(params.toString(),values));}
   function writeSaved(next:Saved[]) {
-    try {localStorage.setItem(key,JSON.stringify(next));setSaved(next);setError("");return true;}
+    try {localStorage.setItem(key,JSON.stringify(next));setSaved(next);window.dispatchEvent(new Event('inventory-saved-searches-changed'));setError("");return true;}
     catch {setError("ブラウザに保存できません。保存容量・ブラウザの設定を確認してください。");return false;}
   }
   function saveSearch() {
@@ -93,7 +93,7 @@ export function InventoryListTools({customFieldDefs,categories,locations}:{
       </div>
       <div className="p-4">
         {open==="columns"?<ListColumnSettings customFieldDefs={customFieldDefs}/>:open==="environment"?<InventoryViewSettings categories={categories} locations={locations}/>:open==="saved"?<>
-          <p className="mb-4 text-sm text-gray-600">現在の検索・絞り込み・並べ替えを、このブラウザに10件まで保存できます。</p>
+          <p className="mb-4 text-sm text-gray-600">現在の検索・絞り込み・並べ替えを10件まで保存できます。同じアカウントの別端末でも読み込めます。</p>
           <form className="mb-4 flex gap-2" onSubmit={e=>{e.preventDefault();saveSearch();}}>
             <input aria-label="検索条件の名前" placeholder="例：出品待ちのチェア" maxLength={60} value={name} onChange={e=>setName(e.target.value)} className="min-w-0 flex-1 rounded-lg border px-3 py-2"/>
             <button className={button} type="submit">現在の条件を保存</button>

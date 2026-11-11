@@ -18,7 +18,7 @@ import { unwrapList } from "@/lib/amplify/listAll";
  * already exist gets created; never overwrites an ADMIN's own edits to
  * label/type/options on one of these later.
  */
-const CUSTOM_FIELD_SEED: { fieldKey: string; label: string; fieldType: "TEXT" | "TEXTAREA" }[] = [
+const CUSTOM_FIELD_SEED: { fieldKey: string; label: string; fieldType: "TEXT" | "TEXTAREA" | "DATE" }[] = [
   { fieldKey: "socketType", label: "口金", fieldType: "TEXT" },
   { fieldKey: "legHeight", label: "脚高", fieldType: "TEXT" },
   { fieldKey: "seatDimensions", label: "座面寸法", fieldType: "TEXT" },
@@ -48,6 +48,8 @@ const CUSTOM_FIELD_SEED: { fieldKey: string; label: string; fieldType: "TEXT" | 
   { fieldKey: "netSaleProceeds", label: "手元に入ってきた売上金", fieldType: "TEXT" },
   { fieldKey: "transferDate", label: "振込日", fieldType: "TEXT" },
   { fieldKey: "entryMemo", label: "記入メモ", fieldType: "TEXTAREA" },
+  { fieldKey: "stocktakeDate", label: "棚卸日", fieldType: "DATE" },
+  { fieldKey: "groupTag", label: "グループタグ", fieldType: "TEXT" },
   { fieldKey: "outboundName", label: "出庫時の名前", fieldType: "TEXT" },
 ];
 

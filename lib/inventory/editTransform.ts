@@ -10,10 +10,11 @@ export type CategoryOperation = { mode:'keep' } | { mode:'modify'; add:string[];
 export const BRACKETS = { wide:['（','）'], narrow:['(',')'], memo:['【','】'] } as const;
 export type BracketKind = keyof typeof BRACKETS;
 export type NameRule = { kind:'prefix'; text:string; skipExisting:boolean } | { kind:'remove'; text:string } | { kind:'replace'; from:string; to:string } | { kind:'brackets'; bracket:BracketKind; content:boolean } | { kind:'convert'; from:BracketKind; to:BracketKind };
-export interface InventoryEditRules { categories:CategoryOperation; names:NameRule[]; location?: {mode:"keep"|"clear"} | {mode:"set";id:string}; customFieldChanges?:Record<string,CustomFieldValue>; fields?:Omit<InlineEditChanges,"name"|"categoryIds"|"locationId"|"customFieldChanges"> }
+export interface InventoryEditRules { quantityIncrease?:number; categories:CategoryOperation; names:NameRule[]; location?: {mode:"keep"|"clear"} | {mode:"set";id:string}; customFieldChanges?:Record<string,CustomFieldValue>; fields?:Omit<InlineEditChanges,"name"|"categoryIds"|"locationId"|"customFieldChanges"> }
 export function validateEditRules(value:unknown):asserts value is InventoryEditRules {
   const r=value as InventoryEditRules;
   if(!r||!r.categories||!Array.isArray(r.names)||r.names.length>30)invalid('編集内容を確認してください。');
+  if(r.quantityIncrease!==undefined){if(!Number.isSafeInteger(r.quantityIncrease)||r.quantityIncrease<1||r.quantityIncrease>2147483647||r.fields?.quantity!==undefined)invalid("入庫数量は1以上の整数で入力し、数量の上書きとは分けてください。");}
   if(r.fields!==undefined){if(!r.fields||typeof r.fields!=="object"||["name","categoryIds","locationId","customFieldChanges"].some(k=>Object.hasOwn(r.fields!,k)))invalid("項目別の操作を使用してください。");validateInlineChanges(r.fields);}
   if(r.customFieldChanges!==undefined)validateCustomPatchShape(r.customFieldChanges);
   if(r.location && (!["keep","clear","set"].includes(r.location.mode) ||
@@ -76,10 +77,13 @@ export function transformName(original:string,rules:readonly NameRule[]):string{
 }
 export function transformInventoryEdit(before:{name:string;categoryIds:string[];locationId?:unknown;customFields?:unknown;[key:string]:unknown},rules:InventoryEditRules){
   validateEditRules(rules);
-  const after=managedStockTitleChange({...rules.fields,name:transformName(before.name,rules.names),categoryIds:transformCategories(before.categoryIds,rules.categories),
+  if(rules.quantityIncrease!==undefined&&(typeof before.quantity!=='number'||!Number.isSafeInteger(before.quantity)||before.quantity<0))invalid('数量が未入力または不正です。現在の数量を確認してから入庫してください。');
+  const quantity=rules.quantityIncrease===undefined?{}:{quantity:Number(before.quantity)+rules.quantityIncrease};
+  if(rules.quantityIncrease!==undefined)validateInlineChanges(quantity);
+  const after=managedStockTitleChange({...rules.fields,...quantity,name:transformName(before.name,rules.names),categoryIds:transformCategories(before.categoryIds,rules.categories),
     ...(rules.location?.mode === "set" ? {locationId:rules.location.id} : rules.location?.mode === "clear" ? {locationId:null} : {}),
     ...(rules.customFieldChanges&&Object.keys(rules.customFieldChanges).length ? {customFields:{...parseCustomFields(before.customFields),...rules.customFieldChanges}}:{})}, before);
   validateName(after.name);validateCategoryArray(after.categoryIds);
-  return {before,after,changed:Object.entries(rules.fields??{}).some(([key,value])=>before[key]!==value)||before.name!==after.name||JSON.stringify(before.categoryIds)!==JSON.stringify(after.categoryIds)||
+  return {before,after,changed:rules.quantityIncrease!==undefined||Object.entries(rules.fields??{}).some(([key,value])=>before[key]!==value)||before.name!==after.name||JSON.stringify(before.categoryIds)!==JSON.stringify(after.categoryIds)||
     "locationId" in after && before.locationId!==after.locationId || "customFields" in after && JSON.stringify(parseCustomFields(before.customFields))!==JSON.stringify(parseCustomFields(after.customFields))};
 }

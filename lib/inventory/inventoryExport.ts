@@ -187,10 +187,8 @@ export async function buildInventoryExport(
       updatedAt: productUpdatedAt(item),
       createdBy: item.createdBy ?? "",
       updatedBy: item.updatedBy ?? "",
-      // ZAICOにはあるがBELLOでは追跡していない列 — 列自体は互換性のため
-      // 出力するが値は常に空欄(exportFields.tsのコメント参照)。
-      stocktakeDate: "",
-      groupTag: "",
+      stocktakeDate: customFields.stocktakeDate ?? "",
+      groupTag: customFields.groupTag ?? "",
     };
     for (const col of STATIC_EXPORT_FIELDS) {
       if (raw[col.key] !== undefined) continue;

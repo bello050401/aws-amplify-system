@@ -12,7 +12,7 @@ const rows=[
 {id:'6',sku:'Q6',name:'arper 6',categoryIds:['b'],categoryId:'b',quantity:3,locationId:'X',statusId:'S'},
 {id:'7',sku:'Q7',name:'削除済み',categoryIds:['b'],categoryId:'b',quantity:1,deletedAt:'2026-11-01'},
 {id:'8',sku:'Q8',name:'旧形式',categoryId:'b',quantity:1},
-].map(r=>({...r,createdAt:'2026-11-10T00:00:00Z',updatedAt:'2026-11-10T00:00:00Z'}));
+].map(r=>({...r,customFields:JSON.stringify({stocktakeDate:'2026-11-11',groupTag:'倉庫確認'}),createdAt:'2026-11-10T00:00:00Z',updatedAt:'2026-11-10T00:00:00Z'}));
 function match(r,f){return Object.entries(f).every(([k,v])=>k==='and'?v.every(x=>match(r,x)):k==='or'?v.some(x=>match(r,x)):Object.entries(v).every(([op,x])=>op==='eq'?r[k]===x:op==='ne'?r[k]!==x:op==='contains'?(r[k]??[]).includes(x):op==='attributeExists'?(r[k]!==undefined)===x:false));}
 export const inventoryDdb={}; export const inventoryTable=()=> 'QA'; export const readInventoryBatch=async(db,table,ids)=>new Map(rows.filter(r=>ids.includes(r.id)).map(r=>[r.id,r]));
 export const inventoryAuthMode={};
@@ -37,10 +37,12 @@ async function main(){
  assert(text.indexOf('arper 2')<text.indexOf('アルペール 1'));assert(text.includes('販売中,確認'));
  const excel=await buildInventoryExport('xlsx',filters,{query,fieldsByKey},sort),book=new ExcelJS.Workbook();await book.xlsx.load(excel.buffer);const sheet=book.worksheets[0];assert.equal(sheet.rowCount,3);
  const header=sheet.getRow(1).values;const catColumn=header.indexOf('カテゴリ');assert(catColumn>0);assert.equal(sheet.getRow(3).getCell(catColumn).value,'販売中,確認');
+ assert(text.includes('2026/11/11'));assert(text.includes('倉庫確認'));
+ assert.equal(sheet.getRow(2).getCell(header.indexOf('棚卸日')).value,'2026/11/11');assert.equal(sheet.getRow(2).getCell(header.indexOf('グループタグ')).value,'倉庫確認');
  const legacy=(await buildInventoryExport('csv',{categoryIds:['b']})).buffer.toString('utf8');assert(legacy.includes('旧形式'));assert(!legacy.includes('削除済み'));
  const selected=(await buildInventoryExport('csv',{},undefined,undefined,['2','4'])).buffer.toString('utf8');assert(selected.includes('arper 2'));assert(selected.includes('テーブル'));assert(!selected.includes('アルペール 1'));
  for(const ids of [[],['missing'],['7'],['2','2']])await assert.rejects(buildInventoryExport('csv',{},undefined,undefined,ids));
- fs.writeFileSync(path.join(out,'export-tests.json'),JSON.stringify({at:new Date().toISOString(),passed:12,checks:['2番目のカテゴリで検索','検索・詳細条件・保管場所・状態のAND','日本語ブランド同義語','数値順の全件ソート','CSVの全カテゴリ','Excelの全カテゴリと行数','旧単一カテゴリと削除除外','選択IDだけをCSV出力','空選択拒否','欠落ID拒否','削除ID拒否','重複ID拒否']},null,2));
- console.log('PASS export parity: 12 checks, real CSV and XLSX builders, no AWS access');
+ fs.writeFileSync(path.join(out,'export-tests.json'),JSON.stringify({at:new Date().toISOString(),passed:16,checks:['CSV棚卸日','CSVグループタグ','XLSX棚卸日','XLSXグループタグ','2番目のカテゴリで検索','検索・詳細条件・保管場所・状態のAND','日本語ブランド同義語','数値順の全件ソート','CSVの全カテゴリ','Excelの全カテゴリと行数','旧単一カテゴリと削除除外','選択IDだけをCSV出力','空選択拒否','欠落ID拒否','削除ID拒否','重複ID拒否']},null,2));
+ console.log('PASS export parity: 16 checks, real CSV and XLSX builders, no AWS access');
 }
 main().catch(e=>{console.error(e);process.exitCode=1;});

@@ -22,9 +22,7 @@
  * `key`（内部フィールド名）はextendedFields.ts等の既存フィールドを
  * そのまま指す — データの実体は一切重複させていない。
  *
- * ZAICOに存在するがBELLOでは追跡していない列(棚卸日/グループタグ)は
- * 列自体は互換のため出力するが、値は常に空欄・インポート対象外
- * (`importable: false`)とする。
+ * 棚卸日・グループタグは既存の追加項目機構へ保持し、CSV/Excelでも往復する。
  *
  * ZAICOの⚪︎脚高/⚪︎座面寸法/⚪︎口金/⚪︎梱包サイズ/⚫︎古物の特徴は、
  * BELLOではCustomFieldDefinition(customFieldSeed.ts)で管理している
@@ -45,7 +43,7 @@ export interface ExportFieldDef {
   key: string;
   label: string;
   valueType: ExportFieldValueType;
-  /** Importable = a real Inventory column (or CustomFieldDefinition value) the New/Edit forms can also set. `false` for 在庫ID/SKU(照合キーのみ・書き込み対象ではない)と、棚卸日/グループタグ(BELLO側に対応するフィールドがなく常に空欄)、system/derived metadata。 */
+  /** Importable = a real Inventory column (or CustomFieldDefinition value) the New/Edit forms can also set. `false` for 在庫ID/SKU(照合キーのみ・書き込み対象ではない)、system/derived metadata。 */
   importable: boolean;
 }
 
@@ -74,9 +72,9 @@ export const ZAICO_COMPAT_FIELDS: ExportFieldDef[] = [
   { key: "note", label: "備考", valueType: "string", importable: true },
   { key: "updatedAt", label: "更新日", valueType: "datetime", importable: false },
   { key: "createdAt", label: "作成日", valueType: "datetime", importable: false },
-  // BELLOでは追跡していない列 — 列自体は互換性のため出力するが常に空欄。
-  { key: "stocktakeDate", label: "棚卸日", valueType: "string", importable: false },
-  { key: "groupTag", label: "グループタグ", valueType: "string", importable: false },
+  // These values are editable custom fields, not permission groups.
+  { key: "stocktakeDate", label: "棚卸日", valueType: "date", importable: true },
+  { key: "groupTag", label: "グループタグ", valueType: "string", importable: true },
   { key: "plannedSalePrice", label: "☆販売予定価格（送料別大原記載）", valueType: "number", importable: true },
   { key: "firstMarkdownPrice", label: "1回目値下げ時の金額（30日）", valueType: "string", importable: true },
   { key: "secondMarkdownPrice", label: "2回目値下げ時の金額（60日）", valueType: "string", importable: true },
@@ -131,7 +129,7 @@ export const BELLO_ONLY_FIELDS: ExportFieldDef[] = [
 export const STATIC_EXPORT_FIELDS: ExportFieldDef[] = [...ZAICO_COMPAT_FIELDS, ...BELLO_ONLY_FIELDS];
 
 /** 上記の中でCustomFieldDefinition(customFieldSeed.ts)由来の値であり、Inventoryモデルの実カラムではないキー — lib/inventory/inventoryExport.ts/inventoryImport.tsの行組み立てで「item[key]ではなくcustomFields[key]を読む」対象を機械的に判定するために使う。 */
-export const KNOWN_CUSTOM_FIELD_KEYS = new Set(["legHeight", "seatDimensions", "socketType", "packageSize", "usedGoodsFeature", "salePriority"]);
+export const KNOWN_CUSTOM_FIELD_KEYS = new Set(["stocktakeDate", "groupTag", "legHeight", "seatDimensions", "socketType", "packageSize", "usedGoodsFeature", "salePriority"]);
 
 /** レガシー互換 — extendedFields.tsの~29フィールドのみを指す(customFieldは含まない)。CORE_EXPORT_FIELDSは廃止し、ZAICO_COMPAT_FIELDS/BELLO_ONLY_FIELDSへ統合した。 */
 export const EXTENDED_EXPORT_FIELDS: ExportFieldDef[] = ALL_EXTENDED_FIELDS.map((f) => ({

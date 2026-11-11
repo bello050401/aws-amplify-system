@@ -1,3 +1,5 @@
+import {Suspense} from "react";
+import {PhotoAssetImageEditor} from "./PhotoAssetImageEditor";
 import {selectableLocations} from "@/lib/inventory/locationChoices";
 import { notFound, redirect } from "next/navigation";
 import { canEditInventory, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
@@ -34,12 +36,11 @@ export default async function EditInventoryPage(
   // item に依存しない3つ(ステータス・追加項目の定義・単位)は、item の
   // 取得を待つ理由が無い。以前は item を取り切ってから5つまとめて投げて
   // いたので、独立した問い合わせが1往復ぶん後ろへずれていた。
-  const [item, statuses, customFieldDefs, units, photoAssetsResult, activeCategories, activeLocations] = await Promise.all([
+  const [item, statuses, customFieldDefs, units, activeCategories, activeLocations] = await Promise.all([
     getInventoryDetail(params.id, {consistentDirectRead: true}),
     listStatuses(),
     listCustomFieldDefinitions(),
     listUnits(),
-    listInventoryPhotoAssetsAction(params.id),
     listCategories(),
     listLocations(),
   ]);
@@ -61,9 +62,14 @@ export default async function EditInventoryPage(
     <div className="flex h-full flex-col">
       <InventoryHeader role={role} center={<h1 className="text-base font-bold text-gray-900">在庫編集</h1>} />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-        <EditInventoryForm item={item} photoAssets={photoAssetsResult.ok ? photoAssetsResult.value.assets : []} categories={categories} locations={selectableLocations(locations,item.locationId)} statuses={statuses} customFieldDefs={customFieldDefs} units={units} returnTo={detailHref} />
+        <EditInventoryForm item={item} photoEditor={<Suspense fallback={<p role="status" className="p-3 text-sm text-gray-500">写真を読み込み中です。物品情報は編集できます。</p>}><PhotoAssets inventoryId={item.id}/></Suspense>} categories={categories} locations={selectableLocations(locations,item.locationId)} statuses={statuses} customFieldDefs={customFieldDefs} units={units} returnTo={detailHref} />
       </div>
     </div>
     </InventoryPreviewUrls>
   );
+}
+
+async function PhotoAssets({inventoryId}:{inventoryId:string}){
+ const result=await listInventoryPhotoAssetsAction(inventoryId);
+ return result.ok?<PhotoAssetImageEditor inventoryId={inventoryId} assets={result.value.assets}/>:<p role="alert" className="p-3 text-sm text-red-700">写真を取得できませんでした。写真の操作には画面の再読み込みが必要です。</p>;
 }

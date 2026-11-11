@@ -1,4 +1,32 @@
 import type { InventoryHistoryRow } from "./queries";
+import {inventoryFieldLabel} from './fieldLabel';
+import {ALL_EXTENDED_FIELDS} from './extendedFields';
+type HistoryContext={categories?:{id:string;name:string}[];locations?:{id:string;name:string}[];custom?:{fieldKey:string;label:string}[]};
+const labels:Record<string,string>={quantity:'数量',name:'物品名',sourceQuantity:'移動元の数量',targetQuantity:'移動先の数量',remainingQuantity:'残り数量',splitQuantity:'分割した数量',movedQuantity:'移動数量',sentQuantity:'出庫数量',destination:'出庫先',locationId:'保管場所',sourceLocationId:'移動前の保管場所',categoryIds:'カテゴリ',sourceCategoryIds:'移動前のカテゴリ',classificationPreserved:'カテゴリ・場所を維持',movementCategoryRemoved:'移動予定カテゴリの解除',arrivalDate:'到着予定日',outboundName:'出庫時の名前'};
+function parsed(value:string|null|undefined){if(!value)return null;try{const x=JSON.parse(value);return x&&typeof x==='object'?x:null;}catch{return null;}}
+export function historyChangeDetails(h:Pick<InventoryHistoryRow,'fieldName'|'oldValue'|'newValue'>,context:HistoryContext={}){
+ const before=parsed(h.oldValue),after=parsed(h.newValue);if(!before&&!after)return [];
+ const flatten=(v:unknown,prefix=''):Record<string,unknown>=>{if(!v||typeof v!=='object'||Array.isArray(v))return {};const out:Record<string,unknown>={};for(const [key,value] of Object.entries(v)){
+  if(key.startsWith('__')||/^(hash|id|.*Id|updatedAt|createdAt|revision|requestId|mutationId)$/i.test(key)&&!['locationId','sourceLocationId'].includes(key))continue;
+  if(key==='result'&&value&&typeof value==='object'){Object.assign(out,flatten(value));continue;}
+  if(labels[key]||ALL_EXTENDED_FIELDS.some(f=>f.key===key)||context.custom?.some(f=>f.fieldKey===key))out[prefix+key]=value;
+ }return out;};
+ const b=flatten(before),a=flatten(after);
+ const render=(key:string,v:unknown):string=>{
+  if(v===null||v===undefined||v==='')return '未設定';
+  if(key.endsWith('CategoryIds')||key==='categoryIds')return Array.isArray(v)?v.map(id=>context.categories?.find(c=>c.id===id)?.name??'カテゴリ（記録詳細を参照）').join(' / ')||'なし':'記録詳細を参照';
+  if(key==='locationId'||key==='sourceLocationId')return context.locations?.find(l=>l.id===v)?.name??'保管場所（記録詳細を参照）';
+  if(typeof v==='boolean')return v?'はい':'いいえ';
+  if(typeof v==='object')return Array.isArray(v)?v.map(String).join(' / '):'記録詳細を参照';return String(v);
+ };
+ return [...new Set([...Object.keys(b),...Object.keys(a)])].filter(k=>JSON.stringify(b[k])!==JSON.stringify(a[k])).map(k=>({label:labels[k]??inventoryFieldLabel(k,context.custom),before:render(k,b[k]),after:render(k,a[k])}));
+}
+export function historyActorLabel(value:string|null|undefined){return value&&/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(value)?'スタッフ':value||'システム';}
+export function historyQuantity(h:Pick<InventoryHistoryRow,'fieldName'|'newValue'>):number|null{
+ if(h.newValue===null||h.newValue===undefined||h.newValue.trim()==='')return null;
+ const obj=parsed(h.newValue);const value=obj?obj.quantity??obj.remainingQuantity??obj.result?.remainingQuantity:h.fieldName.startsWith('数量')?Number(h.newValue):undefined;
+ return typeof value==='number'&&Number.isFinite(value)&&value>=0?value:null;
+}
 
 /**
  * 更新履歴テーブルの表示ヘルパー(P1 詳細遷移の待ち時間短縮 補正、

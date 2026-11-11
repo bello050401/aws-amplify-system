@@ -53,7 +53,7 @@ export function InventorySelectionProvider({ children, editable, initialIds=[] }
 
   const value = useMemo(() => ({ selected, isSelected, toggle, toggleAll, clear, remove, editable }), [selected, isSelected, toggle, toggleAll, clear, remove, editable]);
 
-  return <InventorySelectionContext.Provider value={value}><div className="contents" style={{"--inventory-selection-space": "0px"} as React.CSSProperties}>{children}</div></InventorySelectionContext.Provider>;
+  return <InventorySelectionContext.Provider value={value}><div data-inventory-selection-layout className="contents" style={{"--inventory-selection-space": "0px"} as React.CSSProperties}>{children}</div></InventorySelectionContext.Provider>;
 }
 
 export function useInventorySelection(): InventorySelectionContextValue {

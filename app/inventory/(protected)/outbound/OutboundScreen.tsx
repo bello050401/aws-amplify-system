@@ -1,4 +1,5 @@
 'use client';
+import {readSelectionHandoff} from '@/lib/inventory/selectionHandoff';
 import {useEffect,useRef,useState} from 'react';
 import {ArrivalPanel} from './ArrivalPanel';
 import {arrivalStatus,arrivalSettled,arrivalLabel,type OutboundHistoryEntry} from '../../../../lib/outbound/arrivalTypes';
@@ -24,6 +25,8 @@ export function OutboundScreen({embedded=false}:{embedded?:boolean}){
  const [history,setHistory]=useState<OutboundHistoryEntry[]>([]),[canEdit,setCanEdit]=useState(false),[canConfigure,setCanConfigure]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState('');
  const [confirm,setConfirm]=useState(false),[checked,setChecked]=useState(false),[final,setFinal]=useState<Action|null>(null),[batch,setBatch]=useState<OutboundBatch|null>(null),[loading,setLoading]=useState(true);
  const [showHistory,setShowHistory]=useState(false);
+ const [requestedIds,setRequestedIds]=useState<string[]>([]),[selectionNotice,setSelectionNotice]=useState('');
+ useEffect(()=>{const key=new URLSearchParams(location.search).get('selection');if(key){const ids=readSelectionHandoff(key);setRequestedIds(ids);setSelectionNotice(ids.length?`在庫一覧で選んだ${ids.length}件を引き継ぎました。出庫先を選択してください。`:'選択の期限が切れました。在庫一覧で選び直してください。');}},[]);
  const actionBarRef=useRef<HTMLDivElement>(null),[actionBarHeight,setActionBarHeight]=useState(0);
  useEffect(()=>{
   const bar=actionBarRef.current;
@@ -36,7 +39,7 @@ export function OutboundScreen({embedded=false}:{embedded?:boolean}){
  const load=async()=>{setLoading(true);try{const data=await read(endpoint);setDestinations(data.destinations);setDest(previous=>previous?data.destinations.find((d:OutboundDestination)=>d.id===previous.id)??null:null);setHistory(data.history);setCanEdit(data.canEdit);setCanConfigure(data.canConfigure);}catch(e){setError((e as Error).message);}finally{setLoading(false);}};
  useEffect(()=>{void load();},[]);
  async function choose(value:OutboundDestination){const gen=++generation.current;setDest(value);setBatch(null);setShowHistory(false);setSelected([]);setItems([]);setQuantities({});setNotes({});setExportNames({});setError('');setBusy(true);command.current=null;
-  try{const data=await read(endpoint+'?destination='+value.id);if(gen===generation.current)setItems(data.items);}catch(e){if(gen===generation.current)setError((e as Error).message);}finally{if(gen===generation.current)setBusy(false);}}
+  try{const data=await read(endpoint+'?destination='+value.id);if(gen===generation.current){setItems(data.items);if(requestedIds.length){const eligible=(data.items as OutboundProduct[]).filter(i=>requestedIds.includes(i.id)).map(i=>i.id);setSelected(eligible);setSelectionNotice(`選択した${requestedIds.length}件のうち、この出庫先の対象は${eligible.length}件です。${eligible.length<requestedIds.length?'対象外の商品は選択していません。移動予定カテゴリを確認してください。':''}`);}}}catch(e){if(gen===generation.current)setError((e as Error).message);}finally{if(gen===generation.current)setBusy(false);}}
  const chosen=items.filter(item=>selected.includes(item.id)),isKawagoe=dest?.templateType==='KAWAGOE_V1';
  const keepClassification=batch?preservesOutboundClassification(batch):!!dest;
  const qty=(item:OutboundProduct)=>Number(quantities[item.id]??item.quantity);
@@ -59,6 +62,7 @@ export function OutboundScreen({embedded=false}:{embedded?:boolean}){
  const exportName=(item:OutboundProduct)=><label className="grid gap-1 text-sm">送信用の商品名<input className={field} aria-label={item.sku+'の送信用の商品名'} maxLength={500} value={exportNames[item.id]??exportProductName(item)} disabled={busy||!canEdit||!selected.includes(item.id)} onChange={e=>updateExportName(item.id,e.target.value,(e.nativeEvent as InputEvent).isComposing)} onCompositionEnd={e=>updateExportName(item.id,e.currentTarget.value)}/><span className="text-xs text-gray-500">「【在庫4】」などの在庫数表記は名前の入力時に取り除きます。元の商品名は変わりません。</span></label>;
  const note=(item:OutboundProduct)=><label className="grid gap-1 text-sm">入荷明細備考<textarea className={field} aria-label={item.sku+'の入荷明細備考'} rows={2} maxLength={2000} placeholder="例：天板と脚を分解、計3梱包" value={notes[item.id]??''} disabled={busy||!canEdit||!selected.includes(item.id)} onChange={e=>{setNotes(p=>({...p,[item.id]:e.target.value}));invalidate();}}/></label>;
  return <main style={embedded?{paddingBottom:actionBarHeight+24,scrollPaddingBottom:actionBarHeight+24}:undefined} className={'mx-auto p-4 text-gray-900 '+(embedded?'max-w-xl':'w-full max-w-none pb-12')}>
+  {selectionNotice&&<p role="status" className="mb-4 rounded-lg bg-blue-50 p-3 text-sm text-blue-900">{selectionNotice}</p>}
   {!embedded&&<h1 className="mb-4 text-xl font-semibold">出庫</h1>}
   <div className="mb-5 flex flex-wrap gap-3">{destinations.map(value=><button key={value.id} disabled={busy} onClick={()=>choose(value)} className={button+(dest?.id===value.id?' bg-blue-600 !text-white':'')}>{value.name}</button>)}<button disabled={busy} className={button+(showHistory?' bg-blue-600 !text-white':'')} onClick={()=>{++generation.current;setShowHistory(true);setBatch(null);setDest(null);setSelected([]);setError('');void load();}}>出庫履歴{history.filter(h=>h.arrivalStatus&&!arrivalSettled(h.arrivalStatus)).length>0?`（到着待ち ${history.filter(h=>h.arrivalStatus&&!arrivalSettled(h.arrivalStatus)).length}）`:''}</button></div>
   {loading&&<p role="status" className="p-4 text-gray-600">出庫先を読み込んでいます。</p>}

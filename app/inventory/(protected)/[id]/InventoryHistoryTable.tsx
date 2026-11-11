@@ -25,6 +25,8 @@ import { InventoryHistorySection } from "./InventoryHistorySection";
  * のは今回の目的に反する)。
  */
 export async function InventoryHistoryTable({ inventoryId }: { inventoryId: string }) {
+  const {listCategories,listLocations}=await import('@/lib/inventory/queries');
+  const masters=Promise.all([listCategories().catch(()=>[]),listLocations().catch(()=>[])]);
   let rows: Awaited<ReturnType<typeof getInventoryHistory>> | null = null;
   try {
     rows = await getInventoryHistory(inventoryId);
@@ -38,5 +40,6 @@ export async function InventoryHistoryTable({ inventoryId }: { inventoryId: stri
   // 商品を切り替えたら(inventoryIdが変わったら)前の商品の読込/エラー
   // 状態を引き継がず作り直す——SalesItemsSection.tsxのkey={`${year}-
   // ${month}`}と同じ「keyでReactの内部stateをリセットする」定石。
-  return <InventoryHistorySection key={inventoryId} inventoryId={inventoryId} initialRows={rows} />;
+  const [categories,locations]=await masters;
+  return <InventoryHistorySection key={inventoryId} inventoryId={inventoryId} initialRows={rows} categories={categories} locations={locations} />;
 }

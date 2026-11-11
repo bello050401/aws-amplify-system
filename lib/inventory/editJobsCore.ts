@@ -556,7 +556,7 @@ export function createInventoryEditJobs(p: {
         {
           source:
             job.mode === "edit"
-              ? "一覧一括編集"
+              ? job.rules?.quantityIncrease ? "入庫（数量加算）" : "一覧一括編集"
               : job.mode === "undo"
                 ? "戻る"
                 : "進む",

@@ -153,7 +153,8 @@ function testWritableImportTargets() {
   // 「更新日」まで書き込み対象に入っていた。
   assertTrue(!isWritableImportTarget("updatedAt"), "isWritableImportTarget: 更新日は書き込まない");
   assertTrue(!isWritableImportTarget("createdAt"), "isWritableImportTarget: 作成日は書き込まない");
-  assertTrue(!isWritableImportTarget("stocktakeDate"), "isWritableImportTarget: 棚卸日は書き込まない");
+  assertTrue(isWritableImportTarget("stocktakeDate"), "isWritableImportTarget: 棚卸日は追加項目に保存可能");
+  assertTrue(isWritableImportTarget("groupTag"), "isWritableImportTarget: グループタグは追加項目に保存可能");
   assertTrue(!isWritableImportTarget("displayId"), "isWritableImportTarget: 在庫IDは照合専用で書き込まない");
   assertTrue(!isWritableImportTarget("sku"), "isWritableImportTarget: SKUは照合専用で書き込まない");
 

@@ -8,7 +8,7 @@ import type {MasterOption} from '@/lib/inventory/queries';
 export function InventoryViewSettings({categories,locations}:{categories:Pick<MasterOption,"id"|"name">[];locations:Pick<MasterOption,"id"|"name">[]}){
  const {view,change,ready,error}=useInventoryView(),{density,setDensity}=useInventoryListDensity();
  return <div className="space-y-6 text-sm">
-  <p className="text-gray-500">このブラウザの表示だけを変更します。商品のカテゴリ・数量・保管場所は変更されません。</p>
+  <p className="text-gray-500">表示設定はアカウントに保存され、別端末で開いたときも引き継がれます。商品のカテゴリ・数量・保管場所は変更されません。</p>
   <fieldset disabled={!ready} className="space-y-4 rounded-lg border p-4"><legend className="px-2 font-semibold">一覧の見え方と操作</legend>
    <label className="flex items-center justify-between gap-4">行の高さ<select aria-label="設定：行の高さ" value={density} onChange={e=>setDensity(e.target.value as 'normal'|'compact')} className="rounded border p-2"><option value="normal">標準（商品名を全文表示）</option><option value="compact">コンパクト</option></select></label>
    <label className="flex items-center justify-between gap-4">カテゴリの表示位置<select aria-label="カテゴリの表示位置" value={view.categoryPlacement} onChange={e=>change({categoryPlacement:e.target.value as 'name'|'column'})} className="rounded border p-2"><option value="column">独立した列</option><option value="name">物品名の上</option></select></label>

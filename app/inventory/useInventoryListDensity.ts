@@ -6,7 +6,7 @@ export function useInventoryListDensity(){
   const [density,setDensity]=useState<Density>("normal");
   useEffect(()=>{
     const read=()=>{try{setDensity(localStorage.getItem(key)==="compact"?"compact":"normal");}catch{}};
-    const local=(event:Event)=>setDensity((event as CustomEvent<Density>).detail);
+    const local=()=>read();
     const storage=(event:StorageEvent)=>{if(event.key===key)read();};
     read();window.addEventListener(eventName,local);window.addEventListener("storage",storage);
     return()=>{window.removeEventListener(eventName,local);window.removeEventListener("storage",storage);};

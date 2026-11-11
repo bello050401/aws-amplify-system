@@ -6,7 +6,8 @@ fs.mkdirSync(out,{recursive:true});
 const buildBundle=()=>esbuild.build({entryPoints:[path.join(here,'main.tsx')],bundle:true,outfile:path.join(out,'ui.js'),platform:'browser',format:'iife',jsx:'automatic',define:{'process.env.NODE_ENV':'"development"'},plugins:[{name:'no-external-imports',setup(b){b.onResolve({filter:/^\.\/ImportWizard$/},()=>({path:'import',namespace:'qa'}));b.onLoad({filter:/.*/,namespace:'qa'},()=>({contents:'export function ImportWizard(){return null}',loader:'js'}));}}],alias:{
   'next/navigation':path.join(here,'navigation.tsx'),'next/link':path.join(here,'navigation.tsx'),
   '@/app/actions/inventoryEditJobs':path.join(existing,'store.ts'),'@/app/actions/inventoryBulkEdit':path.join(existing,'store.ts'),
-  '@/app/inventory/InventoryThumbnail':path.join(existing,'thumbnail.tsx')
+  '@/app/inventory/InventoryThumbnail':path.join(existing,'thumbnail.tsx'),
+  '@/app/actions/inventorySelection':path.join(here,'selection.ts'), '@/app/actions/inventorySelectionDelete':path.join(here,'selection.ts'), '@/app/actions/quantityTransfer':path.join(here,'selection.ts')
   ,'@/app/actions/inventoryCount':path.join(here,'quantity.ts')
 }});
 const build=async()=>{await buildBundle();const css=await require('postcss')([require('tailwindcss')({content:['app/inventory/**/*.tsx','scripts/qa/inventory-parity-ui/*.tsx','app/staff-inventory-edit/*.tsx']})]).process(fs.readFileSync('app/globals.css','utf8'),{from:'app/globals.css'});fs.writeFileSync(path.join(out,'style.css'),css.css);};

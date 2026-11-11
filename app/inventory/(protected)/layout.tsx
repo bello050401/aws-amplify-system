@@ -1,4 +1,5 @@
 import { InventorySelectionProvider } from "./InventorySelectionProvider";
+import {InventoryPreferenceSync} from '../InventoryPreferenceSync';
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { getInventorySessionStatus } from "@/lib/amplify/requireInventoryUser";
@@ -46,6 +47,7 @@ export default async function ProtectedInventoryLayout({ children }: { children:
     // own comment). children stays a Server Component tree; wrapping it
     // in this Client Component provider doesn't change that.
     <UnsavedChangesProvider><InventorySelectionProvider editable={status.role!=="VIEWER"}>
+      <InventoryPreferenceSync/>
       <div className="flex h-screen bg-white text-gray-900">
         <InventoryNavRail canIssueDocuments={status.role==="ADMIN"} />
         {/* Each page renders its own InventoryHeader (spec O/P/Q — see

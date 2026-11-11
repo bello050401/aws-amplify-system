@@ -94,7 +94,7 @@ async function persistInventoryWithCategories(input:Record<string,unknown>,expec
 }
 
 /** Delete the inventory and its owned category links in the same conditional transaction. */
-async function deleteInventoryWithCategories(id:string,expectedUpdatedAt:string,changedBy='在庫削除') {
+async function deleteInventoryWithCategories(id:string,expectedUpdatedAt:string,changedBy='在庫削除',extraWrites:InventoryTransaction=[]) {
   const row=await getInventoryRaw(id);
   if(!row || row.updatedAt!==expectedUpdatedAt) throw new InventorySaveError('CONFLICT');
   if(row.listingPartition==='MERGED') throw new InventoryMutationRejected('MERGED');
@@ -107,6 +107,7 @@ async function deleteInventoryWithCategories(id:string,expectedUpdatedAt:string,
   // must distinguish a deleted product from a missing/misconfigured table.
   const deletedAt=new Date().toISOString();
   changes.push({Put:{TableName:inventoryTable('InventoryHistory'),Item:{id:randomUUID(),inventoryId:id,changedAt:deletedAt,changedBy,fieldName:'削除',oldValue:'有効',newValue:'削除済み',createdAt:deletedAt,updatedAt:deletedAt,__typename:'InventoryHistory'},ConditionExpression:'attribute_not_exists(id)'}});
+  changes.push(...extraWrites);
   try {await inventoryDdb.send(new TransactWriteCommand({TransactItems:changes}));}
   catch(error) {throw new InventorySaveError(error instanceof Error && error.name==='TransactionCanceledException'?'CONFLICT':'UNCONFIRMED');}
 }

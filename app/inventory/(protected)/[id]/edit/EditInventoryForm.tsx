@@ -32,7 +32,8 @@ import { customFieldFormValues } from "@/lib/inventory/customFieldFormValues";
 
 interface EditInventoryFormProps {
   item: InventoryDetail;
-  photoAssets: WebPhotoAssetView[];
+  photoAssets?: WebPhotoAssetView[];
+  photoEditor?: React.ReactNode;
   categories: MasterOption[];
   locations: MasterOption[];
   statuses: StatusOption[];
@@ -124,7 +125,7 @@ function slotsToImageInputs(slots: ImageEditorSlot[], type: "NORMAL" | "DAMAGE")
  * component and config NewInventoryForm uses, so those field
  * definitions exist in exactly one place (spec §5).
  */
-export function EditInventoryForm({ item, photoAssets, categories, locations, customFieldDefs, units, returnTo }: EditInventoryFormProps) {
+export function EditInventoryForm({ item, photoAssets = [], photoEditor, categories, locations, customFieldDefs, units, returnTo }: EditInventoryFormProps) {
   const router = useRouter();
   const [name, setName] = useState(item.name);
   const [categoryIds, setCategoryIds] = useState<string[]>(inventoryCategoryIds(item ?? {}));
@@ -307,7 +308,7 @@ export function EditInventoryForm({ item, photoAssets, categories, locations, cu
           フォームの左に固定幅で配置 — モバイルでは(grid-cols-1により)
           フォームより先に単純に積まれる("image then form")。 */}
       <div className="space-y-4 lg:col-start-1">
-        <PhotoAssetImageEditor inventoryId={item.id} assets={photoAssets} />
+        {photoEditor ?? <PhotoAssetImageEditor inventoryId={item.id} assets={photoAssets} />}
         <div className="border border-gray-200 p-4">
           <p className="mb-2 text-[11px] font-bold text-gray-400">追加アップロード画像</p>
           <ImageEditor slots={normalImageSlots} onChange={setNormalImageSlots} variant="normal" />
