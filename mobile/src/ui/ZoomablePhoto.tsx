@@ -4,7 +4,13 @@ import {Image} from 'expo-image';
 import {PHOTO_IDENTITY,boundPhoto,photoSwipe,photoDismiss,zoomPhoto,type PhotoTransform} from '../domain/photoViewport';
 
 /** Mounted only while the viewer is open; full-size images are not persisted on disk. */
-export function ZoomablePhoto({uri,onPrevious,onNext,onDismiss}:{uri:string;onPrevious?:()=>void;onNext?:()=>void;onDismiss?:()=>void}) {
+type PhotoProps={uri:string;onPrevious?:()=>void;onNext?:()=>void;onDismiss?:()=>void;onRetry?:()=>void};
+export function ZoomablePhoto(props:PhotoProps) {
+  // A refreshed signed URL is a new request, even when the photo ID is unchanged.
+  // Unmount the old request so its late error cannot hide the new image.
+  return <PhotoSurface key={props.uri} {...props}/>;
+}
+function PhotoSurface({uri,onPrevious,onNext,onDismiss,onRetry}:PhotoProps) {
   const [transform,setTransform]=useState(PHOTO_IDENTITY),[size,setSize]=useState({width:1,height:1});
   const [dismissY,setDismissY]=useState(0);
   const [loading,setLoading]=useState(true),[failed,setFailed]=useState(false),[attempt,setAttempt]=useState(0);
@@ -46,10 +52,10 @@ export function ZoomablePhoto({uri,onPrevious,onNext,onDismiss}:{uri:string;onPr
   }),[]);
   return <View ref={viewport} style={{flex:1,overflow:'hidden'}} onLayout={e=>{setSize(e.nativeEvent.layout);setTransform(PHOTO_IDENTITY);viewport.current?.measureInWindow((x,y)=>{origin.current={x,y};});}}>
     {!failed&&<View {...pan.panHandlers} style={{flex:1,touchAction:'none',userSelect:'none'} as any} accessibilityLabel="写真。指で拡大・移動、ダブルタップで拡大と復帰">
-      <Image key={attempt} source={{uri}} contentFit="contain" cachePolicy="none" pointerEvents="none" style={{flex:1,transform:[{translateX:transform.x},{translateY:transform.y+dismissY},{scale:transform.scale}]}}
+      <Image key={attempt} source={{uri}} contentFit="contain" cachePolicy="none" loading="eager" pointerEvents="none" style={{flex:1,transform:[{translateX:transform.x},{translateY:transform.y+dismissY},{scale:transform.scale}]}}
         onLoadStart={()=>setLoading(true)} onLoad={e=>{setImageSize({width:e.source.width,height:e.source.height});setLoading(false);setFailed(false);}} onError={()=>{setLoading(false);setFailed(true);}}/>
     </View>}
     {loading&&<ActivityIndicator pointerEvents="none" color="white" style={{position:'absolute',top:'45%',alignSelf:'center'}}/>}
-    {failed&&<View style={{flex:1,alignItems:'center',justifyContent:'center',gap:20}}><Text style={{color:'white'}}>写真を読み込めませんでした。</Text><Pressable accessibilityRole="button" onPress={()=>{setFailed(false);setLoading(true);setAttempt(n=>n+1);}} style={{padding:18}}><Text style={{color:'white'}}>もう一度読み込む</Text></Pressable></View>}
+    {failed&&<View style={{flex:1,alignItems:'center',justifyContent:'center',gap:20}}><Text style={{color:'white'}}>写真を読み込めませんでした。</Text><Pressable accessibilityRole="button" onPress={()=>{setFailed(false);setLoading(true);setAttempt(n=>n+1);onRetry?.();}} style={{padding:18}}><Text style={{color:'white'}}>もう一度読み込む</Text></Pressable></View>}
   </View>;
 }

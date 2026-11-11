@@ -1,6 +1,6 @@
 import {MultiChoiceSheet} from './MultiChoiceSheet';
 import {splitCategoryNames} from '../../../lib/inventory/categories';
-import React, { useState, useSyncExternalStore } from "react";
+import React, { useEffect, useState, useSyncExternalStore } from "react";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import type { InventoryDraft, InventoryItem } from "../domain/inventory";
@@ -25,13 +25,20 @@ export function InventoryEditorScreen({ editor, onLeave, onSaved, onQrSaved, onP
   const [scanning,setScanning]=useState(false);
   const [scanned,setScanned]=useState<string|null>(null);
   const [photoBusy,setPhotoBusy]=useState(false);
+  const [nameHeight,setNameHeight]=useState(90);
   const [master,setMaster]=useState<"category"|"location"|null>(null);
   const [choice, setChoice] = useState<DetailField | null>(null);
   const state = useSyncExternalStore(editor.subscribe, editor.getSnapshot);
+  useEffect(()=>{
+    if(typeof window==='undefined'||!(state.dirty||state.saving||state.outcomeUncertain||photoBusy))return;
+    const preventLoss=(event:BeforeUnloadEvent)=>{event.preventDefault();event.returnValue='';};
+    window.addEventListener('beforeunload',preventLoss);
+    return()=>window.removeEventListener('beforeunload',preventLoss);
+  },[state.dirty,state.saving,state.outcomeUncertain,photoBusy]);
   const leave = () => { if (editor.requestLeave()) onLeave(); };
   const save = async () => { const result = await editor.save(); if (result) onSaved(result); };
   const fields: { key: Exclude<keyof InventoryDraft, "details">; label: string; numeric?: boolean; multiline?: boolean }[] = [
-    { key: "name", label: "物品名" }, { key: "quantity", label: "数量", numeric: true },
+    { key: "name", label: "物品名", multiline: true }, { key: "quantity", label: "数量", numeric: true },
     { key: "unit", label: "単位" }, { key: "location", label: "保管場所" },
     { key: "category", label: "カテゴリ" },
     { key: "note", label: "備考", multiline: true }, { key: "barcode", label: "QRコード・バーコードの値" },
@@ -56,8 +63,9 @@ export function InventoryEditorScreen({ editor, onLeave, onSaved, onQrSaved, onP
           <PhotoPicker photos={state.photos} disabled={state.saving || state.outcomeUncertain} onAdd={photos=>editor.addPhotos(photos)} onRemove={id=>editor.removePhoto(id)} onBusy={setPhotoBusy}/></>}
         <View style={s.field}>
         <Text style={s.label}>{field.label}</Text>
-        {(field.key === "category" || field.key === "location") && (field.key === "category" ? state.saved.categoryOptions : state.saved.locationOptions) ? <Pressable accessibilityRole="button" accessibilityLabel={field.label} disabled={state.saving || state.outcomeUncertain} onPress={()=>setMaster(field.key as "category"|"location")} style={s.select}><Text style={s.selectText}>{state.draft[field.key] || "未設定"}</Text><Ionicons name="chevron-down" size={22} color={colors.blue}/></Pressable> : <TextInput accessibilityLabel={field.label} style={[s.input, field.multiline && s.multiline]}
+        {(field.key === "category" || field.key === "location") && (field.key === "category" ? state.saved.categoryOptions : state.saved.locationOptions) ? <Pressable accessibilityRole="button" accessibilityLabel={field.label} disabled={state.saving || state.outcomeUncertain} onPress={()=>setMaster(field.key as "category"|"location")} style={s.select}><Text style={s.selectText}>{state.draft[field.key] || "未設定"}</Text><Ionicons name="chevron-down" size={22} color={colors.blue}/></Pressable> : <TextInput accessibilityLabel={field.label} style={[s.input, field.multiline && s.multiline, field.key==='name'&&{height:nameHeight}]}
           value={state.draft[field.key]} onChangeText={(value) => editor.change(field.key, value)}
+          onContentSizeChange={field.key==='name'?event=>setNameHeight(Math.max(90,Math.ceil(event.nativeEvent.contentSize.height)+2)):undefined}
           editable={!state.saving && !state.outcomeUncertain} inputMode={field.numeric ? "numeric" : "text"} keyboardType={field.numeric ? "number-pad" : "default"}
           multiline={field.multiline} textAlignVertical={field.multiline ? "top" : "center"} />}
         {field.key === "barcode" && <Pressable accessibilityRole="button" accessibilityLabel="コードを撮影して登録" disabled={state.saving || state.outcomeUncertain} onPress={()=>setScanning(true)} style={[s.choice,{borderWidth:1,borderColor:colors.blue,marginTop:14}]}><Text style={s.link}>コードを撮影して登録</Text></Pressable>}

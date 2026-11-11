@@ -250,7 +250,7 @@ export async function listInventory(filters: InventoryListFilters, options: { of
   const all = await fetchAllInventoryRecords(conditions);
   const total = all.length;
   const page = all.slice(options.offset, options.offset + options.limit);
-  return { items: page, total, offset: options.offset, limit: options.limit };
+  return { items: page, total, totalQuantity:all.reduce((sum,row)=>sum+row.quantity,0), offset: options.offset, limit: options.limit };
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -551,7 +551,7 @@ export async function listInventorySimpleSearch(
 
   const total = filtered.length;
   const page = filtered.slice(options.offset, options.offset + options.limit);
-  return { items: page, total, offset: options.offset, limit: options.limit };
+  return { items: page, total, totalQuantity:filtered.reduce((sum,row)=>sum+row.quantity,0), offset: options.offset, limit: options.limit };
 }
 
 /**
@@ -608,7 +608,7 @@ export async function listInventoryAdvanced(
 
   const total = filtered.length;
   const page = filtered.slice(options.offset, options.offset + options.limit);
-  return { items: page, total, offset: options.offset, limit: options.limit };
+  return { items: page, total, totalQuantity:filtered.reduce((sum,row)=>sum+row.quantity,0), offset: options.offset, limit: options.limit };
 }
 
 /** Mobile reuses the full-inventory engine: filter and sort before pagination. */

@@ -327,7 +327,7 @@ export function EditInventoryForm({ item, photoAssets, categories, locations, cu
       <div className="lg:col-start-2">
         <p className="mb-3 text-[11px] font-bold text-gray-400">物品情報</p>
         <div className="grid grid-cols-1 gap-4">
-          <LabeledInput label="物品名" required value={name} onChange={setName} size="large" />
+          <LabeledInput label="物品名" required multiline value={name} onChange={setName} size="large" />
           <BrandPicker value={customFieldValues.belloBrand ?? ""} onChange={(value) => handleCustomFieldChange("belloBrand", value)} />
           <CategoryMultiSelect value={categoryIds} onChange={setCategoryIds} options={categories}/>
           <LabeledInput label="QRコード・バーコード" value={barcode} onChange={setBarcode} size="large" />

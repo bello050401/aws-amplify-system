@@ -77,7 +77,7 @@ export default async function NewInventoryPage(props: NewInventoryPageProps) {
         categoryIds: duplicateSource.categoryIds?.filter((id):id is string=>!!id) ?? undefined,
         statusId: duplicateSource.statusId ?? undefined,
         locationId: duplicateSource.locationId ?? undefined,
-        quantity: duplicateSource.quantity,
+        quantity: duplicateSource.quantityUnset ? null : duplicateSource.quantity,
         unit: duplicateSource.unit ?? undefined,
         purchasePrice: duplicateSource.purchasePrice ?? undefined,
         salePrice: duplicateSource.salePrice ?? undefined,

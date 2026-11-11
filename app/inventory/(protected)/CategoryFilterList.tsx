@@ -17,6 +17,9 @@ export function CategoryFilterList({ categories, activeCategoryIds }: CategoryFi
   const router = useRouter(), params = useSearchParams();
   const { isDirty, guardedNavigate } = useUnsavedChanges();
   const [selected, setSelected] = useState(activeCategoryIds);
+  const [categoryQuery,setCategoryQuery]=useState('');
+  const normalize=(value:string)=>value.normalize('NFKC').toLocaleLowerCase('ja').replace(/[ァ-ヶ]/g,c=>String.fromCharCode(c.charCodeAt(0)-0x60));
+  const visibleCategories=categories.filter(cat=>normalize(cat.name).includes(normalize(categoryQuery.trim())));
   const [, startTransition] = useTransition();
   const [request, setRequest] = useState<{from:string;href:string}|null>(null);
   const [delayed, setDelayed] = useState(false);
@@ -45,9 +48,11 @@ export function CategoryFilterList({ categories, activeCategoryIds }: CategoryFi
   }
   return <div>
     <p className="mb-2 px-2 text-xs text-gray-500">複数選択可・いずれかに一致</p>
+    <input type="search" aria-label="カテゴリを検索" placeholder="カテゴリを検索" value={categoryQuery} onChange={e=>setCategoryQuery(e.target.value)} className="mb-2 w-full rounded border border-gray-300 px-2 py-2 text-[13px]"/>
+    {categoryQuery&&<p className="mb-1 px-2 text-xs text-gray-500">{visibleCategories.length}件表示・選択中{selected.length}件</p>}
     {categories.length === 0 && <p className="px-2 py-1 text-xs text-gray-500">未登録</p>}
     <ul>
-      {categories.map(cat => <li key={cat.id}>
+      {visibleCategories.map(cat => <li key={cat.id}>
         <label className={`flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-[13px] hover:bg-gray-50 ${selected.includes(cat.id) ? "bg-teal-50 font-semibold text-teal-900" : "text-gray-700"}`}>
           <input type="checkbox" checked={selected.includes(cat.id)} disabled={locked}
             onChange={e => { const checked = e.target.checked; setSelected(prev => checked ? [...prev, cat.id] : prev.filter(id => id !== cat.id)); }}
@@ -56,6 +61,7 @@ export function CategoryFilterList({ categories, activeCategoryIds }: CategoryFi
         </label>
       </li>)}
     </ul>
+    {!!categories.length&&!visibleCategories.length&&<p className="px-2 py-2 text-xs text-gray-500">該当するカテゴリがありません。</p>}
     <div className="sticky bottom-0 space-y-1 border-t bg-white px-1 py-2">
       <button type="button" onClick={apply} disabled={locked}
         className="w-full rounded bg-teal-900 px-2 py-2 text-sm font-semibold text-white disabled:opacity-50">

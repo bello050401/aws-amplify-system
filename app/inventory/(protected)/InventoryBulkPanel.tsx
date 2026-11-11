@@ -335,11 +335,11 @@ export function InventoryBulkControls({
         setJob(result.job);
         setRows(result.rows);
         if (["DONE", "CANCELLED", "FAILED"].includes(result.job.state)) {
-          selection.remove(
-            result.rows
-              .filter((r) => r.state === "SAVED" || r.state === "UNCHANGED")
-              .map((r) => r.id),
-          );
+          // Keep a fully successful selection so Undo/Redo remains one continuous flow.
+          // With partial success, retain only the rows needing attention/retry.
+          if (result.rows.some(r => r.state !== "SAVED" && r.state !== "UNCHANGED")) {
+            selection.remove(result.rows.filter(r => r.state === "SAVED" || r.state === "UNCHANGED").map(r => r.id));
+          }
           if (completed.current !== job.id) {
             completed.current = job.id;
             router.refresh();

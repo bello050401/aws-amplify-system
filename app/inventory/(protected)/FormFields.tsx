@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import type { CustomFieldDefinitionRow } from "@/lib/inventory/queries";
 import { DateField } from "../DateField";
 import { choicesWithCurrentValue } from "@/lib/inventory/zaicoFieldChoices";
@@ -37,6 +38,7 @@ export function LabeledInput({
   required = false,
   placeholder,
   list,
+  multiline = false,
   size = "compact",
 }: {
   label: string;
@@ -47,15 +49,41 @@ export function LabeledInput({
   placeholder?: string;
   /** ネイティブ<input list>属性 — 対応する<datalist id={list}>と組み合わせて、既存の自由入力を維持したまま候補を提示する(夜間開発指示書 §10: 単位マスタ)。 */
   list?: string;
+  multiline?: boolean;
   size?: FieldSize;
 }) {
+  const textArea = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    const field = textArea.current;
+    if (!multiline || !field) return;
+    const resize = () => {
+      field.style.height = "0px";
+      field.style.height = `${field.scrollHeight + 2}px`;
+    };
+    resize();
+    let width = field.clientWidth;
+    const observer = new ResizeObserver(() => {
+      if (field.clientWidth !== width) { width = field.clientWidth; resize(); }
+    });
+    observer.observe(field);
+    return () => observer.disconnect();
+  }, [multiline, value]);
   return (
     <div>
       <label className="block text-[12px] text-gray-600">
         {label}
         {required && <span className="text-red-500"> *</span>}
       </label>
-      <input
+      {multiline ? <textarea
+        ref={textArea}
+        aria-label={label}
+        value={value}
+        required={required}
+        placeholder={placeholder}
+        rows={3}
+        onChange={e => onChange(e.target.value)}
+        className={`mt-0.5 w-full resize-none overflow-hidden border border-gray-300 px-2.5 focus:border-gray-500 focus:outline-none ${SIZE_CLASSES[size]}`}
+      /> : <input
         aria-label={label}
         type={type}
         value={value}
@@ -64,7 +92,7 @@ export function LabeledInput({
         list={list}
         onChange={(e) => onChange(e.target.value)}
         className={`mt-0.5 w-full border border-gray-300 px-2.5 focus:border-gray-500 focus:outline-none ${SIZE_CLASSES[size]}`}
-      />
+      />}
     </div>
   );
 }

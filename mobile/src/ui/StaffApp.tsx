@@ -384,8 +384,11 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
     if(!writesEnabled){setError("在庫を登録する権限がありません。");return;}
     setCreating(true);setError(null);
     let createOptions:InventoryOptions=options??{categories:[],locations:[],statuses:[]};
-    try{if(!options&&ports.loadOptions&&await ports.online())createOptions=await ports.loadOptions();}
-    catch{setError("選択肢を取得できませんでした。通信状態を確認してください。");}
+    try{if(!options&&ports.loadOptions){
+      if(!await ports.online())throw Error('offline');
+      createOptions=await ports.loadOptions();setOptions(createOptions);
+    }}
+    catch{setError("登録に必要なカテゴリ・保管場所を取得できませんでした。通信が戻ってから新規登録を押してください。");setCreating(false);return;}
     const defaults=newInventoryDefaults(createOptions.categories.map(name=>({name})),createOptions.locations.map(name=>({name})));
     const item:InventoryItem={id:ports.newMutationId(),sku:"保存時に自動採番",name:"",quantity:1,unit:"",location:defaults.location?.name??"",category:defaults.category?.name??"",condition:"",statusId:null,
       note:"",barcode:"",plannedSalePrice:null,thumbnailUrl:null,updatedAt:new Date().toISOString(),details:{},photos:[],photosComplete:true,
@@ -498,7 +501,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
         <View style={[s.headerSide, selected && {width:88}]}>{(selected || feature) && <Pressable accessibilityRole="button" accessibilityLabel="戻る" onPress={selected ? returnFromDetail : () => setFeature(null)} style={s.round}><Ionicons name="chevron-back" size={27} color={colors.text} /></Pressable>}</View>
         <Text style={s.title}>{title}</Text>
         <View style={[s.headerSide, selected && {width:88,flexDirection:"row"}]}>{selected && !selected.mergedIntoInventoryId && writesEnabled && <>
-          <Pressable accessibilityRole="button" accessibilityLabel="この商品をコピーして新規登録" disabled={detailLoading} onPress={startCopy} style={s.round}><Ionicons name="copy-outline" size={23} color={colors.blue}/></Pressable>
+          <Pressable accessibilityRole="button" accessibilityLabel="この商品をコピーして新規登録" accessibilityHint={!selected.photosComplete?'写真の読み込み完了後に利用できます':undefined} disabled={detailLoading||!selected.detailLoadedAt||!selected.photosComplete} onPress={startCopy} style={s.round}><Ionicons name="copy-outline" size={23} color={detailLoading||!selected.detailLoadedAt||!selected.photosComplete?colors.muted:colors.blue}/></Pressable>
           {ports.removeInventory && <Pressable accessibilityRole="button" accessibilityLabel="この商品を削除" disabled={detailLoading || !selected.detailLoadedAt} onPress={()=>{setDeleteError(null);setDeleteTarget(selected);}} style={s.round}><Ionicons name="trash-outline" size={23} color={colors.danger}/></Pressable>}
         </>}{tab === "inventory" && !selected && <Pressable accessibilityRole="button" accessibilityLabel="並び替え" onPress={() => setSortOpen(true)} style={s.round}><Ionicons name="swap-vertical" size={24} color={colors.text} /></Pressable>}{tab === "home" && !feature && onLogout && <Pressable accessibilityRole="button" accessibilityLabel="ログアウト" onPress={onLogout} style={s.round}><Ionicons name="log-out-outline" size={24} color={colors.text} /></Pressable>}</View>
       </View>

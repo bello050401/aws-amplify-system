@@ -32,6 +32,7 @@ function Preview() {
   const quickSearchTest = useRef(__DEV__ && typeof window !== "undefined" && new URLSearchParams(window.location.search).get("quick-search-test") === "1").current;
   const records = useRef(photoPreviewTest?photoPreviewItems(photoPreviewTest==='title'):quickSearchTest ? Array.from({length:6000},(_,index)=>({...previewItems[index%3],id:`quick-preview-${index}`,sku:`QA-${index}`,name:`検索確認 チェア ${index}`,thumbnailUrl:null,quantity:index%10+1})) : __DEV__ && typeof window !== "undefined" && new URLSearchParams(window.location?.search).get("gallery-test") === "1"
     ? galleryPreviewItems() : previewItems.map((item,index) => ({ ...item, ...(__DEV__ && index===0 && typeof window!=='undefined' && new URLSearchParams(window.location.search).get('photo-delete-test')==='1' ? {photosComplete:true,photos:[{id:'photo-00000000-0000-4000-8000-000000000001',source:'PHOTO_ASSET' as const,url:'http://127.0.0.1:8146/photo.jpg',type:'NORMAL' as const,primary:true},{id:'preview-image',source:'INVENTORY' as const,url:'http://127.0.0.1:8146/photo.jpg',type:'NORMAL' as const,primary:false}]} : {}) })));
+  if(photoPreviewTest==='race'&&galleryAttempts.current===0){for(const item of records.current)item.photos=[{id:'main-'+item.id,url:'http://127.0.0.1:43138/qa-late-image-error',primary:true}];}
   const uploadedPhotos=useRef(new Map<string,string>());
   const ports = useMemo<StaffAppPorts>(() => ({
     listPreferences:new ListPreferences(AsyncStorage,'ui-preview','preview-only'),
@@ -126,7 +127,7 @@ function Preview() {
       if (offlineRef.current) throw new InventoryWriteError("offline");
       const item = records.current.find((row) => row.id === request.id) ?? (request.create ? {...previewItems[0],id:request.id,sku:"見本・新規",name:"",details:{},photos:[],updatedAt:request.expectedUpdatedAt} : undefined);
       if (!item || item.updatedAt !== request.expectedUpdatedAt) throw new InventoryWriteError("conflict");
-      const saved = { ...item, ...request.draft, categoryOptions:['販売中','撮影待ち','市川確認'],locationOptions:['川越倉庫','所沢倉庫'], quantity: Number(request.draft.quantity), plannedSalePrice: request.draft.plannedSalePrice === "" ? null : Number(request.draft.plannedSalePrice), updatedAt: new Date().toISOString() };
+      const saved = { ...item, ...request.draft, categoryOptions:['販売中','撮影待ち','市川確認'],locationOptions:['川越倉庫','所沢倉庫'], quantity: Number(request.draft.quantity), quantityUnset: request.draft.quantity === "", plannedSalePrice: request.draft.plannedSalePrice === "" ? null : Number(request.draft.plannedSalePrice), updatedAt: new Date().toISOString() };
       saved.photos=[...((request.copyFrom ? records.current.find(item=>item.id===request.copyFrom!.id)?.photos : item.photos)??[]).filter(p=>!request.removedPhotoIds?.includes(p.id)),...(request.uploads??[]).map((photo,i)=>({id:photo.storageKey,url:null,type:photo.type,primary:!(item.photos?.length)&&i===0}))];
       records.current = [saved,...records.current.filter(row=>row.id!==saved.id)];
       return saved;

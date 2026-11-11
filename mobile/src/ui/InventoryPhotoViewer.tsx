@@ -19,7 +19,7 @@ export function InventoryPhotoViewer({photos,index,onIndexChange,onClose,title,l
       </ScrollView>}
       {loading&&<View style={s.status}><ActivityIndicator color="white"/><Text style={s.hint}>写真を読み込み中…</Text></View>}
       {!!notice&&<View style={s.status}><Text accessibilityRole="alert" style={s.notice}>{notice}</Text>{onRetry&&<Pressable accessibilityRole="button" onPress={onRetry} style={s.button}><Text style={s.text}>写真を再取得</Text></Pressable>}</View>}
-      {uri ? <ZoomablePhoto key={selected.id} uri={uri} onDismiss={onClose}
+      {uri ? <ZoomablePhoto key={selected.id} uri={uri} onDismiss={onClose} onRetry={onRetry}
         onPrevious={index>0?()=>onIndexChange(index-1):undefined}
         onNext={index<photos.length-1?()=>onIndexChange(index+1):undefined}/>
         : <View style={s.empty}><Text style={s.text}>{loading?'':'表示できる写真がありません。'}</Text></View>}

@@ -16,6 +16,7 @@ import { buildSearchFieldDefs, completeConditions, STATIC_SEARCH_FIELDS, type Ad
 import { listInventoryOffsetPage } from "@/lib/inventory/inventoryPage";
 import { buildListReturnQuery } from "@/lib/inventory/listReturnParams";
 import { InventoryTotalCount } from "./InventoryTotalCount";
+import { InventoryQuantityTotal } from "./InventoryQuantityTotal";
 import { InventoryHeader } from "../InventoryHeader";
 import { DirectEditProvider } from "./DirectEditProvider";
 import { InventorySidebar } from "./InventorySidebar";
@@ -267,7 +268,7 @@ export default async function InventoryListPage(props: InventoryListPageProps) {
               advancedOpen={advancedOpen}
               advancedActive={Boolean(advancedQuery)}
               advRaw={searchParams.adv}
-              totalLabel={totalLabel}
+              totalLabel={<>{totalLabel}<InventoryQuantityTotal key={`${listReturnQuery}:${rows.map(row=>row.updatedAt).join(',')}`} filters={{...filters,q:searchParams.q}} adv={searchParams.adv} known={listResult?.totalQuantity}/></>}
             />
           }
         />

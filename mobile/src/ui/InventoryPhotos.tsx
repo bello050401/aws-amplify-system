@@ -45,7 +45,7 @@ export function InventoryPhotos({ item, onRemove, onDeleteAsset, onRetry, disabl
     </View>
     {current.length > shown && <Pressable accessibilityRole="button" style={s.more} onPress={() => setShown(value => value + 24)}><Text style={s.moreText}>残り{current.length - shown}枚を表示</Text></Pressable>}
 
-    {selected&&<InventoryPhotoViewer photos={current} index={selectedIndex} onIndexChange={index=>setExpanded(current[index].id)} onClose={()=>setExpanded(null)} title={item.name}/>}
+    {selected&&<InventoryPhotoViewer photos={current} index={selectedIndex} onIndexChange={index=>setExpanded(current[index].id)} onClose={()=>setExpanded(null)} title={item.name} onRetry={onRetry}/>}
     <Modal visible={removeTarget !== null} transparent animationType="fade" onRequestClose={() => {if(!deleting)setRemoveTarget(null);}}>
       <View style={s.shade}><View style={s.dialog} accessibilityViewIsModal>
         <Text style={s.heading}>この写真を削除しますか？</Text>

@@ -4,7 +4,8 @@ import {DynamoDBClient,CreateTableCommand,DeleteTableCommand,waitUntilTableExist
 import {DynamoDBDocumentClient,GetCommand,PutCommand,UpdateCommand,ScanCommand,TransactWriteCommand} from '@aws-sdk/lib-dynamodb';
 import {S3Client,PutObjectCommand,DeleteObjectCommand,HeadObjectCommand,ListObjectVersionsCommand} from '@aws-sdk/client-s3';
 import {fromIni} from '@aws-sdk/credential-providers';
-import {writeFileSync} from 'node:fs';
+import {writeFileSync,mkdirSync} from 'node:fs';
+import {dirname} from 'node:path';
 import {createInventoryPersistence} from '../../lib/inventory/categoryPersistenceCore';
 import {InventoryMutationRejected,InventorySaveError} from '../../lib/inventory/conditionalUpdate';
 import {deleteAllPhotoObjectVersions} from '../../lib/mediaMaintenance/deletePhotoObject';
@@ -15,7 +16,8 @@ async function main(){
  const table=(m:string)=>prefix+m,bucket='bello-photo-e2e-validation-photobucket-l3bwsehg6e26',photoPrefix='photo-batches/'+randomUUID()+'/audit/';
  const report:{startedAt:string;passed:string[];cleanup?:string}={startedAt:new Date().toISOString(),passed};
  const read=async(m:string,id:string)=>(await db.send(new GetCommand({TableName:table(m),Key:{id},ConsistentRead:true}))).Item;
- const save=()=>writeFileSync('artifacts/system-audit-20261101/inventory-media-aws.json',JSON.stringify(report,null,2));
+ const reportFile=process.env.BELLO_AUDIT_REPORT||'artifacts/system-audit-20261101/inventory-media-aws.json';mkdirSync(dirname(reportFile),{recursive:true});
+ const save=()=>writeFileSync(reportFile,JSON.stringify(report,null,2));
  const check=(s:string)=>{passed.push(s);save();console.log('PASS',s);};
  try{
   for(const m of ['Inventory','Category','InventoryCategory','InventoryHistory']){const TableName=table(m);await raw.send(new CreateTableCommand({TableName,BillingMode:'PAY_PER_REQUEST',KeySchema:[{AttributeName:'id',KeyType:'HASH'}],AttributeDefinitions:[{AttributeName:'id',AttributeType:'S'}],Tags:[{Key:'Purpose',Value:'disposable-audit'}]}));created.push(TableName);}
@@ -52,7 +54,7 @@ async function main(){
   for(const TableName of created){assert(TableName.startsWith(prefix));await raw.send(new DeleteTableCommand({TableName}));}
   report.cleanup='S3 fixture versions absent; table deletions accepted; waiting for absence';save();
   await Promise.all(created.map(TableName=>waitUntilTableNotExists({client:raw,maxWaitTime:90,minDelay:1,maxDelay:3},{TableName})));
-  report.cleanup='all scratch tables and all fixture S3 versions confirmed absent';writeFileSync('artifacts/system-audit-20261101/inventory-media-aws.json',JSON.stringify(report,null,2));
+  report.cleanup='all scratch tables and all fixture S3 versions confirmed absent';save();
  }
 }
 main().catch(e=>{console.error(e.name,e.message);process.exitCode=1;});

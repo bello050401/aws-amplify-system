@@ -34,7 +34,7 @@ interface DuplicateSource extends InventoryExtendedFields {
   categoryIds?: string[];
   statusId?: string;
   locationId?: string;
-  quantity?: number;
+  quantity?: number | null;
   unit?: string;
   purchasePrice?: number;
   salePrice?: number;
@@ -160,7 +160,7 @@ export function NewInventoryForm({ categories, locations, statuses, customFieldD
   const categoryId = categoryIds[0] ?? "";
   const [statusId, setStatusId] = useState(duplicateFrom?.statusId ?? "");
   const [locationId, setLocationId] = useState(duplicateFrom ? duplicateFrom.locationId ?? "" : defaults.location?.id ?? "");
-  const [quantity, setQuantity] = useState(String(duplicateFrom?.quantity ?? 1));
+  const [quantity, setQuantity] = useState(duplicateFrom ? duplicateFrom.quantity == null ? "" : String(duplicateFrom.quantity) : "1");
   const [unit, setUnit] = useState(duplicateFrom?.unit ?? "");
   const [purchasePrice, setPurchasePrice] = useState(duplicateFrom?.purchasePrice != null ? String(duplicateFrom.purchasePrice) : "");
   const [salePrice, setSalePrice] = useState(duplicateFrom?.salePrice != null ? String(duplicateFrom.salePrice) : "");
@@ -262,7 +262,7 @@ export function NewInventoryForm({ categories, locations, statuses, customFieldD
           categoryIds,
           statusId: statusId || undefined,
           locationId: locationId || undefined,
-          quantity: quantity ? Number(quantity) : 0,
+          quantity: quantity.trim() ? Number(quantity) : null,
           unit: unit || undefined,
           purchasePrice: purchasePrice ? Number(purchasePrice) : undefined,
           salePrice: salePrice ? Number(salePrice) : undefined,
@@ -352,7 +352,7 @@ export function NewInventoryForm({ categories, locations, statuses, customFieldD
             登録時に自動採番されます(例: B000001)
           </p>
         </div>
-        <LabeledInput label="物品名" required value={name} onChange={setName} />
+        <LabeledInput label="物品名" required multiline value={name} onChange={setName} />
         <BrandPicker value={customFieldValues.belloBrand ?? ""} onChange={(value) => setCustomFieldValues((previous) => ({ ...previous, belloBrand: value }))} />
 
         <CategoryMultiSelect value={categoryIds} onChange={setCategoryIds} options={categories}/>

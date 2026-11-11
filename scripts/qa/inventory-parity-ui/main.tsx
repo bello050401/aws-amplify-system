@@ -1,4 +1,4 @@
-import React,{useSyncExternalStore} from "react";
+import React,{useState,useSyncExternalStore} from "react";
 import {createRoot} from "react-dom/client";
 import {products,categories,subscribe,snapshot,customDefinitions} from "../inventory-edit-ui/store";
 import {InventoryTable} from "../../../app/inventory/(protected)/InventoryTable";
@@ -14,6 +14,8 @@ import {InventoryToolbar} from "../../../app/inventory/(protected)/InventoryTool
 import {buildSearchFieldDefs,evaluateQuery,createQuickSearchMatcher} from "../../../lib/inventory/advancedSearch";
 import {inventoryComparator,parseInventoryListSort} from "../../../lib/inventory/searchSort";
 import {NavigationFaultControl} from "./navigation";
+import {LabeledInput} from "../../../app/inventory/(protected)/FormFields";
+import {InventoryQuantityTotal} from "../../../app/inventory/(protected)/InventoryQuantityTotal";
 const locations=[{id:"L1",name:"所沢事務所",parentId:null,sortOrder:1},{id:"L2",name:"検証倉庫",parentId:null,sortOrder:2}];
 const fields=buildSearchFieldDefs(customDefinitions,{categories,locations,statuses:[]}),fieldMap=new Map(fields.map(f=>[f.key,f]));
 function App(){
@@ -28,7 +30,7 @@ function App(){
   return <UnsavedChangesProvider><InventorySelectionProvider editable><DirectEditProvider rows={rows}>
     <div className="flex h-screen flex-col pb-[var(--inventory-selection-space)]">
       <div className="bg-amber-50 px-4 py-2 text-sm">操作確認用・匿名の商品60件（実在庫・ECは変更しません）<NavigationFaultControl/></div>
-      <header className="border-b bg-white p-4"><InventoryToolbar role="EDITOR" q={params.get("q")??undefined} categoryIds={ids} locationId={params.get("locationId")??undefined} advancedOpen={params.has("advanced")} advancedActive={Boolean(advanced)} advRaw={params.get("adv")??undefined} totalLabel={`${all.length}件`} resultQuery={params.toString()}/></header>
+      <header className="border-b bg-white p-4"><InventoryToolbar role="EDITOR" q={params.get("q")??undefined} categoryIds={ids} locationId={params.get("locationId")??undefined} advancedOpen={params.has("advanced")} advancedActive={Boolean(advanced)} advRaw={params.get("adv")??undefined} totalLabel={<>{all.length}件<InventoryQuantityTotal key={params.toString()} filters={{q:params.get('q')??undefined}} known={params.has('quantity-failure')?undefined:all.reduce((sum,row)=>sum+row.quantity,0)}/></>} resultQuery={params.toString()}/></header>
       <InventoryBulkControls categories={categories} locations={locations} customFieldDefs={customDefinitions}/>
       <InventoryListTools customFieldDefs={customDefinitions} categories={categories} locations={locations}/>
       <div className="flex min-h-0 flex-1">
@@ -42,4 +44,8 @@ function App(){
     </div>
   </DirectEditProvider></InventorySelectionProvider></UnsavedChangesProvider>;
 }
-createRoot(document.getElementById("root")!).render(<App/>);
+function NameFieldPreview(){
+  const [name,setName]=useState('【確認用】Cassina ixc. TULU ダイニングチェア / ミッドセンチュリー モダン 名作 デザイナーズ チェア カッシーナ ツル / 高濱和秀（Knoll,B&B Italia）');
+  return <main className="max-w-md space-y-6 p-6"><p>商品名入力の確認専用・保存なし</p><LabeledInput label="新規登録の物品名" required multiline value={name} onChange={setName}/><LabeledInput label="詳細編集の物品名" required multiline value={name} onChange={setName} size="large"/></main>;
+}
+createRoot(document.getElementById("root")!).render(new URLSearchParams(location.search).has('name-field-test')?<NameFieldPreview/>:<App/>);
