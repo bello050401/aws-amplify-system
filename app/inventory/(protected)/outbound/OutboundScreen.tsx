@@ -1,5 +1,5 @@
 'use client';
-import {readSelectionHandoff} from '@/lib/inventory/selectionHandoff';
+import {readSelectionHandoff} from '../../../../lib/inventory/selectionHandoff';
 import {useEffect,useRef,useState} from 'react';
 import {ArrivalPanel} from './ArrivalPanel';
 import {arrivalStatus,arrivalSettled,arrivalLabel,type OutboundHistoryEntry} from '../../../../lib/outbound/arrivalTypes';
