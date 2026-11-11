@@ -214,30 +214,29 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
   latestSearch.current=executeSearch;
 
   return (
-    <div className="flex w-full flex-wrap items-center justify-between gap-x-5 gap-y-3 [&_button]:min-h-9 [&_a]:min-h-9 [&_a]:inline-flex [&_a]:items-center">
+    <div className="grid w-full grid-cols-[auto_1fr] items-center gap-x-5 gap-y-3 [&_button]:min-h-10 [&_a]:min-h-10 [&_a]:inline-flex [&_a]:items-center">
       <span ref={searchMetric} hidden data-inventory-search-measurement="paint" />
-      <div className="flex items-center gap-4">
+      <div className="contents">
         {/* 1. ページタイトル — 「在庫一覧＋件数」を薄いborderで囲み、1つ
             のタイトル領域として認識できるようにする。カードUI(角丸・
             shadow・塗りつぶし背景)にはせず、細い罫線1本だけで区切る
             (統合改善指示書 §1: 過度なカードUIにしない)。 */}
-        <div className="flex items-center gap-2 border border-gray-200 px-2.5 py-1">
-          <h1 className="whitespace-nowrap text-[15px] font-bold tracking-tight text-gray-900">在庫一覧</h1>
-          <span className="text-[11px] font-medium text-gray-400">{totalLabel}</span>
+        <div className="col-start-1 row-start-1 flex flex-wrap items-center gap-3">
+          <h1 className="whitespace-nowrap text-xl font-bold tracking-tight text-gray-900">在庫一覧</h1>
+          <span className="text-sm font-medium text-gray-500">{totalLabel}</span>
           {advancedActive && (
             <span className="border border-gray-900 bg-gray-900 px-1.5 py-0.5 text-[10px] font-bold text-white">詳細検索の結果</span>
           )}
         </div>
 
         {/* 第六ラウンド§17-18(P0-4): 装飾のみの区切り線はモバイルでは非表示にし、その分の幅を実際のコントロールに譲る。 */}
-        <div className="hidden h-6 w-px bg-gray-200 md:block" aria-hidden />
 
         {/* 2. 商品検索 — アイコン+input+詳細検索を1つの検索ツールとして
             まとめる。検索対象・ロジックは既存のまま(name/skuのcontains)
             — 「SKU」という言葉自体をUI上に出さないだけで、SKUでの検索
             は引き続き内部的に機能する(統合改善指示書 §2)。 */}
-        <div className="flex items-center gap-1.5">
-          <form action="/inventory" method="get" onSubmit={handleSearchSubmit} className="flex items-center border border-gray-300 bg-white focus-within:border-gray-500 focus-within:ring-1 focus-within:ring-gray-300">
+        <div className="col-span-2 row-start-2 flex flex-wrap items-center gap-2">
+          <form action="/inventory" method="get" onSubmit={handleSearchSubmit} className="flex w-[min(580px,70vw)] items-center rounded border border-gray-300 bg-white focus-within:border-teal-700 focus-within:ring-1 focus-within:ring-teal-700">
             {categoryIds.length > 0 && <input type="hidden" name="categoryIds" value={categoryIds.join(",")} />}
             {locationId && <input type="hidden" name="locationId" value={locationId} />}
             {statusId && <input type="hidden" name="statusId" value={statusId} />}
@@ -270,9 +269,10 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
               onCompositionStart={()=>{composing.current=true;if(searchTimer.current)clearTimeout(searchTimer.current);}}
               onCompositionEnd={e=>{composing.current=false;setSearchText(e.currentTarget.value);scheduleSearch(e.currentTarget.value);}}
               onKeyDown={e=>{if(e.key==='Enter'&&(composing.current||e.nativeEvent.isComposing||e.keyCode===229))e.preventDefault();}}
-              placeholder="商品を検索"
-              className="w-40 border-none px-2 py-2 text-sm outline-none placeholder:text-gray-400 md:w-56"
+              placeholder="物品名・管理番号・バーコードで検索"
+              className="min-w-0 flex-1 border-none bg-transparent px-3 py-2.5 text-sm outline-none placeholder:text-gray-400"
             />
+            {searchText&&<button type="button" aria-label="検索文字をクリア" className="shrink-0 px-3 text-gray-500 hover:text-gray-900" onClick={()=>{if(searchTimer.current)clearTimeout(searchTimer.current);typing.current=false;setSearchText("");executeSearch("",false);}}>×</button>}
             <button
               type="submit"
               className="min-h-8 shrink-0 border-l border-gray-300 bg-gray-900 px-3 py-1.5 text-[13px] font-semibold text-white hover:bg-gray-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-900 disabled:cursor-wait disabled:opacity-60"
@@ -303,7 +303,7 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="col-start-2 row-start-1 flex flex-wrap items-center justify-end gap-2">
         {/* 3. 主要操作 — 検索グループとは間隔で分ける。 */}
         {canEdit ? (
           <>

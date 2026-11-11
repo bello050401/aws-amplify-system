@@ -24,6 +24,7 @@ import type { InventoryCursorListFilters } from "@/lib/inventory/inventoryCursor
 export function InventoryTotalCount({ filters }: { filters: InventoryCursorListFilters }) {
   const [label, setLabel] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
+  const [attempt, retry] = useState(0);
   // filtersはオブジェクトなので、そのまま依存に置くと毎回再取得になる。
   const key = JSON.stringify(filters);
 
@@ -31,18 +32,23 @@ export function InventoryTotalCount({ filters }: { filters: InventoryCursorListF
     let cancelled = false;
     setLabel(null);
     setFailed(false);
+    const timeout=setTimeout(()=>{if(!cancelled)setFailed(true);},15000);
     void (async () => {
-      const result = await getInventoryCountAction(JSON.parse(key) as InventoryCursorListFilters);
-      if (cancelled) return;
-      if (result.ok) setLabel(`${result.total.toLocaleString("ja-JP")}件`);
-      else setFailed(true);
+      try {
+        const result = await getInventoryCountAction(JSON.parse(key) as InventoryCursorListFilters);
+        if (cancelled) return;
+        if (result.ok) {setLabel(`${result.total.toLocaleString("ja-JP")}件`);setFailed(false);}
+        else setFailed(true);
+      } catch {if(!cancelled)setFailed(true);}
+      finally {clearTimeout(timeout);}
     })();
     return () => {
       cancelled = true;
+      clearTimeout(timeout);
     };
-  }, [key]);
+  }, [key,attempt]);
 
-  if (failed) return <span title="件数を取得できませんでした">—</span>;
+  if (failed) return <button type="button" onClick={()=>retry(value=>value+1)} className="underline" title="件数を取得できませんでした。商品一覧は利用できます。">件数を再取得</button>;
   if (label === null) return <span className="text-gray-300">集計中…</span>;
   return <>{label}</>;
 }

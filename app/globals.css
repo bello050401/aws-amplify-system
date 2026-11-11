@@ -17,7 +17,7 @@
      height, not a visual change to it. Scoped by name (inventory-*), not
      by CSS nesting, since :root is shared with the unrelated Feature
      system — never referenced outside app/inventory/*. */
-  --inventory-header-height: 96px;
+  --inventory-header-height: 56px;
 }
 
 @media (prefers-reduced-motion: reduce) {

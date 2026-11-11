@@ -260,9 +260,8 @@ export default async function InventoryListPage(props: InventoryListPageProps) {
           data-inventory-index-error={pagedResult?.indexFailureReason ?? ""}
           data-inventory-timing={JSON.stringify(timing)}
         />
-        <InventoryHeader
-          role={role}
-          center={
+        <InventoryHeader role={role} center={<span className="text-sm font-semibold text-gray-600">BELLO 在庫管理</span>} />
+        <div className="shrink-0 border-b border-gray-200 bg-white px-5 py-3">
             <InventoryToolbar
               resultQuery={listReturnQuery}
               role={role}
@@ -275,8 +274,7 @@ export default async function InventoryListPage(props: InventoryListPageProps) {
               advRaw={searchParams.adv}
               totalLabel={<>{totalLabel}<InventoryQuantityTotal key={`${listReturnQuery}:${rows.map(row=>row.updatedAt).join(',')}`} filters={{...filters,q:searchParams.q}} adv={searchParams.adv} known={listResult?.totalQuantity}/></>}
             />
-          }
-        />
+        </div>
         <InventoryBulkControls categories={categories} locations={selectableLocations(locations)} customFieldDefs={customFieldDefs} />
         <InventoryListTools customFieldDefs={customFieldDefs} categories={categories} locations={locations} />
         {role === "ADMIN" && inventorySpeedProbeEnabled() && (

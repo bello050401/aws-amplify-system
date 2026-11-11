@@ -33,6 +33,7 @@ export function createOutboundFixture({templateType='KAWAGOE_V1',sender='EMAIL',
     for(const part of op.ConditionExpression.split(/\s+AND\s+/)){
       let m=part.match(/^attribute_not_exists\(([^)]+)\)$/),ok;
       if(m)ok=row[resolve(m[1],op)]===undefined;
+      else if((m=part.match(/^\(attribute_not_exists\((\w+)\) OR (\w+)<>(:\w+)\)$/)))ok=row[m[1]]===undefined||row[m[2]]!==v[m[3]];
       else if((m=part.match(/^attribute_exists\(([^)]+)\)$/)))ok=row[resolve(m[1],op)]!==undefined;
       else if((m=part.match(/^(\S+)\s+IN\s*\(([^)]+)\)$/)))ok=m[2].split(',').some(k=>v[k.trim()]===row[resolve(m[1],op)]);
       else if((m=part.match(/^(\S+?)\s*=\s*(:\S+)$/)))ok=row[resolve(m[1],op)]===v[m[2]];

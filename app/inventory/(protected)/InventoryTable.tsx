@@ -4,7 +4,9 @@ import { CategoryMultiSelect } from "../CategoryMultiSelect";
 import {productUpdatedAt} from "@/lib/inventory/productDates";
 import {inventoryCategoryIds} from "@/lib/inventory/categories";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import {InventoryPhotoPreview} from "./InventoryPhotoPreview";
+import {InlineNameInput} from "./InlineNameInput";
 import Link from "next/link";
 import type { CustomFieldDefinitionRow, InventoryListRow, MasterOption, StatusOption } from "@/lib/inventory/queries";
 import { INVENTORY_LIST_COLUMNS, MIN_COLUMN_WIDTH, dynamicColumnDefsFrom, type InventoryListColumnDef } from "@/lib/inventory/listColumns";
@@ -126,7 +128,7 @@ function renderReadOnlyCell(
       return <span className="block truncate font-mono text-[12px] text-gray-700">{row.displayId}</span>;
     case "name":
       return (
-        <span className="line-clamp-2 break-words font-medium leading-relaxed text-gray-900" title={row.name}>
+        <span className="inventory-product-name block whitespace-normal break-words font-medium leading-relaxed text-gray-900" title={row.name}>
           {row.name}
         </span>
       );
@@ -254,7 +256,7 @@ function renderEditableCell(
   switch (column) {
     case "name": {
       const value = getValue(row, "name") ?? row.name;
-      return <input disabled={saving} type="text" value={value} onChange={(e) => setValue(row.id, column, e.target.value)} className={inputClass} />;
+      return <InlineNameInput disabled={saving} value={value} onChange={value => setValue(row.id, column, value)} className={inputClass} />;
     }
     case "quantity": {
       const pending = getValue(row, "quantity");
@@ -361,6 +363,7 @@ function renderEditableCell(
  * row.
  */
 export function InventoryTable({ rows, categories, locations, categoriesById, locationsById, statusesById, customFieldDefs, listReturnQuery, photoThumbnails = {} }: InventoryTableProps) {
+  const [preview,setPreview]=useState<{id:string;name:string}|null>(null);
   const {density}=useInventoryListDensity();
   // 追加項目(CustomFieldDefinition)を動的な一覧列として扱う(夜間開発
   // 指示書 §11) — customFieldDefsが変わらない限りuseMemoで同じ配列参照
@@ -402,7 +405,7 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
       </div>
       <div className="hidden h-full overflow-auto md:block">
       {/* Keep configured widths as minima; let the product name use spare desktop space. */}
-      <table data-density={density} className={`border-collapse border-r border-gray-200 text-[13px] ${density==="compact"&&!directEditEnabled?"[&_tbody_.line-clamp-2]:line-clamp-1 [&_tbody_img]:!h-10 [&_tbody_img]:!w-[60px] [&_tbody_td]:!py-1":""}`} style={{ tableLayout: "fixed", width: "100%", minWidth: totalWidth }}>
+      <table data-density={density} className={`border-collapse border-r border-gray-200 text-[13px] ${density==="compact"&&!directEditEnabled?"[&_tbody_.inventory-product-name]:line-clamp-1 [&_tbody_img]:!h-10 [&_tbody_img]:!w-[60px] [&_tbody_td]:!py-1":""}`} style={{ tableLayout: "fixed", width: "100%", minWidth: totalWidth }}>
         <thead className="sticky top-0 z-10 bg-gray-50 text-[11px] text-gray-500">
           <tr className="border-b border-gray-200">
             {selection.editable&&<th style={{width:44}} className="px-3"><input type="checkbox" aria-label="このページを選択" checked={rows.every(row=>selection.selected.has(row.id))} ref={element=>{if(element)element.indeterminate=rows.some(row=>selection.selected.has(row.id))&&!rows.every(row=>selection.selected.has(row.id));}} onChange={()=>selection.toggleAll(rows.map(row=>row.id))} className="h-4 w-4 accent-teal-700" /></th>}
@@ -435,7 +438,11 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
                       style={{ width: col.key === "name" ? undefined : w, minWidth: col.key === "name" ? w : MIN_COLUMN_WIDTH }}
                       className={editable ? editableCell : RIGHT_ALIGN_COLUMNS.has(col.key) ? numCell : cell}
                     >
-                      {editable ? (
+                      {col.key==="image" ? (
+                        <button type="button" aria-label={row.name+"の写真を拡大"} title="写真を拡大" className="block rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-teal-700" onClick={()=>setPreview({id:row.id,name:row.name})}>
+                          {renderReadOnlyCell(col.key, row, categoriesById, locationsById, statusesById, photoThumbnails, rowIndex < 12 ? "eager" : "lazy")}
+                        </button>
+                      ) : editable ? (
                         // `editable` already confirmed col.key passes
                         // isInlineEditableColumn above — TS just can't
                         // track a type guard through an intermediate
@@ -457,6 +464,7 @@ export function InventoryTable({ rows, categories, locations, categoriesById, lo
         </tbody>
       </table>
       </div>
+      {preview&&<InventoryPhotoPreview key={preview.id} {...preview} onClose={()=>setPreview(null)}/>}
     </>
   );
 }

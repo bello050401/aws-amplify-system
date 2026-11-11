@@ -8,7 +8,7 @@ import {parseCustomFields,stringifyCustomFields} from '@/lib/inventory/customFie
 import {clearInventoryCountCache} from '@/lib/inventory/inventoryPage';
 import {getOutboundBatch,requireUuid,pendingArrivalInventoryIds} from './service';
 import {parseJsonField} from './types';
-import {isArrivalRow,arrivalFailureMessage,type ArrivalChange,type ArrivalPreview} from './arrivalTypes';
+import {isArrivalRow,arrivalSettled,arrivalFailureMessage,type ArrivalChange,type ArrivalPreview} from './arrivalTypes';
 import {sendOutboundTransaction} from './transactionRetry';
 
 async function masters(model:string){
@@ -20,16 +20,21 @@ async function masters(model:string){
 }
 
 export async function previewOutboundArrival(id:string):Promise<ArrivalPreview>{
- const batch=await getOutboundBatch(id),[categories,locations]=await Promise.all([masters('Category'),masters('Location')]);
- const items=[],otherPending=await pendingArrivalInventoryIds(id);
- for(const item of batch.rows.filter(r=>isArrivalRow(r)&&r.arrivalStatus!=='COMPLETED')){
+ const [batch,categories,locations,otherPending]=await Promise.all([getOutboundBatch(id),masters('Category'),masters('Location'),pendingArrivalInventoryIds(id)]);
+ const items:ArrivalPreview['items']=[];
+ const pending=batch.rows.filter(r=>isArrivalRow(r)&&!arrivalSettled(r.arrivalStatus));
+ // Bound parallel reads; the order and per-item validation remain unchanged.
+ for(let offset=0;offset<pending.length;offset+=8){
+ const results=await Promise.all(pending.slice(offset,offset+8).map(async item=>{
   const inventoryId=item.splitInventoryId??item.inventoryId,row=await getInventoryRaw(inventoryId);
   const error=!row||row.deletedAt||row.listingPartition==='MERGED'?'商品が削除・合算されています。商品と出庫履歴を確認してください。':
    row.outboundBatchId||row.outboundArrivalBatchId&&row.outboundArrivalBatchId!==id||otherPending.has(inventoryId)?'別の出庫でも到着確認待ちです。重複する出庫履歴を確認してください。':
    Number(row.quantity)!==item.snapshot.quantity?'出庫後に数量が変更されています。対象商品の数量を確認してください。':undefined;
   const categoryIds=inventoryCategoryIds(row??{});
-  items.push({rowId:item.id,inventoryId,sku:String(row?.sku??item.splitSku??item.snapshot.sku),name:String(row?.name??item.snapshot.name),quantity:item.snapshot.quantity,
-   updatedAt:String(row?.updatedAt??''),locationId:String(row?.locationId??''),categoryIds,defaultCategoryIds:categoryIds.filter(c=>c!==batch.categoryId),...(error?{error}:{})});
+  return {rowId:item.id,inventoryId,sku:String(row?.sku??item.splitSku??item.snapshot.sku),name:String(row?.name??item.snapshot.name),quantity:item.snapshot.quantity,
+   updatedAt:String(row?.updatedAt??''),locationId:String(row?.locationId??''),categoryIds,defaultCategoryIds:categoryIds.filter(c=>c!==batch.categoryId),...(error?{error}:{})};
+ }));
+ items.push(...results);
  }
  return {batch,items,categories,locations};
 }
@@ -38,6 +43,7 @@ export async function previewOutboundArrival(id:string):Promise<ArrivalPreview>{
 export async function confirmOutboundArrival(id:string,commandId:string,changes:ArrivalChange[],actor:string){
  requireUuid(commandId);
  let batch=await getOutboundBatch(id);
+ if(batch.arrivalStatus==='DISMISSED')return batch;
  if(batch.status!=='COMPLETED')throw Error('出庫の完了を確認してから到着確認を行ってください。');
  const arrivalRows=batch.rows.filter(isArrivalRow);
  if(!arrivalRows.length)throw Error('この履歴には到着確認待ちの商品がありません。');
@@ -66,8 +72,8 @@ export async function confirmOutboundArrival(id:string,commandId:string,changes:
   const plan=changes.map(c=>({rowId:c.rowId,inventoryId:c.inventoryId,expectedUpdatedAt:c.expectedUpdatedAt,locationId:c.locationId,categoryIds:c.categoryIds}));
   try{await db.send(new UpdateCommand({TableName:table('OutboundBatch'),Key:{id},
    UpdateExpression:'SET arrivalCommandId=:cmd, arrivalPlan=:plan, arrivalStatus=:applying, updatedAt=:now',
-   ConditionExpression:'#s=:completed AND '+(batch.arrivalCommandId?'arrivalCommandId=:old AND arrivalStatus=:partial':'attribute_not_exists(arrivalCommandId)'),
-   ExpressionAttributeNames:{'#s':'status'},ExpressionAttributeValues:{':completed':'COMPLETED',':cmd':commandId,':plan':JSON.stringify(plan),':applying':'APPLYING',':now':new Date().toISOString(),...(batch.arrivalCommandId?{':old':batch.arrivalCommandId,':partial':'PARTIAL'}:{})}}));
+   ConditionExpression:'#s=:completed AND (attribute_not_exists(arrivalStatus) OR arrivalStatus<>:dismissed) AND '+(batch.arrivalCommandId?'arrivalCommandId=:old AND arrivalStatus=:partial':'attribute_not_exists(arrivalCommandId)'),
+   ExpressionAttributeNames:{'#s':'status'},ExpressionAttributeValues:{':dismissed':'DISMISSED',':completed':'COMPLETED',':cmd':commandId,':plan':JSON.stringify(plan),':applying':'APPLYING',':now':new Date().toISOString(),...(batch.arrivalCommandId?{':old':batch.arrivalCommandId,':partial':'PARTIAL'}:{})}}));
   }catch{const fresh=await getOutboundBatch(id);if(fresh.arrivalCommandId!==commandId)throw Error('別の端末で到着確認が行われました。履歴を読み直してください。');}
  }else if(batch.arrivalStatus==='PARTIAL'){
   await db.send(new UpdateCommand({TableName:table('OutboundBatch'),Key:{id},UpdateExpression:'SET arrivalStatus=:applying',ConditionExpression:'arrivalCommandId=:cmd AND arrivalStatus=:partial',ExpressionAttributeValues:{':applying':'APPLYING',':cmd':commandId,':partial':'PARTIAL'}}));
@@ -116,6 +122,7 @@ export async function confirmOutboundArrival(id:string,commandId:string,changes:
 export async function confirmDefaultOutboundArrival(id:string,commandId:string,actor:string){
  requireUuid(id);requireUuid(commandId);
  const batch=await getOutboundBatch(id);
+ if(batch.arrivalStatus==='DISMISSED')return batch;
  if(batch.arrivalCommandId===commandId||batch.arrivalStatus==='APPLYING'||batch.arrivalStatus==='COMPLETED'){
   return confirmOutboundArrival(id,batch.arrivalCommandId??commandId,[],actor);
  }

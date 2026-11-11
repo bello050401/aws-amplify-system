@@ -14,7 +14,7 @@ import {assertOutboundEmailReady,sendOutboundEmail,isDefiniteEmailFailure} from 
 import {splitInventoryRecord,remainingInventoryFields,dispatchedCustomFields} from './splitInventory';
 import {nextSplitSku,prepareSplitPhotos,removeUnsentSplitPhotos} from './splitPhotos';
 import {preservesOutboundClassification} from './inventoryPolicy';
-import {arrivalStatus,isArrivalRow,type OutboundHistoryEntry} from './arrivalTypes';
+import {arrivalStatus,arrivalSettled,isArrivalRow,type OutboundHistoryEntry} from './arrivalTypes';
 
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export function requireUuid(id:unknown):asserts id is string {if(typeof id!=='string'||!uuid.test(id))throw new Error('対象を選び直してください。');}
@@ -41,11 +41,10 @@ async function destination(id:string) {
   return value;
 }
 export async function outboundProducts(destinationId:string):Promise<OutboundProduct[]> {
-  const dest=await destination(destinationId);
-  const waiting=await pendingArrivalInventoryIds();
+  const [dest,waiting,locationRows]=await Promise.all([destination(destinationId),pendingArrivalInventoryIds(),all('Location')]);
   const rows=(await all('Inventory',{expression:'attribute_not_exists(deletedAt) AND (contains(categoryIds,:cat) OR (attribute_not_exists(categoryIds) AND categoryId = :cat))',values:{':cat':dest.categoryId}}))
     .filter(row=>!row.outboundBatchId&&!row.outboundArrivalBatchId&&!waiting.has(row.id)&&row.listingPartition!=='MERGED'&&Number(row.quantity)>0);
-  const locations=new Map((await all('Location')).map(l=>[l.id,l.name]));
+  const locations=new Map(locationRows.map(l=>[l.id,l.name]));
   // Resolve the same signed thumbnails as the staff list, including PhotoStation assets.
   const thumbs=await inventoryThumbnails(rows.map(row=>({...row,...outboundThumbnailFields(row.images)})) as InventoryListRow[]);
   const byId=new Map(thumbs.map(t=>[t.id,t.thumbnailUrl]));
@@ -57,15 +56,18 @@ export async function pendingArrivalInventoryIds(excludeBatchId?:string){
  const ids=new Set<string>();
  for(const record of await all('OutboundItem')){
   const row={...record,snapshot:parseJsonField(record.snapshot,{})} as OutboundRow;
-  if(row.batchId!==excludeBatchId&&isArrivalRow(row)&&row.arrivalStatus!=='COMPLETED')ids.add(row.splitInventoryId??row.inventoryId);
+  if(row.batchId!==excludeBatchId&&isArrivalRow(row)&&!arrivalSettled(row.arrivalStatus))ids.add(row.splitInventoryId??row.inventoryId);
  }
  return ids;
 }
 export async function getOutboundBatch(id:string):Promise<OutboundBatch> {
   requireUuid(id);
-  const result=await db.send(new GetCommand({TableName:table('OutboundBatch'),Key:{id},ConsistentRead:true}));
+  const [result,items]=await Promise.all([
+    db.send(new GetCommand({TableName:table('OutboundBatch'),Key:{id},ConsistentRead:true})),
+    all('OutboundItem',{expression:'batchId = :id',values:{':id':id}})
+  ]);
   if(!result.Item)throw new Error('出庫履歴が見つかりません。');
-  const rows=(await all('OutboundItem',{expression:'batchId = :id',values:{':id':id}})).map(row=>({...row,snapshot:parseJsonField(row.snapshot,{} as OutboundProduct)}) as OutboundRow);
+  const rows=items.map(row=>({...row,snapshot:parseJsonField(row.snapshot,{} as OutboundProduct)}) as OutboundRow);
   return {...result.Item,template:parseJsonField(result.Item.template,DEFAULT_OUTBOUND_COLUMNS),rows:rows.sort((a,b)=>a.snapshot.sku.localeCompare(b.snapshot.sku))} as OutboundBatch;
 }
 export async function outboundHistory():Promise<OutboundHistoryEntry[]> {

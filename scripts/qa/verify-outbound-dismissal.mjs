@@ -1,0 +1,38 @@
+import assert from 'node:assert/strict';
+import {randomUUID} from 'node:crypto';
+import {createOutboundFixture} from './outbound-preserve-fixture.mjs';
+import {arrivalStatus,arrivalSettled} from '../../lib/outbound/arrivalTypes.ts';
+
+const f=createOutboundFixture();
+const prepared=await f.prepare(5);
+const sent=await f.api.emailOutbound(prepared.id,'QA');
+assert.equal(arrivalStatus(sent),'WAITING');
+assert.equal((await f.api.outboundProducts(f.destinationId)).length,0);
+const before=f.read('Inventory',f.itemId);
+f.put('OutboundBatch',{...f.read('OutboundBatch',sent.id),arrivalStatus:'DISMISSED'});
+for(const row of sent.rows)f.put('OutboundItem',{...f.read('OutboundItem',row.id),arrivalStatus:'DISMISSED'});
+const manuallyUpdated={...before,categoryIds:['sale'],categoryId:'sale',locationId:'kawagoe'};
+delete manuallyUpdated.outboundArrivalBatchId;
+f.put('Inventory',manuallyUpdated);
+assert.equal(arrivalStatus(await f.api.getOutboundBatch(sent.id)),'DISMISSED');
+assert.equal((await f.api.previewOutboundArrival(sent.id)).items.length,0);
+assert.equal((await f.api.confirmOutboundArrival(sent.id,randomUUID(),[],'QA')).arrivalStatus,'DISMISSED');
+assert.equal((await f.api.confirmDefaultOutboundArrival(sent.id,randomUUID(),'QA')).arrivalStatus,'DISMISSED');
+assert.deepEqual(f.read('Inventory',f.itemId),manuallyUpdated);
+assert.equal((await f.api.pendingArrivalInventoryIds()).size,0);
+assert.equal((await f.api.outboundHistory())[0].arrivalStatus,'DISMISSED');
+assert.ok(arrivalSettled('COMPLETED')&&arrivalSettled('DISMISSED')&&!arrivalSettled('WAITING'));
+console.log('PASS: manual dismissal is terminal; stale arrival actions never alter manually edited inventory; queue/history agree');
+
+const normal=createOutboundFixture();
+const batch=await normal.api.emailOutbound((await normal.prepare(3)).id,'QA');
+const preview=await normal.api.previewOutboundArrival(batch.id);
+const command=randomUUID();
+const changes=preview.items.map(row=>({rowId:row.rowId,inventoryId:row.inventoryId,expectedUpdatedAt:row.updatedAt,locationId:'kawagoe',categoryIds:['sale']}));
+await normal.api.confirmOutboundArrival(batch.id,command,changes,'QA');
+const child=normal.read('Inventory',batch.rows[0].splitInventoryId);
+assert.equal(child.quantity,3);assert.equal(child.locationId,'kawagoe');assert.deepEqual(child.categoryIds,['sale']);
+assert.equal(normal.read('Inventory',normal.itemId).quantity,2);
+await normal.api.confirmOutboundArrival(batch.id,command,changes,'QA');
+assert.deepEqual(normal.read('Inventory',child.id),child);
+console.log('PASS: normal partial dispatch 5=2+3, arrival, category preservation, and duplicate confirmation');

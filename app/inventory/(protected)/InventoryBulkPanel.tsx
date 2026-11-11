@@ -467,14 +467,14 @@ export function InventoryBulkControls({
   return (
     <>
       {selection.editable && !initialRequest && (
-        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b bg-white px-4 py-2" role="toolbar" aria-label="選択商品の操作">
+        <div className={"flex shrink-0 flex-wrap items-center gap-2 border-b bg-white px-4 "+(selectedCount?'py-2':'py-1')} role="toolbar" aria-label="選択商品の操作">
           <span className="mr-2 text-sm text-gray-500">{selectedCount ? selectedCount+'件選択中' : '行のチェックで商品を選択'}</span>
-          <button type="button" className={primaryButton} disabled={disabled} onClick={()=>launch('edit')}>選択商品を編集</button>
+          {selectedCount>0&&<><button type="button" className={primaryButton} disabled={disabled} onClick={()=>launch('edit')}>選択商品を編集</button>
           <button type="button" className={button} disabled={disabled} onClick={()=>launch('undo')}>戻る</button>
           <button type="button" className={button} disabled={disabled} onClick={()=>launch('redo')}>進む</button>
-          <button type="button" className={button} disabled={disabled} onClick={()=>void recent()}>変更履歴</button>
+          <button type="button" className={button} disabled={disabled} onClick={()=>void recent()}>変更履歴</button></>}
           {selectedCount>0&&<button type="button" className="min-h-11 px-3 text-sm text-gray-600 underline" disabled={busy} onClick={selection.clear}>選択解除</button>}
-          <button type="button" className={button+' ml-auto'} disabled={busy} onClick={resume}>前回の操作結果</button>
+          <button type="button" className={selectedCount?button+' ml-auto':'ml-auto min-h-8 rounded px-3 text-xs text-gray-600 underline hover:bg-gray-50'} disabled={busy} onClick={resume}>前回の操作結果</button>
           {direct.dirtyCount>0&&<span className="text-xs text-amber-800">編集中の内容を保存またはキャンセルしてください</span>}
           {error&&!open&&<span role="alert" className="text-sm text-red-700">{error}</span>}
         </div>
