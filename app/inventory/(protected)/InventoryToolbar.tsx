@@ -214,7 +214,7 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
   latestSearch.current=executeSearch;
 
   return (
-    <div className="flex w-full flex-wrap items-center justify-between gap-4">
+    <div className="flex w-full flex-wrap items-center justify-between gap-x-5 gap-y-3 [&_button]:min-h-9 [&_a]:min-h-9 [&_a]:inline-flex [&_a]:items-center">
       <span ref={searchMetric} hidden data-inventory-search-measurement="paint" />
       <div className="flex items-center gap-4">
         {/* 1. ページタイトル — 「在庫一覧＋件数」を薄いborderで囲み、1つ
@@ -271,7 +271,7 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
               onCompositionEnd={e=>{composing.current=false;setSearchText(e.currentTarget.value);scheduleSearch(e.currentTarget.value);}}
               onKeyDown={e=>{if(e.key==='Enter'&&(composing.current||e.nativeEvent.isComposing||e.keyCode===229))e.preventDefault();}}
               placeholder="商品を検索"
-              className="w-28 border-none px-1.5 py-1 text-[13px] outline-none placeholder:text-gray-400 md:w-48"
+              className="w-40 border-none px-2 py-2 text-sm outline-none placeholder:text-gray-400 md:w-56"
             />
             <button
               type="submit"
@@ -303,7 +303,7 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
         </div>
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         {/* 3. 主要操作 — 検索グループとは間隔で分ける。 */}
         {canEdit ? (
           <>

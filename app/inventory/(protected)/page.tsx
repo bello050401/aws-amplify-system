@@ -142,6 +142,11 @@ export default async function InventoryListPage(props: InventoryListPageProps) {
           {offset,limit},{...filters,q:searchParams.q,sort})
       : null;
   earlyAdvancedPromise?.catch(() => {});
+  // Start thumbnail signing while masters load, using only authorized rows.
+  const earlyRowsPromise = quickSearchPromise ?? earlyAdvancedPromise ?? plainPagePromise;
+  const earlyImagesPromise = earlyRowsPromise?.then(result => withListImageUrls(result.items));
+  earlyImagesPromise?.catch(() => {});
+
 
   const [categories, locations, statuses, customFieldDefs] = await Promise.all([
     listCategories(),
@@ -179,7 +184,7 @@ export default async function InventoryListPage(props: InventoryListPageProps) {
           : null;
 
   const dataReadyAt = performance.now();
-  const signedRows = await withListImageUrls(listResult ? listResult.items : pagedResult!.items);
+  const signedRows = earlyImagesPromise && !fallbackNeeded ? await earlyImagesPromise : await withListImageUrls(listResult ? listResult.items : pagedResult!.items);
   const rows = signedRows.map(browserListRow);
   const timing = {
     auth: Math.round(authorizedAt - started),

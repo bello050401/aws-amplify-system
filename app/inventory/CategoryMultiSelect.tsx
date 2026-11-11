@@ -2,8 +2,8 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
-export function CategoryMultiSelect({ value, onChange, options, compact = false, disabled = false }: {
-  value: string[]; onChange: (ids: string[]) => void; options: { id: string; name: string }[]; compact?: boolean; disabled?: boolean;
+export function CategoryMultiSelect({ value, onChange, options, compact = false, disabled = false, label = "カテゴリ（複数選択）" }: {
+  value: string[]; onChange: (ids: string[]) => void; options: { id: string; name: string }[]; compact?: boolean; disabled?: boolean; label?:string;
 }) {
   const [open, setOpen] = useState(false), [query, setQuery] = useState(''), [draft, setDraft] = useState<string[]>([]);
   const trigger = useRef<HTMLButtonElement>(null), panel = useRef<HTMLDivElement>(null), search = useRef<HTMLInputElement>(null), id = useId();
@@ -29,8 +29,8 @@ export function CategoryMultiSelect({ value, onChange, options, compact = false,
   </span>)}</span>;
   return <div className="min-w-0">
     {!compact && <span className="mb-1 block text-sm text-gray-600">カテゴリ（複数選択）</span>}
-    <button ref={trigger} type="button" disabled={disabled} aria-label="カテゴリ（複数選択）" aria-haspopup="dialog" aria-expanded={open} aria-controls={id}
-      onClick={() => { setDraft([...value]); setOpen(true); }} className="flex min-h-10 w-full items-center justify-between gap-2 rounded border border-gray-300 bg-white px-2 py-1.5 text-left disabled:opacity-50">
+    <button ref={trigger} type="button" disabled={disabled} aria-label={label} aria-haspopup="dialog" aria-expanded={open} aria-controls={id}
+      onClick={() => { setDraft([...value]); setOpen(true); }} className="flex min-h-11 w-full items-center justify-between gap-2 rounded border border-gray-300 bg-white px-2 py-1.5 text-left disabled:opacity-50">
       {value.length ? chips(value) : <span className="text-sm text-gray-500">カテゴリを選択</span>}<span aria-hidden>⌄</span>
     </button>
     {open && createPortal(<div className="fixed inset-0 z-[100] bg-black/10" onClick={event => {
@@ -46,12 +46,12 @@ export function CategoryMultiSelect({ value, onChange, options, compact = false,
       }}>
       <h3 id={id + '-title'} className="mb-3 font-semibold">カテゴリを選択</h3>
       <div className="mb-3 max-h-24 overflow-auto">{chips(draft, toggle)}</div>
-      <input ref={search} aria-label="カテゴリを検索" value={query} onChange={e => setQuery(e.target.value)} placeholder="カテゴリを検索" className="mb-2 min-h-10 w-full rounded border px-3" />
+      <input ref={search} aria-label="カテゴリを検索" value={query} onChange={e => setQuery(e.target.value)} placeholder="カテゴリを検索" className="mb-2 min-h-11 w-full rounded border px-3 text-base" />
       <div className="min-h-0 flex-1 overflow-y-auto">{options.filter(o => o.name.normalize('NFKC').toLowerCase().includes(query.normalize('NFKC').toLowerCase())).map(o =>
         <label key={o.id} className="flex min-h-11 cursor-pointer items-center gap-3 rounded px-2 hover:bg-teal-50"><input type="checkbox" checked={draft.includes(o.id)} onChange={() => toggle(o.id)} className="h-4 w-4 accent-teal-700" />{o.name}</label>)}</div>
       <div className="mt-3 flex items-center justify-between gap-2 border-t pt-3"><span className="text-xs text-gray-500">{draft.length}件選択</span>
-        <button type="button" className="min-h-10 rounded border px-3 text-sm" onClick={close}>キャンセル</button>
-        <button type="button" disabled={draft.length > 20} className="min-h-10 rounded bg-teal-800 px-5 text-sm text-white disabled:opacity-50" onClick={() => { onChange([...draft]); close(); }}>保存</button>
+        <button type="button" className="min-h-11 rounded border px-3 text-sm" onClick={close}>キャンセル</button>
+        <button type="button" disabled={draft.length > 20} className="min-h-11 rounded bg-teal-800 px-5 text-sm text-white disabled:opacity-50" onClick={() => { onChange([...draft]); close(); }}>保存</button>
       </div>
       {draft.length > 20 && <p role="alert" className="mt-2 text-sm text-red-700">20個以内で選択してください。</p>}
     </div></div>, document.body)}

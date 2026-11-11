@@ -143,7 +143,7 @@ function renderReadOnlyCell(
     case "category": {
       const categoryNames = inventoryCategoryIds(row).map(id=>categoriesById[id]?.name).filter(Boolean);
       return (
-        <span className="block truncate text-gray-600" title={categoryNames.join("、")}>
+        <span className="block whitespace-normal break-words text-xs leading-5 text-gray-600" title={categoryNames.join("、")}>
           {categoryNames.join(" / ") || "-"}
         </span>
       );

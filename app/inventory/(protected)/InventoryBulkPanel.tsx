@@ -1,4 +1,5 @@
 "use client";
+import type {SelectionRequest} from '@/lib/inventory/selectionRequest';
 import {inventoryEditErrorMessage} from '@/lib/inventory/editErrorMessage';
 import {inventoryFieldLabel} from '@/lib/inventory/fieldLabel';
 import {internalInventoryField} from '@/lib/inventory/humanEdits';
@@ -32,10 +33,10 @@ import type {
 } from "@/lib/inventory/editJobsCore";
 
 const button =
-  "min-h-10 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium disabled:opacity-40";
-const primaryButton = "min-h-10 rounded-lg border border-teal-800 bg-teal-800 px-3 py-2 text-sm font-medium text-white disabled:opacity-40";
+  "min-h-11 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium disabled:opacity-40";
+const primaryButton = "min-h-11 rounded-lg border border-teal-800 bg-teal-800 px-3 py-2 text-sm font-medium text-white disabled:opacity-40";
 const input =
-  "min-h-10 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm";
+  "min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-base md:text-sm";
 const emptyRules = (): InventoryEditRules => ({
   categories: { mode: "keep" },
   names: [],
@@ -196,11 +197,19 @@ export function InventoryBulkControls({
   locations=[],
   customFieldDefs=[],
   embedded=false,
+  initialRequest,
+  onDismiss,
+  onSaved,
+  onWorking,
 }: {
   categories: { id: string; name: string }[];
   locations?: { id: string; name: string }[];
   customFieldDefs?: (Pick<InlineCustomDefinition,'fieldKey'|'label'> & Partial<InlineCustomDefinition>)[];
   embedded?:boolean;
+  initialRequest?: SelectionRequest;
+  onDismiss?:()=>void;
+  onSaved?:(ids:string[])=>void;
+  onWorking?:(working:boolean)=>void;
 }) {
   const selection = useInventorySelection(),
     direct = useDirectEdit(),
@@ -224,7 +233,7 @@ export function InventoryBulkControls({
     Awaited<ReturnType<typeof inventoryEditSelection>>
   >([]);
   useEffect(() => {
-    if (!open) return;
+    if (!open || history) return;
     let stale = false;
     inventoryEditSelection(targetIds)
       .then((rows) => {
@@ -239,9 +248,10 @@ export function InventoryBulkControls({
     return () => {
       stale = true;
     };
-  }, [open, targetIds]);
+  }, [open, targetIds, Boolean(history)]);
   const panel = useRef<HTMLDivElement>(null),
     lock = useRef(false),
+    applyInFlight = useRef(false),
     completed = useRef(""),
     previewAttempt = useRef<string | null>(null);
   const running = job?.state === "PREPARING" || job?.state === "APPLYING";
@@ -266,17 +276,18 @@ export function InventoryBulkControls({
       setOpen(false);
       return;
     }
-    if (unsaved) guardedAction(() => setOpen(false));
-    else setOpen(false);
+    const dismiss=()=>{setOpen(false);onDismiss?.();};
+    if (unsaved) guardedAction(dismiss);
+    else dismiss();
   }
-  function launch(next: EditJobMode) {
+  function launch(next: EditJobMode, ids = [...selection.selected]) {
     setMode(next);
     setRules(emptyRules());
     setJob(null);
     setRows([]);
     setError("");
     setHistory(null);
-    setTargetIds([...selection.selected]);
+    setTargetIds(ids);
     setTargetOperationId(undefined);
     setPage(0);
     setOpen(true);
@@ -325,13 +336,15 @@ export function InventoryBulkControls({
     if (open) panel.current?.focus();
   }, [open]);
   useEffect(() => {
-    if (!job || !running) return;
+    if (!job || (!running && (!['DONE','CANCELLED','FAILED'].includes(job.state) || completed.current === job.id))) return;
     let stopped = false,
       timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
       try {
         const result = await inventoryEditJobStatus(job.id);
         if (stopped) return;
+        if (result.job.state==='READY' && job.state==='APPLYING' && applyInFlight.current) {timer=setTimeout(poll,300);return;}
+        if (result.job.state==='READY' && job.state==='APPLYING') {setError('適用が完了していません。内容を確認して再実行してください。');onWorking?.(false);}
         setJob(result.job);
         setRows(result.rows);
         if (["DONE", "CANCELLED", "FAILED"].includes(result.job.state)) {
@@ -342,7 +355,9 @@ export function InventoryBulkControls({
           }
           if (completed.current !== job.id) {
             completed.current = job.id;
-            router.refresh();
+            if (result.rows.some(r=>r.state==="SAVED")) onSaved?.(result.rows.filter(r=>r.state==="SAVED").map(r=>r.id));
+            onWorking?.(false);
+            if (!embedded) router.refresh();
           }
         } else timer = setTimeout(poll, 1000);
       } catch (cause) {
@@ -361,17 +376,24 @@ export function InventoryBulkControls({
     };
     // Selection changes on completion must not restart polling.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [job?.id, running]);
-  async function recent() {
+  }, [job?.id, job?.state]);
+  async function recent(ids = [...selection.selected]) {
     await action(async () => {
-      setHistory(await inventoryRecentHistory([...selection.selected]));
-      setTargetIds([...selection.selected]);
+      setHistory(await inventoryRecentHistory(ids));
+      setTargetIds(ids);
       setOpen(true);
       setJob(null);
       setRows([]);
       setRules(emptyRules());
     });
   }
+  const launchedRequest = useRef<string | null>(null);
+  useEffect(()=>{
+    if (!initialRequest || launchedRequest.current===initialRequest.requestId || !selection.editable) return;
+    launchedRequest.current=initialRequest.requestId;
+    if(initialRequest.mode==='history') void recent(initialRequest.ids);
+    else launch(initialRequest.mode,initialRequest.ids);
+  },[initialRequest,selection.editable]);
   async function resume() {
     const id = localStorage.getItem("bello.inventory.lastEditJob");
     if (!id) {
@@ -441,78 +463,23 @@ export function InventoryBulkControls({
         : typeof value === "object"
           ? JSON.stringify(value)
           : String(value);
-  const disabled = !selectedCount || direct.dirtyCount > 0 || busy;
+  const disabled = !selectedCount || direct.dirtyCount > 0 || busy || running;
   return (
     <>
-      {selection.editable && (
-        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b bg-white px-4 py-2">
-          <button
-            type="button"
-            className={button}
-            disabled={disabled}
-            onClick={() => launch("undo")}
-          >
-            戻る
-          </button>
-          <button
-            type="button"
-            className={button}
-            disabled={disabled}
-            onClick={() => launch("redo")}
-          >
-            進む
-          </button>
-          <button
-            type="button"
-            className={button}
-            disabled={disabled}
-            onClick={recent}
-          >
-            変更履歴
-          </button>
-          <button
-            type="button"
-            className={button + " ml-auto"}
-            disabled={busy}
-            onClick={resume}
-          >
-            前回の操作結果
-          </button>
-          <span className="text-xs text-gray-500">
-            {direct.dirtyCount
-              ? "編集中の内容を保存またはキャンセルしてください"
-              : selectedCount
-                ? `${selectedCount}件が対象です`
-                : "商品を選択してください"}
-          </span>
-          {error && !open && (
-            <span role="alert" className="text-sm text-red-700">
-              {error}
-            </span>
-          )}
+      {selection.editable && !initialRequest && (
+        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b bg-white px-4 py-2" role="toolbar" aria-label="選択商品の操作">
+          <span className="mr-2 text-sm text-gray-500">{selectedCount ? selectedCount+'件選択中' : '行のチェックで商品を選択'}</span>
+          <button type="button" className={primaryButton} disabled={disabled} onClick={()=>launch('edit')}>選択商品を編集</button>
+          <button type="button" className={button} disabled={disabled} onClick={()=>launch('undo')}>戻る</button>
+          <button type="button" className={button} disabled={disabled} onClick={()=>launch('redo')}>進む</button>
+          <button type="button" className={button} disabled={disabled} onClick={()=>void recent()}>変更履歴</button>
+          {selectedCount>0&&<button type="button" className="min-h-11 px-3 text-sm text-gray-600 underline" disabled={busy} onClick={selection.clear}>選択解除</button>}
+          <button type="button" className={button+' ml-auto'} disabled={busy} onClick={resume}>前回の操作結果</button>
+          {direct.dirtyCount>0&&<span className="text-xs text-amber-800">編集中の内容を保存またはキャンセルしてください</span>}
+          {error&&!open&&<span role="alert" className="text-sm text-red-700">{error}</span>}
         </div>
       )}
-      {selection.editable && selectedCount > 0 && (
-        <div className={(embedded?'fixed bottom-0 left-0 right-0':'fixed bottom-14 left-0 right-0 md:bottom-0 md:left-14')+' z-40 flex min-h-16 items-center gap-3 border-t border-teal-200 bg-teal-50 px-4 py-3'}>
-          <strong>{selectedCount}件選択中</strong>
-          <button
-            type="button"
-            className={primaryButton}
-            disabled={disabled}
-            onClick={() => launch("edit")}
-          >
-            一括編集
-          </button>
-          <button
-            type="button"
-            className={button}
-            onClick={selection.clear}
-            disabled={busy}
-          >
-            選択解除
-          </button>
-        </div>
-      )}
+      {initialRequest&&!open&&<div className="space-y-4 p-4"><p className="text-sm">{targetIds.length}件の商品を選択しています。</p><button type="button" className={button} onClick={()=>setOpen(true)}>処理結果を確認</button>{error&&<p role="alert">{error}</p>}</div>}
       {open &&
         createPortal(
           <div
@@ -527,7 +494,7 @@ export function InventoryBulkControls({
               aria-modal="true"
               aria-labelledby="bulk-title"
               tabIndex={-1}
-              className="absolute inset-y-0 right-0 flex w-full flex-col bg-slate-50 shadow-xl md:w-[min(900px,85vw)]"
+              className={"absolute inset-y-0 right-0 flex w-full flex-col bg-slate-50 shadow-xl "+(embedded?"":"md:w-[min(900px,85vw)]")}
               onKeyDown={(e) => {
                 if (e.key === "Escape") {
                   e.stopPropagation();
@@ -538,7 +505,7 @@ export function InventoryBulkControls({
                     panel.current?.querySelectorAll<HTMLElement>(
                       'button:not(:disabled),input:not(:disabled),select:not(:disabled),[tabindex="0"]',
                     ) ?? [],
-                  );
+                  ).filter(element=>element.offsetParent!==null);
                   if (e.shiftKey && document.activeElement === all[0]) {
                     e.preventDefault();
                     all.at(-1)?.focus();
@@ -552,7 +519,7 @@ export function InventoryBulkControls({
                 }
               }}
             >
-              <header className="flex items-center justify-between border-b bg-white px-5 py-4">
+              <header className={embedded?"hidden":"flex items-center justify-between border-b bg-white px-5 py-4"}>
                 <div>
                   <h2 id="bulk-title" className="text-lg font-semibold">
                     {history
@@ -561,7 +528,7 @@ export function InventoryBulkControls({
                         ? "保存済みの変更を戻す"
                         : mode === "redo"
                           ? "戻した変更を進める"
-                          : "在庫を一括編集"}
+                          : targetIds.length===1 ? "商品を編集" : "選択商品をまとめて編集"}
                   </h2>
                   <p className="mt-1 text-sm text-gray-500">
                     対象 {targetIds.length}件
@@ -730,6 +697,7 @@ export function InventoryBulkControls({
                                 </p>
                                 <CategoryMultiSelect
                                   compact
+                                  label="追加するカテゴリ"
                                   value={rules.categories.add}
                                   options={categories}
                                   onChange={(add) => {
@@ -750,6 +718,7 @@ export function InventoryBulkControls({
                                 </p>
                                 <CategoryMultiSelect
                                   compact
+                                  label="解除するカテゴリ"
                                   value={rules.categories.remove}
                                   options={categories}
                                   onChange={(remove) => {
@@ -956,7 +925,7 @@ export function InventoryBulkControls({
                           {running && (
                             <p className="mt-2 text-sm text-gray-500">
                               {rows.length} / {job.count}
-                              件を確認。画面を閉じても「前回の操作結果」から確認できます。
+                              件を確認。{embedded ? '一覧に戻っても処理は続きます。結果の確認ボタンから戻れます。' : '画面を閉じても「前回の操作結果」から確認できます。'}
                             </p>
                           )}
                         </div>
@@ -1114,7 +1083,12 @@ export function InventoryBulkControls({
                         disabled={busy || !!pendingErrors.length || !changed}
                         onClick={() =>
                           action(async () => {
-                            setJob(await applyInventoryEdits(job.id));
+                            // Poll even if the apply response is lost after the server accepted it.
+                            applyInFlight.current=true;
+                            onWorking?.(true);
+                            setJob({...job,state:'APPLYING'});
+                            try {setJob(await applyInventoryEdits(job.id));}
+                            finally {applyInFlight.current=false;}
                           })
                         }
                       >

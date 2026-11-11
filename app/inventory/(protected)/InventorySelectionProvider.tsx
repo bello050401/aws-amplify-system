@@ -1,7 +1,7 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
-import { createContext, useCallback, useContext, useMemo, useState, useEffect } from "react";
+import { createContext, useCallback, useContext, useMemo, useState, useEffect, useRef } from "react";
 
 /** Selection is keyed by immutable product IDs and survives pagination. Only filter changes clear it. */
 interface InventorySelectionContextValue {
@@ -16,12 +16,13 @@ interface InventorySelectionContextValue {
 
 const InventorySelectionContext = createContext<InventorySelectionContextValue | null>(null);
 
-export function InventorySelectionProvider({ children, editable }: { children: React.ReactNode; editable:boolean }) {
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+export function InventorySelectionProvider({ children, editable, initialIds=[] }: { children: React.ReactNode; editable:boolean; initialIds?:string[] }) {
+  const [selected, setSelected] = useState<Set<string>>(()=>new Set(initialIds));
 
   const params=useSearchParams();
   const filterKey=JSON.stringify([params.get("q"),params.get("categoryIds"),params.get("locationId"),params.get("statusId"),params.get("adv")]);
-  useEffect(()=>{setSelected(new Set());},[filterKey]);
+  const previousFilter=useRef(filterKey);
+  useEffect(()=>{if(previousFilter.current!==filterKey){previousFilter.current=filterKey;setSelected(new Set());}},[filterKey]);
   const remove=useCallback((ids:string[])=>setSelected(prev=>new Set([...prev].filter(id=>!ids.includes(id)))),[]);
   const isSelected = useCallback((id: string) => selected.has(id), [selected]);
 
@@ -45,7 +46,7 @@ export function InventorySelectionProvider({ children, editable }: { children: R
 
   const value = useMemo(() => ({ selected, isSelected, toggle, toggleAll, clear, remove, editable }), [selected, isSelected, toggle, toggleAll, clear, remove, editable]);
 
-  return <InventorySelectionContext.Provider value={value}><div className="contents" style={{"--inventory-selection-space": selected.size?"76px":"0px"} as React.CSSProperties}>{children}</div></InventorySelectionContext.Provider>;
+  return <InventorySelectionContext.Provider value={value}><div className="contents" style={{"--inventory-selection-space": "0px"} as React.CSSProperties}>{children}</div></InventorySelectionContext.Provider>;
 }
 
 export function useInventorySelection(): InventorySelectionContextValue {
