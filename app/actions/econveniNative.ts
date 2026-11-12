@@ -1,6 +1,7 @@
 'use server';
 import {canEditInventory,getInventoryRole,getCurrentInventoryUserSub} from '@/lib/amplify/requireInventoryUser';
-import {reviewNative,enqueueNative,nativeJobStatus,nativeShared,wakeNative,recheckNative} from '@/lib/listing/econveni/nativeQueue';
+import {reviewNative,enqueueNative,nativeJobStatus,nativeShared,recheckNative} from '@/lib/listing/econveni/nativeQueue';
+import {wakeNative} from '@/lib/listing/econveni/nativeWake';
 import type {NativeRequest} from '@/lib/listing/econveni/nativeModel';
 async function authorize(){const [role,actor]=await Promise.all([getInventoryRole(),getCurrentInventoryUserSub()]);if(!actor||!canEditInventory(role))throw Error('編集権限のあるアカウントでログインしてください。');return actor;}
 function validate(r:NativeRequest){if(!/^[a-f0-9-]{36}$/i.test(r.inventoryId??'')||!/^\d{1,15}$/.test(r.productId??'')||!['BASE','YAHOO','MERCARI_SHOPS'].includes(r.channel)||!['PUBLISH','CLEAR','STOP'].includes(r.operation))throw Error('商品と操作を確認してください。');}
@@ -19,7 +20,7 @@ export async function enqueueEconveniNativeBatchAction(requests:Parameters<typeo
  if(results.some(r=>r.ok))await wakeNative();return results;
 }
 export async function enqueueEconveniNativeAction(request:NativeRequest&{requestId:string;fingerprint:string;inventoryVersion:string;confirmed:boolean;terms:boolean}){
- try{const actor=await authorize();validate(request);const j=await enqueueNative(request,actor);return {ok:true as const,id:j.id};}catch(e){return {ok:false as const,message:message(e)};}
+ try{const actor=await authorize();validate(request);const j=await enqueueNative(request,actor);await wakeNative();return {ok:true as const,id:j.id};}catch(e){return {ok:false as const,message:message(e)};}
 }
 export async function econveniNativeStatusAction(ids:string[]){await authorize();return nativeJobStatus(ids);}
-export async function recheckEconveniNativeAction(id:string){await authorize();try{return {ok:true,message:await recheckNative(id)};}catch(e){return {ok:false,message:message(e)};}}
+export async function recheckEconveniNativeAction(id:string){await authorize();try{const result=await recheckNative(id);await wakeNative();return {ok:true,message:result};}catch(e){return {ok:false,message:message(e)};}}

@@ -2,8 +2,6 @@ import 'server-only';
 import {randomUUID,createHash} from 'node:crypto';
 import {BatchGetCommand,GetCommand,PutCommand,QueryCommand,ScanCommand,TransactWriteCommand} from '@aws-sdk/lib-dynamodb';
 import {CognitoIdentityProviderClient,AdminGetUserCommand,AdminListGroupsForUserCommand} from '@aws-sdk/client-cognito-identity-provider';
-import {LambdaClient,InvokeCommand} from '@aws-sdk/client-lambda';
-import outputs from '../../../amplify_outputs.json';
 import {candidateConfig} from '@/lib/saleCandidates/store';
 import {getInventoryRaw,inventoryTable} from '@/lib/inventory/categoryPersistence';
 import {parseCustomFields} from '@/lib/inventory/customFieldsCodecCore';
@@ -70,12 +68,7 @@ export async function enqueueNative(r:NativeRequest&{requestId:string;fingerprin
   {Put:{TableName:table,Item:{...targetKey(r),jobId:id,active:true},ConditionExpression:'attribute_not_exists(active) OR active=:no',ExpressionAttributeValues:{':no':false}}},
   {ConditionCheck:{TableName:inventoryTable('Inventory'),Key:{id:r.inventoryId},ConditionExpression:'updatedAt=:v',ExpressionAttributeValues:{':v':r.inventoryVersion}}}
  ]}));}catch{const saved=await getJob(id);if(saved?.actor===actor)return saved;throw Error('この販売先は処理中か、商品が変更されました。処理結果を確認してください。');}
- if(!shared)await wakeNative();
  return job;
-}
-export async function wakeNative(){
- const fn=(outputs.custom as {saleAutomation?:{functionName?:string}})?.saleAutomation?.functionName;
- if(fn)try{await new LambdaClient({region:process.env.AWS_REGION||'us-west-2',maxAttempts:1}).send(new InvokeCommand({FunctionName:fn,InvocationType:'Event',Payload:Buffer.from('{"mode":"EC_NATIVE"}')}),{abortSignal:AbortSignal.timeout(1200)});}catch{/* Minute scheduler recovers lost wake-up. */}
 }
 export async function nativeJobStatus(ids:string[]){
  const keys=[...new Set(ids)].filter(id=>/^EC_NATIVE:[-a-zA-Z0-9]{8,80}$/.test(id)).slice(0,100).map(id=>({id}));
@@ -89,11 +82,11 @@ export async function recheckNative(id:string){
  if(!/^EC_NATIVE:[-a-zA-Z0-9]{8,80}$/.test(id))throw Error('処理番号を確認してください。');
  const job=await getJob(id);if(!job||job.state!=='EC_NATIVE_ATTENTION')return;
  const receipt=(await db.send(new GetCommand({TableName:table,Key:{pk:'ECONVENI#NATIVE_RECEIPT#'+id},ConsistentRead:true}))).Item;
- if(receipt){job.nextAt=0;await saveJob(job,'SENDING');await wakeNative();}
+ if(receipt){job.nextAt=0;await saveJob(job,'SENDING');}
  else{await db.send(new PutCommand({TableName:table,Item:{...targetKey(job),jobId:id,active:false},ConditionExpression:'jobId=:id',ExpressionAttributeValues:{':id':id}}));return '外部への送信前に停止した処理です。内容を確認して操作し直してください。';}
 }
 async function authorized(actor:string){
- const users=new CognitoIdentityProviderClient({region:process.env.AWS_REGION||'us-west-2'}),input={UserPoolId:process.env.USER_POOL_ID||outputs.auth.user_pool_id,Username:actor};
+ const users=new CognitoIdentityProviderClient({region:process.env.AWS_REGION||'us-west-2'}),input={UserPoolId:process.env.USER_POOL_ID,Username:actor};
  const [u,g]=await Promise.all([users.send(new AdminGetUserCommand(input)),users.send(new AdminListGroupsForUserCommand(input))]);
  return u.Enabled===true&&!!g.Groups?.some(x=>['Admins','ADMIN','EDITOR'].includes(x.GroupName??''));
 }
