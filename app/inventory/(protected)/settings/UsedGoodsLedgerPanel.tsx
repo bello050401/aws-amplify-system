@@ -44,8 +44,8 @@ export function UsedGoodsLedgerPanel() {
     <div className="space-y-1 text-sm text-gray-600">
       <p>受入れは「取引の年月日」、払出しは「販売終了日」が対象年に入る記録を出力します。</p>
       <p>同じ日・同じ仕入先を1行にまとめ、合計金額を表示します。購入金額と送料を合算し、登録済みの日次合計やヤフオクの送料を重複加算しません。</p>
-      <p>品目は分類・カテゴリ・商品名をまとめて表示します。商品ごとの特徴は「商品別明細」に残します。数量分割したページは仕入れを重複計上しません。</p>
-      <p>未記録の情報は空欄です。「確認事項」には不足項目と、取引日が未登録の記録（全期間）を表示します。</p>
+      <p>品目は商品名と商品分類から整理し、販売状態や社内メモを除きます。商品名・特徴・金額の根拠は「商品別明細」に保存します。</p>
+      <p>備考の仕入合計や「履歴あり」の住所も照合します。記録同士が矛盾する場合や元情報がない場合だけ、照合結果に理由を残します。</p>
     </div>
     {ledger&&<>
       <div className="flex flex-wrap items-center gap-4 text-sm">
@@ -57,8 +57,8 @@ export function UsedGoodsLedgerPanel() {
         {(['summary','rows','issues'] as const).map(tab=><button key={tab} type="button" onClick={()=>{setView(tab);setPage(0);}} aria-pressed={view===tab} className={`px-4 py-3 text-sm ${view===tab?'border-b-2 border-gray-900 font-bold':'text-gray-500'}`}>{tab==='summary'?'日付・仕入先別':tab==='rows'?'商品別明細':`確認事項（${ledger.issues.length}件）`}</button>)}
       </div>
       {view==='summary'&&<div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-200 bg-gray-50 p-4 text-sm">
-        <div><strong>金額確定 {ledger.supplierDays.length-amountMissing}組 ／ 金額要確認 {amountMissing}組</strong><p className="mt-1 text-gray-600">購入単価しかなく商品別の仕入数量が分からない記録は、現在庫数で計算せず合計を空欄にします。</p></div>
-        <label className="flex items-center gap-2"><input type="checkbox" checked={amountReviewOnly} onChange={e=>{setAmountReviewOnly(e.target.checked);setPage(0);}} />金額要確認のみ表示</label>
+        <div><strong>金額集計済み {ledger.supplierDays.length-amountMissing}組 ／ 元記録の不足・不一致 {amountMissing}組</strong><p className="mt-1 text-gray-600">在庫の購入価格・送料・備考を照合して集計します。合計の計算方法は各行に表示します。</p></div>
+        <label className="flex items-center gap-2"><input type="checkbox" checked={amountReviewOnly} onChange={e=>{setAmountReviewOnly(e.target.checked);setPage(0);}} />不足・不一致のみ表示</label>
       </div>}
       {view==='rows'&&<label className="flex items-center gap-3 text-sm">表示する記録<select aria-label="表示する記録" value={direction} onChange={e=>{setDirection(e.target.value);setPage(0);}} className="rounded border border-gray-300 bg-white px-3 py-2"><option value="受入れ">受入れ（仕入れ）</option><option value="払出し">払出し（売却）</option></select></label>}
       <div className="max-h-[60vh] overflow-auto rounded-lg border border-gray-200">

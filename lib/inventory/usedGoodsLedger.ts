@@ -1,3 +1,4 @@
+import {ledgerAddressPlaceholder,ledgerDescription,ledgerFeature,ledgerPublicName,legacyRecordedAmount,purchaseMemo,resolveLedgerSources} from './usedGoodsLedgerEvidence';
 /** Read-only ledger projection. Never infer acquisition quantities from current stock. */
 export type LedgerSource = Record<string, unknown>;
 export interface UsedGoodsLedgerRow {
@@ -8,6 +9,7 @@ export interface UsedGoodsLedgerRow {
   verification: string; unitPrice: number | null; recordedTotal: number | null;
   purchaseAmount: number | null; shipping: number | null; total: number | null; amountBasis: string;
   transactionKey: string; market: string; issues: string[];
+  evidence?:string[]; memoKey?:string; memoAmount?:number; memoQuantity?:number; memoMinimumQuantity?:number;
 }
 export interface LedgerTransaction {
   key: string; date: string; counterpartyName: string; itemTypes: string;
@@ -27,6 +29,7 @@ export const LEDGER_SOURCE_FIELDS = [
   'usedGoodsItemType','purchaseQuantity','transactionType','identityVerificationMethod',
   'counterpartyName','counterpartyOccupation','counterpartyAddress','purchasePrice',
   'dailyPurchaseTotal','shippingCost','categoryId','categoryIds','saleEndDate','salePrice','market','customFields','deletedAt','listingPartition','createdAt',
+  'note','barcode',
 ] as const;
 export function ledgerObject(raw: unknown): Record<string, unknown> {
   let v = raw;
@@ -38,10 +41,9 @@ const number = (v: unknown): number | null => (typeof v==='number'||typeof v==='
 const blank = (v:unknown) => v===null||v===undefined||typeof v==='string'&&v.trim()==='';
 const money = (v:unknown) => {const n=number(v);return n!==null&&Number.isSafeInteger(n)?n:null;};
 const sum = (values:(number|null)[]) => values.every(v=>v!==null) ? values.reduce<number>((n,v)=>n+v!,0) : null;
-/** A workflow category alone is not an item description: always retain the actual title. */
+/** Workflow tags and staff memos are not descriptions of the goods. */
 export function ledgerItemDescription(source:LedgerSource):string {
-  const categories=Array.isArray(source.categoryNames)?source.categoryNames.map(str).filter(Boolean):[];
-  return [...new Set([str(source.usedGoodsItemType),categories.length?`カテゴリ：${categories.join('・')}`:'',str(source.name)].filter(Boolean))].join('\n');
+  return ledgerDescription(source);
 }
 export function ledgerDate(value: unknown): string {
   const s=str(value); if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return '';
@@ -63,11 +65,12 @@ export function buildUsedGoodsLedger(sources: LedgerSource[], selectedYear: numb
   const year=ledgerYear(selectedYear), prefix=String(year)+'-';
   const rows: UsedGoodsLedgerRow[]=[], issues: LedgerIssue[]=[], transactions=new Map<string,LedgerTransaction>();
   const seenImports=new Map<string, string>(); let omittedSplits=0;
-  const sorted=[...sources].sort((a,b)=>str(a.createdAt).localeCompare(str(b.createdAt))||str(a.id).localeCompare(str(b.id)));
+  const resolved=resolveLedgerSources(sources),evidence=new Map(resolved.map(r=>[str(r.source.id),r.references]));
+  const sorted=resolved.map(r=>r.source).sort((a,b)=>str(a.createdAt).localeCompare(str(b.createdAt))||str(a.id).localeCompare(str(b.id)));
   const byId=new Map(sources.map(r=>[str(r.id),r]));
   for (const source of sorted) {
     const c=ledgerObject(source.customFields), restage=ledgerObject(c.__restageImport), yahoo=ledgerObject(c.__yahooPurchaseImport), split=ledgerObject(c.__belloStockSplit);
-    const id=str(source.id), managementNumber=management(source), name=str(source.name);
+    const id=str(source.id), managementNumber=management(source), name=ledgerPublicName(source.name);
     const issue=(message:string,date=str(source.transactionDate))=>issues.push({inventoryId:id,managementNumber,name,date,message});
     const date=ledgerDate(source.transactionDate), saleDate=ledgerDate(source.saleEndDate);
     const hasPurchase=['transactionDate','transactionType','purchaseQuantity','counterpartyName','usedGoodsItemType'].some(k=>source[k]!=null&&source[k]!=='');
@@ -92,16 +95,28 @@ export function buildUsedGoodsLedger(sources: LedgerSource[], selectedYear: numb
         // Yahoo's stored unit price already includes allocated shipping and can be rounded.
         // Use the exact acquisition amounts, not unitPrice * quantity + shipping.
         const shipping=!blank(source.shippingCost)?money(source.shippingCost):yahoo.auctionId?money(yahoo.shipping):0;
-        const purchaseAmount=yahoo.auctionId ? money(yahoo.itemTotal) : null;
+        const legacy=legacyRecordedAmount(source),memo=!imported?purchaseMemo(source):null;
+        const purchaseAmount=yahoo.auctionId ? money(yahoo.itemTotal) : restage.goodsId?null:legacy.amount;
         const row: UsedGoodsLedgerRow={inventoryId:id,managementNumber,direction:'受入れ',date,
           transactionType:str(source.transactionType),name,itemType:ledgerItemDescription(source),quantity,
-          feature:str(c.usedGoodsFeature),counterpartyName:str(source.counterpartyName),counterpartyAddress:str(source.counterpartyAddress),
+          feature:ledgerFeature(source),counterpartyName:str(source.counterpartyName),counterpartyAddress:str(source.counterpartyAddress),
           counterpartyOccupation:str(source.counterpartyOccupation),
           verification:str(source.identityVerificationMethod),unitPrice:money(source.purchasePrice),
           recordedTotal:money(source.dailyPurchaseTotal),purchaseAmount,shipping,total:purchaseAmount===null?null:sum([purchaseAmount,shipping]),
-          amountBasis:yahoo.auctionId?'購入通知の商品金額＋配分済み送料（送料込み単価から再加算しません）':restage.goodsId?'開催日の確定購入金額で集計':'日次合計または仕入れ時の数量を確認',transactionKey:key,market:'',issues:[]};
+          amountBasis:yahoo.auctionId?'購入通知の商品金額＋配分済み送料（送料込み単価から再加算しません）':restage.goodsId?'開催日の確定購入金額で集計':legacy.basis,transactionKey:key,market:'',issues:[],evidence:evidence.get(id)||[]};
+        // A memo shared by the same acquisition barcode is a lot total, not a total
+        // to add on every split page. Require recorded price corroboration as well.
+        if(memo&&str(source.barcode)&&row.unitPrice!==null&&row.counterpartyName&&!/^(ヤフオク!?|Yahoo!?オークション|メルカリ(?:Shops)?|BASE)$/i.test(row.counterpartyName.replace(/\s/g,''))){
+          const unit=memo.amount/memo.quantity,multiple=unit>0?row.unitPrice/unit:0;
+          if(multiple>=1&&multiple<=memo.quantity&&Math.abs(row.unitPrice-Math.round(multiple)*unit)<=1){
+            row.memoKey=JSON.stringify([date,str(source.counterpartyName),str(source.barcode),memo.quantity,memo.amount]);
+            row.memoAmount=memo.amount;row.memoQuantity=memo.quantity;row.memoMinimumQuantity=Math.round(multiple)*Math.max(1,number(source.quantity)||1);
+            row.evidence!.push(`備考：${memo.excerpt}（購入価格と照合）`);
+          }
+        }
         row.issues.push(...missing(row));
-        if(row.counterpartyAddress==='履歴あり')row.issues.push('住所は「履歴あり」です。参照先の住所記録を確認');
+        if(row.counterpartyAddress==='履歴あり')row.issues.push('住所欄は「履歴あり」のみ。保存済みの同一仕入先の履歴から実住所を一意に復元できません。');
+        else if(ledgerAddressPlaceholder(row.counterpartyAddress))row.issues.push(`住所欄の「${row.counterpartyAddress}」は実住所の記録ではありません。`);
         if(source.deletedAt)row.issues.push('削除済み商品に残っている取引記録');
         if(source.listingPartition==='MERGED')row.issues.push('在庫合算後の元商品に残っている取引記録');
         rows.push(row);
@@ -134,11 +149,11 @@ export function buildUsedGoodsLedger(sources: LedgerSource[], selectedYear: numb
       if(source.listingPartition==='MERGED') continue;
       const sale=ledgerObject(c.__belloSale);
       const row:UsedGoodsLedgerRow={inventoryId:id,managementNumber,direction:'払出し',date:saleDate,transactionType:'売却',name,
-        itemType:ledgerItemDescription(source),quantity:number(sale.physicalQuantity??source.quantity),feature:str(c.usedGoodsFeature),
+        itemType:ledgerItemDescription(source),quantity:number(sale.physicalQuantity??source.quantity),feature:ledgerFeature(source),
         counterpartyName:str(c.saleCounterpartyName),counterpartyAddress:str(c.saleCounterpartyAddress),counterpartyOccupation:str(c.saleCounterpartyOccupation),
         verification:'',unitPrice:null,recordedTotal:number(source.salePrice),purchaseAmount:null,shipping:null,total:number(source.salePrice),amountBasis:'販売価格',transactionKey:'',market:str(source.market),issues:[]};
       row.issues=missing(row);
-      row.issues.push('払出日は販売終了日。相手方情報の記録要否を品目・取引に応じて確認');
+      // Generic explanations belong in the sheet introduction, not one warning per sale.
       rows.push(row);
     } else if(source.saleEndDate && !saleDate) issue('販売終了日の形式が不正のため払出しの対象年を判定できません。',str(source.saleEndDate));
   }
@@ -193,17 +208,28 @@ export function groupLedgerBySupplierDay(rows:UsedGoodsLedgerRow[],transactions:
       // This field was entered for a whole purchase/auction, not current on-hand stock.
       const quantities=[...new Set(items.map(r=>r.quantity).filter((v):v is number=>v!==null))];
       if(quantities.length===1)quantity=quantities[0];
-      else if(quantities.length>1)issues.push('仕入台帳の数量が一致しません。取引全体の数量を確認してください。');
-      if(totals.length===0&&items.length===1&&!first.transactionKey&&first.quantity===1){
-        purchaseAmount=first.unitPrice;total=sum([purchaseAmount,shipping]);amountBasis='購入単価×仕入数量1点＋送料';
-        first.purchaseAmount=purchaseAmount;first.total=total;first.amountBasis=amountBasis;
+      else if(quantities.length>1)issues.push(`仕入台帳の数量が不一致：${quantities.join('／')}。在庫の各記録を照合しましたが、取引全体の数量を特定できません。`);
+      if(totals.length===0&&items.every(r=>!r.transactionKey)){
+        const amounts:(number|null)[]=[],seenMemos=new Set<string>();
+        for(const r of items){
+          if(r.memoKey&&r.memoAmount!==undefined){
+            if(!seenMemos.has(r.memoKey)){
+              const members=items.filter(item=>item.memoKey===r.memoKey),minimum=members.reduce((n,item)=>n+(item.memoMinimumQuantity||1),0);
+              if(minimum>(r.memoQuantity||0)){amounts.push(null);issues.push(`備考の仕入数量を関連在庫の数量が超えています：${members.map(m=>m.managementNumber).join('、')}`);}
+              else amounts.push(r.memoAmount);
+              seenMemos.add(r.memoKey);
+            }
+          }else amounts.push(r.purchaseAmount);
+        }
+        purchaseAmount=sum(amounts);total=sum([purchaseAmount,shipping]);
+        amountBasis=seenMemos.size?'備考の仕入合計と購入価格を照合。同じ仕入れの合計は1回＋送料':'商品別の仕入数量・購入金額が確定する記録を合計＋送料';
       }
       if(items.some(r=>r.transactionKey)&&!items.some(r=>r.transactionKey.startsWith('YAHOO:')))issues.push('取込データと手動登録が混在しています。仕入れの重複と日次合計を確認してください。');
     }
-    if(total===null)issues.push('購入金額または送料を確定できません。購入単価に日全体の数量・現在庫数を掛けて推測していません。商品別明細の購入単価と原票を確認してください。');
-    if(quantity===null)issues.push('取引数量を確認してください。商品別の記録は明細シートに残しています。');
+    if(total===null)issues.push(`在庫・備考を照合しても金額内訳が確定しない記録：${items.filter(r=>r.purchaseAmount===null&&!r.memoKey).map(r=>`${r.managementNumber}（${r.amountBasis}）`).join('、')||amountBasis}。現在庫数で仕入数量を推測していません。`);
+    if(quantity===null&&!issues.some(i=>i.startsWith('仕入台帳の数量が不一致')))issues.push('取引数量を確定できる記録がありません。現在庫数は仕入数量として代用していません。');
     for(const field of ['counterpartyAddress','counterpartyOccupation','verification'] as const)if(unique(items.map(r=>r[field])).length>1)issues.push(`${field==='counterpartyAddress'?'相手方住所':field==='verification'?'本人確認方法':'職業'}に複数の記録があります。明細を確認してください。`);
     if(unidentifiedSupplier(normalizeSupplier(first.counterpartyName)))issues.push('実際の仕入先名が未記録、または販売サイト名のみのため、他の商品とはまとめていません。');
-    return {key,date:first.date,counterpartyName:first.counterpartyName,counterpartyAddress:text('counterpartyAddress'),counterpartyOccupation:text('counterpartyOccupation'),verification:text('verification'),transactionType:text('transactionType'),itemTypes:items.map(r=>`［${r.managementNumber}］${r.itemType}`).join('\n\n'),references:items.map(r=>r.managementNumber).join('\n'),products:items.length,quantity,purchaseAmount,shipping,total,amountBasis,issues};
+    return {key,date:first.date,counterpartyName:first.counterpartyName,counterpartyAddress:text('counterpartyAddress'),counterpartyOccupation:text('counterpartyOccupation'),verification:text('verification'),transactionType:text('transactionType'),itemTypes:unique(items.map(r=>r.itemType)).join('・'),references:items.map(r=>r.managementNumber).join('\n'),products:items.length,quantity,purchaseAmount,shipping,total,amountBasis,issues};
   }).sort((a,b)=>a.date.localeCompare(b.date)||a.counterpartyName.localeCompare(b.counterpartyName));
 }

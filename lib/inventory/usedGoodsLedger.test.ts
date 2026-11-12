@@ -89,10 +89,12 @@ test('empty year still creates a usable workbook without claiming all records co
  const r=buildUsedGoodsLedger([source({transactionDate:null})],2025);assert.equal(r.rows.length,0);assert.equal(r.issues.length,1);assert.ok((await usedGoodsLedgerWorkbook(r)).length>1000);
 });
 
-test('item description includes all categories and full titles even without a dedicated item type',()=>{
+test('item descriptions use actual goods, retain full titles in detail, exclude workflow tags',()=>{
  const records=[source({id:'a',name:'アルペール チェア ブラック',usedGoodsItemType:'',categoryNames:['販売中','川越移動予定'],dailyPurchaseTotal:2000}),source({id:'b',name:'丸テーブル ホワイト',categoryNames:['補修待ち'],dailyPurchaseTotal:2000})];
  const r=buildUsedGoodsLedger(records,2026);
- for(const text of ['販売中・川越移動予定','アルペール チェア ブラック','補修待ち','丸テーブル ホワイト'])assert.ok(r.supplierDays[0].itemTypes.includes(text));
+ assert.equal(r.supplierDays[0].itemTypes,'椅子・テーブル');
+ assert.ok(!/販売中|川越移動予定|補修待ち/.test(r.supplierDays[0].itemTypes));
+ assert.equal(r.rows[0].name,'アルペール チェア ブラック');
  assert.ok(!r.rows[0].issues.includes('品目が未記録'));
 });
 test('daily purchase total is counted once and shipping from each acquisition is added',()=>{
@@ -132,16 +134,81 @@ test('mixed legacy Yahoo records preserve the shipping-inclusive daily total',()
  assert.equal(r.supplierDays[0].total,3500);assert.equal(r.supplierDays[0].shipping,null);assert.match(r.supplierDays[0].issues.join(),/混在/);
 });
 test('age and page counts are absent from every exported worksheet and age is not a missing-field issue',async()=>{
- const r=buildUsedGoodsLedger([source({purchaseQuantity:1,shippingCost:500})],2026);
+ const r=buildUsedGoodsLedger([source({purchaseQuantity:1,quantity:1,shippingCost:500})],2026);
  assert.ok(!r.issues.some(x=>/年齢|生年月日/.test(x.message)));
  const book=new ExcelJS.Workbook();await book.xlsx.load(new Uint8Array(await usedGoodsLedgerWorkbook(r)).buffer);
  for(const s of book.worksheets)assert.ok(!/年齢|生年月日|商品ページ数/.test(JSON.stringify(s.getRow(5).values)));
  const s=book.getWorksheet('古物台帳')!;assert.equal(s.getCell('F6').value,1000);assert.equal(s.getCell('G6').value,500);assert.equal(s.getCell('H6').value,1500);
 });
-test('long grouped descriptions are printed on continuation rows, preserving all text and totals once',async()=>{
+test('summary stays compact, full product names and totals are retained without duplicate totals',async()=>{
  const r=buildUsedGoodsLedger(Array.from({length:50},(_,i)=>source({id:String(i),name:`商品${i}：`+'大きなダイニングテーブル'.repeat(20),dailyPurchaseTotal:50000,shippingCost:10})),2026);
  const book=new ExcelJS.Workbook();await book.xlsx.load(new Uint8Array(await usedGoodsLedgerWorkbook(r)).buffer);
  const s=book.getWorksheet('古物台帳')!;let text='',total=0;
  for(let i=6;i<=s.rowCount;i++){text+=s.getCell(`D${i}`).text;total+=Number(s.getCell(`H${i}`).value??0);assert.ok(s.getRow(i).height!<=409);}
- assert.equal(text,r.supplierDays[0].itemTypes);assert.equal(total,50500);assert.ok(s.rowCount>6);
+ assert.equal(text,r.supplierDays[0].itemTypes);assert.equal(total,50500);assert.equal(s.rowCount,6);
+ assert.equal(s.pageSetup.fitToWidth,1);assert.equal(s.pageSetup.paperSize,8);
+ assert.equal(s.getColumn(9).hidden,true);assert.equal(s.getColumn(10).hidden,true);
+ assert.ok(s.getCell('H6').note);
+ const details=book.getWorksheet('商品別明細')!;
+ assert.equal(details.getCell('E6').text,r.rows[0].name);assert.ok(details.rowCount>=55);
+});
+
+test('populated legacy prices do not establish quantity or whether a price covers a set',()=>{
+ const r=buildUsedGoodsLedger([source({id:'a',quantity:0,purchaseQuantity:8,purchasePrice:12750}),source({id:'b',quantity:1,purchaseQuantity:8,purchasePrice:8500})],2026);
+ assert.equal(r.supplierDays[0].total,null);assert.equal(r.supplierDays[0].quantity,8);
+ assert.deepEqual(r.rows.map(row=>row.unitPrice),[12750,8500]);
+});
+test('corroborated set memo counts once across split pages and does not change source',()=>{
+ const records=[12750,8500,12750].map((purchasePrice,i)=>source({id:String(i),quantity:i===2?1:0,purchaseQuantity:8,purchasePrice,barcode:'same-lot',note:'8個計34,000円\n1個4250円\n定価9,700円'}));
+ const before=JSON.stringify(records),r=buildUsedGoodsLedger(records,2026);
+ assert.equal(r.supplierDays[0].total,34000);assert.match(r.supplierDays[0].amountBasis,/備考/);assert.equal(JSON.stringify(records),before);
+});
+test('explicit quantity and total memo resolves a multiple-unit record without using current stock',()=>{
+ const r=buildUsedGoodsLedger([source({quantity:2,purchaseQuantity:10,purchasePrice:1361,barcode:'acquisition',note:'2脚で2,722円'})],2026);
+ assert.equal(r.supplierDays[0].total,2722);
+});
+test('different barcodes, dates, suppliers and retail prices never share a memo total',()=>{
+ const memo='2脚で2,722円';
+ const records=['x','y'].map((barcode,i)=>source({id:String(i),quantity:2,purchasePrice:1361,barcode,note:memo}));
+ assert.equal(buildUsedGoodsLedger(records,2026).supplierDays[0].total,5444);
+ const r=buildUsedGoodsLedger([source({quantity:2,purchasePrice:1361,barcode:'a',note:'定価2脚で2,722円\n販売価格2脚で2,722円'})],2026);
+ assert.equal(r.supplierDays[0].total,null);
+});
+test('address history pointer resolves only one agreed prior address; deletion and ambiguity are respected',()=>{
+ const prior=source({id:'old',transactionDate:'2025-01-01',counterpartyAddress:'東京都の登録住所'});
+ const current=source({counterpartyAddress:'履歴あり'});
+ assert.equal(buildUsedGoodsLedger([prior,current],2026).rows[0].counterpartyAddress,'東京都の登録住所');
+ assert.equal(buildUsedGoodsLedger([prior,{...current,counterpartyAddress:''}],2026).rows[0].counterpartyAddress,'');
+ assert.equal(buildUsedGoodsLedger([prior,source({id:'other',transactionDate:'2025-02-01',counterpartyAddress:'異なる住所'}),current],2026).rows[0].counterpartyAddress,'履歴あり');
+});
+test('staff memo removed, real condition retained, category-only old features replaced from title',()=>{
+ const r=buildUsedGoodsLedger([source({name:'【顧客への配送メモ】DAIKO ペンダントライト 3灯',customFields:{usedGoodsFeature:'椅子 デスク 棚'}})],2026);
+ assert.equal(r.rows[0].name,'DAIKO ペンダントライト 3灯');assert.match(r.rows[0].feature,/照明/);assert.doesNotMatch(r.rows[0].feature,/デスク/);
+ assert.equal(buildUsedGoodsLedger([source({customFields:{usedGoodsFeature:'座面に傷あり'}})],2026).rows[0].feature,'座面に傷あり');
+});
+test('desk lamps are lighting and coat hangers are not shelves; internal tags never become goods',()=>{
+ const r=buildUsedGoodsLedger([source({id:'a',name:'ASPLUND デスクランプ テーブルランプ',categoryNames:['保留','GPT','事務所備品']}),source({id:'b',name:'Metro コートハンガー ハンガーラック'})],2026);
+ assert.deepEqual(r.rows.map(r=>r.itemType),['照明','コートハンガー']);
+});
+test('memo duplicates cannot cross unverified marketplace sellers or exceed the stated acquisition quantity',()=>{
+ const entry=source({quantity:1,purchasePrice:1000,barcode:'same',note:'2脚で2,000円'});
+ const records=[{...entry,id:'a'},{...entry,id:'b'},{...entry,id:'c'}];
+ assert.equal(buildUsedGoodsLedger(records,2026).supplierDays[0].total,null);
+ const unknown=buildUsedGoodsLedger(records.map(r=>({...r,counterpartyName:'ヤフオク'})),2026);
+ assert.ok(unknown.supplierDays.every(g=>g.total===null));
+});
+test('future or different supplier address never replaces a historical pointer',()=>{
+ const r=buildUsedGoodsLedger([source({id:'past',transactionDate:'2025-01-01',counterpartyName:'別の仕入先',counterpartyAddress:'別住所'}),source({id:'future',transactionDate:'2027-01-01',counterpartyAddress:'移転後の住所'}),source({counterpartyAddress:'履歴あり'})],2026);
+ assert.equal(r.rows[0].counterpartyAddress,'履歴あり');
+});
+test('a lot count of one must not turn multiple physical items into one unit of cost',()=>{
+ for(const extra of [{quantity:10},{quantity:0,name:'【4点山】テーブル'},{quantity:1,name:'【2脚セット】チェア'}]){
+   const r=buildUsedGoodsLedger([source({purchaseQuantity:1,purchasePrice:6277,...extra})],2026);
+   assert.equal(r.supplierDays[0].total,null);
+ }
+});
+test('history placeholders such as new goods are not treated as a supplier address',()=>{
+ const r=buildUsedGoodsLedger([source({id:'prior',transactionDate:'2025-01-01',counterpartyAddress:'新品'}),source({counterpartyAddress:'履歴あり'})],2026);
+ assert.equal(r.rows[0].counterpartyAddress,'履歴あり');
+ assert.match(buildUsedGoodsLedger([source({counterpartyAddress:'新品'})],2026).rows[0].issues.join(),/実住所/);
 });

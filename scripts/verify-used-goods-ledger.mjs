@@ -16,7 +16,7 @@ assert.equal((await GET(req())).status,401);assert.equal(state.calls.length,0);
 state.session={ok:true,role:'EDITOR'};assert.equal((await GET(req())).status,403);assert.equal(state.calls.length,0);
 state.session={ok:true,role:'VIEWER'};assert.equal((await GET(req())).status,403);
 state.session={ok:true,role:'ADMIN'};assert.equal((await GET(req('year=oops'))).status,400);assert.equal(state.calls.length,0);
-const response=await GET(req());assert.equal(response.status,200);const body=await response.json();assert.equal(body.rows.length,2);assert.match(body.rows[0].itemType,/補修待ち・撮影待ち/);assert.equal(state.calls.length,4);assert.match(response.headers.get('cache-control'),/no-store/);
+const response=await GET(req());assert.equal(response.status,200);const body=await response.json();assert.equal(body.rows.length,2);assert.equal(body.rows[0].itemType,'椅子');assert.equal(state.calls.length,4);assert.match(response.headers.get('cache-control'),/no-store/);
 assert.ok(state.calls.every(c=>c.constructor.name==='ScanCommand'));assert.equal(state.calls[1].input.ExclusiveStartKey.id,'a');
 const download=await GET(req('year=2026&format=xlsx'));assert.equal(download.status,200);assert.match(download.headers.get('content-disposition'),/attachment/);assert.match(download.headers.get('content-type'),/spreadsheetml/);assert.equal(Buffer.from(await download.arrayBuffer()).subarray(0,2).toString(),'PK');
 state.fail=true;const failure=await GET(req('year=2026&format=xlsx'));assert.equal(failure.status,503);assert.ok(!(await failure.text()).includes('private source payload'));
