@@ -50,7 +50,7 @@ export function resolveLedgerSources(sources:Source[]):LedgerResolution[]{
    if(/^履歴あり$/.test(text(s.counterpartyAddress))){
      const candidates=(prior.get(supplierKey(s.counterpartyName))||[]).filter(p=>text(p.transactionDate)&&text(p.transactionDate)<=text(s.transactionDate)&&text(p.counterpartyAddress)&&!ledgerAddressPlaceholder(p.counterpartyAddress));
      const addresses=[...new Set(candidates.map(p=>text(p.counterpartyAddress)))];
-     if(addresses.length===1){source.counterpartyAddress=addresses[0];const p=candidates.sort((a,b)=>text(b.transactionDate).localeCompare(text(a.transactionDate)))[0];references.push(`住所：同一仕入先の登録履歴 ${text(p.sourceInventoryId)||text(p.sku)||text(p.id)}（${text(p.transactionDate)}）`);}
+     if(addresses.length===1){source.counterpartyAddress=addresses[0];const p=candidates.sort((a,b)=>text(b.transactionDate).localeCompare(text(a.transactionDate),'ja')||text(a.id).localeCompare(text(b.id),'ja'))[0];references.push(`住所：同一仕入先の登録履歴 ${text(p.sourceInventoryId)||text(p.sku)||text(p.id)}（${text(p.transactionDate)}）`);}
    }
    // A blank may be an intentional deletion. Never rehydrate it from old snapshots.
    return {source,references};

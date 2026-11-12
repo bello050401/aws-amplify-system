@@ -25,8 +25,10 @@ async function main(){
  await build({stdin:{contents:baseline,resolveDir:path.resolve('lib/inventory'),loader:'ts'},outfile:baselineFile,bundle:true,platform:'node',format:'cjs',packages:'external',plugins:[{name:'baseline-evidence',setup(b){b.onResolve({filter:/^\.\/usedGoodsLedgerEvidence$/},()=>({path:'evidence',namespace:'baseline'}));b.onLoad({filter:/.*/,namespace:'baseline'},()=>({contents:baselineEvidence,loader:'ts',resolveDir:path.resolve('lib/inventory')}));}}]});
  const old=createRequire(import.meta.url)(baselineFile).buildUsedGoodsLedger(rows,2026,ledger.generatedAt);
  const financial=(l:UsedGoodsLedger)=>({rows:l.rows.map(r=>({id:r.inventoryId,date:r.date,direction:r.direction,quantity:r.quantity,unitPrice:r.unitPrice,recordedTotal:r.recordedTotal,purchaseAmount:r.purchaseAmount,shipping:r.shipping,total:r.total,transactionKey:r.transactionKey})),groups:l.supplierDays.map(g=>({key:g.key,quantity:g.quantity,purchaseAmount:g.purchaseAmount,shipping:g.shipping,total:g.total})),transactions:l.transactions.map(g=>({key:g.key,quantity:g.quantity,purchaseAmount:g.purchaseAmount,shipping:g.shipping,total:g.total})),omittedSplits:l.omittedSplits,exclusions:l.exclusions});
- assert.deepEqual(financial(ledger),financial(old));assert.equal(JSON.stringify(rows),before);
- const correctedDescriptions=ledger.rows.filter((r,i)=>r.name!==old.rows[i].name||r.feature!==old.rows[i].feature).length;
+ const canonical=(l:UsedGoodsLedger)=>{const f=financial(l);f.rows.sort((a,b)=>(a.id+a.direction).localeCompare(b.id+b.direction));f.groups.sort((a,b)=>a.key.localeCompare(b.key));return f;};
+ assert.deepEqual(canonical(ledger),canonical(old));assert.equal(JSON.stringify(rows),before);
+ const oldRows=new Map<string,UsedGoodsLedger['rows'][number]>(old.rows.map((r:UsedGoodsLedger['rows'][number])=>[r.inventoryId+r.direction,r]));
+ const correctedDescriptions=ledger.rows.filter(r=>{const prev=oldRows.get(r.inventoryId+r.direction)!;return r.name!==prev.name||r.feature!==prev.feature;}).length;
  const p=ledgerPresentation(ledger),bytes=await usedGoodsLedgerWorkbook(ledger);
  writeFileSync(path.join(dir,'BELLO_古物台帳_2026年.xlsx'),bytes);
  writeFileSync(path.join(dir,'expected-ledger.json'),JSON.stringify(ledger));

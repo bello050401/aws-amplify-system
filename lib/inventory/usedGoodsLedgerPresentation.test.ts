@@ -76,3 +76,13 @@ test('search keyword brands are not mistaken for the item brand, and inspection 
  const row=buildUsedGoodsLedger([entry({name:'検品済み テーブル 点検：脚に傷',customFields:{usedGoodsFeature:'スタッフ確認済みの記録'}})],2026).rows[0];
  assert.match(row.name,/検品済み.*点検：脚に傷/);assert.equal(row.feature,'スタッフ確認済みの記録');
 });
+
+test('supplier ordering and references are stable with Japanese names, duplicate numbers and unordered input',()=>{
+ const sources=[entry({id:'d',counterpartyName:'内藤'}),entry({id:'b',counterpartyName:'坂田'}),entry({id:'c',counterpartyName:''}),entry({id:'a',counterpartyName:''})];
+ const fixed='2026-11-12T00:00:00Z';
+ const a=buildUsedGoodsLedger(sources,2026,fixed),b=buildUsedGoodsLedger([...sources].reverse(),2026,fixed);
+ assert.deepEqual(a,b);
+ assert.deepEqual(a.supplierDays.map(g=>g.counterpartyName),['','','坂田','内藤']);
+ assert.deepEqual(a.supplierDays.slice(0,2).map(g=>g.inventoryIds),[['a'],['c']]);
+ assert.deepEqual([...ledgerPresentation(a).byInventoryId.keys()],[...ledgerPresentation(b).byInventoryId.keys()]);
+});

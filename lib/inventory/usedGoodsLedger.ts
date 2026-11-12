@@ -173,7 +173,7 @@ export function buildUsedGoodsLedger(sources: LedgerSource[], selectedYear: numb
       rows.push(row);
     } else if(source.saleEndDate && !saleDate) issue('販売終了日の形式が不正のため払出しの対象年を判定できません。',str(source.saleEndDate));
   }
-  rows.sort((a,b)=>a.date.localeCompare(b.date)||a.managementNumber.localeCompare(b.managementNumber)||a.direction.localeCompare(b.direction));
+  rows.sort((a,b)=>a.date.localeCompare(b.date,'ja')||a.managementNumber.localeCompare(b.managementNumber,'ja')||a.direction.localeCompare(b.direction,'ja')||a.inventoryId.localeCompare(b.inventoryId,'ja'));
   const groups=[...transactions.values()].sort((a,b)=>a.date.localeCompare(b.date)||a.key.localeCompare(b.key));
   const initialDays=groupLedgerBySupplierDay(rows,groups),excludedIds=new Set<string>();
   const exclusions:UsedGoodsLedger['exclusions']=[];
@@ -261,5 +261,7 @@ export function groupLedgerBySupplierDay(rows:UsedGoodsLedgerRow[],transactions:
     for(const field of ['counterpartyAddress','counterpartyOccupation','verification'] as const)if(unique(items.map(r=>r[field])).length>1)issues.push(`${field==='counterpartyAddress'?'相手方住所':field==='verification'?'本人確認方法':'職業'}に複数の記録があります。明細を確認してください。`);
     if(unidentifiedSupplier(normalizeSupplier(first.counterpartyName)))issues.push('実際の仕入先名が未記録、または販売サイト名のみのため、他の商品とはまとめていません。');
     return {key,inventoryIds:items.map(r=>r.inventoryId),date:first.date,counterpartyName:first.counterpartyName,counterpartyAddress:text('counterpartyAddress'),counterpartyOccupation:text('counterpartyOccupation'),verification:text('verification'),transactionType:text('transactionType'),itemTypes:unique(items.map(r=>r.itemType)).join('・'),references:items.map(r=>r.managementNumber).join('\n'),products:items.length,quantity,purchaseAmount,shipping,total,amountBasis,issues};
-  }).sort((a,b)=>a.date.localeCompare(b.date)||a.counterpartyName.localeCompare(b.counterpartyName));
+  // Export references must not change with the server/browser default locale.
+  // The key also orders different unknown suppliers sharing a blank display name.
+  }).sort((a,b)=>a.date.localeCompare(b.date,'ja')||a.counterpartyName.localeCompare(b.counterpartyName,'ja')||a.key.localeCompare(b.key,'ja'));
 }
