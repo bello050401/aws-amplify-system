@@ -67,3 +67,12 @@ test('sale sheet displays recorded sale price without a purchase label or a misl
  const issues=book.getWorksheet('確認事項')!;
  for(let n=6;n<=issues.rowCount;n++)if(issues.getCell(n,4).text.startsWith('払出し：'))assert.equal(issues.getCell(n,5).text,'');
 });
+
+test('search keyword brands are not mistaken for the item brand, and inspection wording stays intact',()=>{
+ for(const suffix of [' 検:フロス ルイスポールセン アクタス','（検：ACTUS ブラック）',' /検 : Cassina']){
+  const row=buildUsedGoodsLedger([entry({name:'ヤマギワ SS414W テーブルランプ'+suffix,customFields:{}})],2026).rows[0];
+  assert.equal(row.name,'ヤマギワ SS414W テーブルランプ');assert.equal(row.itemType,'照明');assert.doesNotMatch(row.feature,/ACTUS|Cassina|ブラック/);
+ }
+ const row=buildUsedGoodsLedger([entry({name:'検品済み テーブル 点検：脚に傷',customFields:{usedGoodsFeature:'スタッフ確認済みの記録'}})],2026).rows[0];
+ assert.match(row.name,/検品済み.*点検：脚に傷/);assert.equal(row.feature,'スタッフ確認済みの記録');
+});

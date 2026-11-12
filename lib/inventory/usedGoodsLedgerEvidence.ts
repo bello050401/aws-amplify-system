@@ -7,7 +7,7 @@ const integer=(v:unknown):number|null=>(typeof v==='number'||typeof v==='string'
 export const supplierKey=(v:unknown)=>text(v).normalize('NFKC').replace(/[\s　]+/g,' ').trim();
 const genericSupplier=(v:string)=>!v||/^(ヤフオク!?|Yahoo!?オークション|メルカリ(?:Shops)?|BASE)$/i.test(v.replace(/\s/g,''));
 export const ledgerAddressPlaceholder=(v:unknown)=>/^(?:履歴あり|同上|新品|中古|なし|不明|未登録|[-—ー])$/.test(text(v));
-export function ledgerPublicName(v:unknown){return text(v).replace(/【[^】]*】/gu,'').replace(/(?:関連|検索用|検索ワード)\s*[:：].*$/u,'').replace(/[\s　]+/gu,' ').trim().replace(/[／/（(]+$/u,'').trim();}
+export function ledgerPublicName(v:unknown){return text(v).replace(/【[^】]*】/gu,'').replace(/(?:関連|検索用|検索ワード|(?:^|[\s／/（(])検)\s*[:：].*$/u,'').replace(/[\s　]+/gu,' ').trim().replace(/[／/（(]+$/u,'').trim();}
 export function ledgerDescription(source:Source){
  const title=ledgerPublicName(source.name);
  const categories=(Array.isArray(source.categoryNames)?source.categoryNames:[]).map(text).filter(v=>v&&!/(?:販売|出品|撮影|補修|修理|移動|確認|発送|出荷|出庫|入庫|配送|売り切れ|売却|予定|完了|待ち|破棄|廃棄|備品|自宅|委託|業者間|停止|オークション|リステージ|GPT|コーディネート|無償提供|保留|さん$)/.test(v));

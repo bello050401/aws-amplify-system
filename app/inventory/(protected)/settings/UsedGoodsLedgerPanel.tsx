@@ -46,14 +46,17 @@ export function UsedGoodsLedgerPanel() {
       {busy&&<p role="status" className="text-sm text-gray-600">{busy}</p>}
     </div>
     {error&&<p role="alert" className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</p>}
-    <div className="space-y-1 text-sm text-gray-600">
+    <details className="rounded-lg border border-gray-200 p-4 text-sm text-gray-600">
+      <summary className="cursor-pointer font-medium text-gray-700">集計方法・出力対象を確認</summary>
+      <div className="mt-3 space-y-1 leading-6">
       <p>受入れは「取引の年月日」、払出しは「販売終了日」が対象年に入る記録を出力します。</p>
       <p>同じ日・同じ仕入先を1行にまとめ、合計金額を表示します。購入金額と送料を合算し、登録済みの日次合計やヤフオクの送料を重複加算しません。</p>
       <p>数量は出力時点の在庫欄の合計です。仕入当時の数量を復元した値ではありません。数量の空欄は0点、送料の未入力は0円として集計します。</p>
       <p>取引総額が1万円未満で古物情報が未記入の家具類は出力対象外です。記入済み・1万円ちょうど・例外品目・総額不明の取引は残します。在庫データは削除しません。</p>
       <p>品目は商品名と商品分類から整理し、販売状態や社内メモを除きます。商品名・特徴・金額の根拠は「商品別明細」に保存します。</p>
       <p>備考の仕入合計や「履歴あり」の住所も照合します。記録同士が矛盾する場合や元情報がない場合だけ、照合結果に理由を残します。</p>
-    </div>
+      </div>
+    </details>
     {ledger&&<>
       <div className="flex flex-wrap items-center gap-4 text-sm">
         <strong>{ledger.year}年　{ledger.rows.length.toLocaleString()}件</strong>
@@ -71,7 +74,8 @@ export function UsedGoodsLedgerPanel() {
       {view==='rows'&&selectedGroup&&<div className="flex items-center justify-between rounded-lg bg-slate-50 p-3 text-sm"><span>明細番号 {selectedGroup.ledgerNo} ／ {selectedGroup.date} ／ {selectedGroup.counterpartyName||'仕入先未記録'}</span><button type="button" onClick={()=>{setView('summary');setPage(summaryPage.current);setDetailGroup(null);}} className="rounded border bg-white px-4 py-2">集計に戻る</button></div>}
       {view==='rows'&&!selectedGroup&&<label className="flex items-center gap-3 text-sm">表示する記録<select aria-label="表示する記録" value={direction} onChange={e=>{setDirection(e.target.value);setPage(0);}} className="rounded border border-gray-300 bg-white px-3 py-2"><option value="受入れ">受入れ（仕入れ）</option><option value="払出し">払出し（売却）</option></select></label>}
       <div className="max-h-[60vh] overflow-auto rounded-lg border border-gray-200">
-        {view==='summary'&&<table className="w-full min-w-[1000px] text-left text-sm">
+        {view==='summary'&&<table className="w-full min-w-[1000px] table-fixed text-left text-sm">
+          <colgroup><col className="w-[15%]"/><col className="w-[23%]"/><col className="w-[20%]"/><col className="w-[24%]"/><col className="w-[18%]"/></colgroup>
           <thead className="sticky top-0 bg-gray-100"><tr>{['取引日・明細番号','仕入先','品目・在庫数量','合計金額（購入＋送料）','記録状況'].map(h=><th key={h} className="p-3">{h}</th>)}</tr></thead>
           <tbody>{visibleGroups.slice(page*50,(page+1)*50).map(g=><tr key={g.key} className="border-t align-top">
             <td className="whitespace-nowrap p-3">{g.date}<p className="mt-1 text-xs text-gray-500">{g.ledgerNo}</p><button type="button" aria-label={`明細を見る ${g.ledgerNo}`} onClick={()=>{summaryPage.current=page;setDetailGroup(g.ledgerNo);setDirection('受入れ');setView('rows');setPage(0);}} className="mt-3 rounded border px-3 py-2 text-blue-700">明細を見る</button></td>

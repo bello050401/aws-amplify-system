@@ -21,10 +21,12 @@ async function main(){
  // implementation of the modified exporter. Raw source stays in ignored artifacts.
  const baseline=execFileSync('git',['show','5dc45de3fc919d6ba924c80cbf2d300ed5222d7e:lib/inventory/usedGoodsLedger.ts'],{encoding:'utf8'});
  const baselineFile=path.resolve(dir,'baseline.cjs');
- await build({stdin:{contents:baseline,resolveDir:path.resolve('lib/inventory'),loader:'ts'},outfile:baselineFile,bundle:true,platform:'node',format:'cjs',packages:'external'});
+ const baselineEvidence=execFileSync('git',['show','5dc45de3fc919d6ba924c80cbf2d300ed5222d7e:lib/inventory/usedGoodsLedgerEvidence.ts'],{encoding:'utf8'});
+ await build({stdin:{contents:baseline,resolveDir:path.resolve('lib/inventory'),loader:'ts'},outfile:baselineFile,bundle:true,platform:'node',format:'cjs',packages:'external',plugins:[{name:'baseline-evidence',setup(b){b.onResolve({filter:/^\.\/usedGoodsLedgerEvidence$/},()=>({path:'evidence',namespace:'baseline'}));b.onLoad({filter:/.*/,namespace:'baseline'},()=>({contents:baselineEvidence,loader:'ts',resolveDir:path.resolve('lib/inventory')}));}}]});
  const old=createRequire(import.meta.url)(baselineFile).buildUsedGoodsLedger(rows,2026,ledger.generatedAt);
- const strip=(l:UsedGoodsLedger)=>({...l,supplierDays:l.supplierDays.map(({inventoryIds,...g})=>g)});
- assert.deepEqual(strip(ledger),old);assert.equal(JSON.stringify(rows),before);
+ const financial=(l:UsedGoodsLedger)=>({rows:l.rows.map(r=>({id:r.inventoryId,date:r.date,direction:r.direction,quantity:r.quantity,unitPrice:r.unitPrice,recordedTotal:r.recordedTotal,purchaseAmount:r.purchaseAmount,shipping:r.shipping,total:r.total,transactionKey:r.transactionKey})),groups:l.supplierDays.map(g=>({key:g.key,quantity:g.quantity,purchaseAmount:g.purchaseAmount,shipping:g.shipping,total:g.total})),transactions:l.transactions.map(g=>({key:g.key,quantity:g.quantity,purchaseAmount:g.purchaseAmount,shipping:g.shipping,total:g.total})),omittedSplits:l.omittedSplits,exclusions:l.exclusions});
+ assert.deepEqual(financial(ledger),financial(old));assert.equal(JSON.stringify(rows),before);
+ const correctedDescriptions=ledger.rows.filter((r,i)=>r.name!==old.rows[i].name||r.feature!==old.rows[i].feature).length;
  const p=ledgerPresentation(ledger),bytes=await usedGoodsLedgerWorkbook(ledger);
  writeFileSync(path.join(dir,'BELLO_古物台帳_2026年.xlsx'),bytes);
  writeFileSync(path.join(dir,'expected-ledger.json'),JSON.stringify(ledger));
@@ -52,7 +54,7 @@ async function main(){
   item({id:'sample-e',sku:'見本005',transactionDate:'2026-10-04',saleEndDate:'2026-10-06',salePrice:22000,customFields:{usedGoodsFeature:'幅60cm／奥行65cm／高さ80cm。座面に擦れ。\n'.repeat(30),__yahooPurchaseImport:{auctionId:'sample-id',orderId:'sample-order',quantity:1,itemTotal:15000,shipping:1000}}})
  ],2026,ledger.generatedAt);
  writeFileSync(path.join(dir,'帳簿見本_架空データ.xlsx'),await usedGoodsLedgerWorkbook(fixture));
- const report={checkedAt:new Date().toISOString(),sourceReadAt:source.checkedAt,sourceRecords:rows.length,receipts:ledger.rows.filter(r=>r.direction==='受入れ').length,disposals:ledger.rows.filter(r=>r.direction==='払出し').length,supplierDays:p.groups.length,knownAmountGroups:p.knownAmountCount,unknownAmountGroups:p.unknownAmountCount,knownSubtotal:p.knownAmount,inventoryQuantity:numericSum(5),detailContinuationRows:continuationRows,workbookBytes:bytes.length,durationMs:Math.round(performance.now()-started),baselineCalculatedFieldsIdentical:true,sourceUnchanged:true,crossReferencesVerified:true,sheets:book.worksheets.map(s=>({name:s.name,rows:s.rowCount,columns:s.columnCount}))};
+ const report={checkedAt:new Date().toISOString(),sourceReadAt:source.checkedAt,sourceRecords:rows.length,receipts:ledger.rows.filter(r=>r.direction==='受入れ').length,disposals:ledger.rows.filter(r=>r.direction==='払出し').length,supplierDays:p.groups.length,knownAmountGroups:p.knownAmountCount,unknownAmountGroups:p.unknownAmountCount,knownSubtotal:p.knownAmount,inventoryQuantity:numericSum(5),detailContinuationRows:continuationRows,correctedDescriptions,workbookBytes:bytes.length,durationMs:Math.round(performance.now()-started),baselineFinancialFieldsIdentical:true,sourceUnchanged:true,crossReferencesVerified:true,sheets:book.worksheets.map(s=>({name:s.name,rows:s.rowCount,columns:s.columnCount}))};
  writeFileSync(path.join(dir,'verification.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,2));
 }
 main().catch(e=>{console.error(e);process.exitCode=1;});
