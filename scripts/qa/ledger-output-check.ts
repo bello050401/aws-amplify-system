@@ -22,7 +22,7 @@ async function main(){
  const book=new ExcelJS.Workbook();await book.xlsx.load(new Uint8Array(bytes).buffer);
  const summary=book.getWorksheet('古物台帳')!;
  assert.equal(original,JSON.stringify(sources),'read-only projection');
- assert.equal(ledger.rows.length,baseline.rows.length,'no missing receipt/disposal after change');
+ assert.equal(ledger.rows.length+ledger.omittedLowValue,baseline.rows.length,'only explicitly excluded low-value receipts may be omitted');
  for(const sheet of book.worksheets){
    assert.ok(!/年齢|生年月日|商品ページ数/.test(JSON.stringify(sheet.getRow(5).values)));
    sheet.eachRow(row=>assert.ok(!row.height||row.height<=409));
@@ -38,8 +38,8 @@ async function main(){
    sheets:book.worksheets.map(s=>({name:s.name,rows:s.rowCount,columns:s.columnCount})),checks:['source unchanged','receipt/disposal counts unchanged','money reconciled','no age/DOB/page-count columns','no repeated totals on continuation rows']};
  await fs.writeFile(`${dir}/output-check-review.json`,JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,2));
  const fixture=buildUsedGoodsLedger([
-   {id:'sample1',sku:'B00001',transactionDate:'2026-11-12',name:'arper アルペール Catifa46 ダイニングチェア ブラック',categoryNames:['補修待ち'],usedGoodsItemType:'椅子',purchaseQuantity:3,purchasePrice:10000,dailyPurchaseTotal:50000,shippingCost:2000,transactionType:'買受',counterpartyName:'取引先サンプル株式会社',counterpartyAddress:'東京都（表示確認用）',counterpartyOccupation:'リサイクル販売業',identityVerificationMethod:'登録済みの本人確認方法',customFields:{usedGoodsFeature:'椅子／ブラック／arper'}},
-   {id:'sample2',sku:'B00002',transactionDate:'2026-11-12',name:'丸テーブル ナチュラル 木製',categoryNames:['撮影待ち'],usedGoodsItemType:'テーブル',purchaseQuantity:3,purchasePrice:30000,dailyPurchaseTotal:50000,shippingCost:3000,transactionType:'買受',counterpartyName:'取引先サンプル株式会社',counterpartyAddress:'東京都（表示確認用）',counterpartyOccupation:'リサイクル販売業',identityVerificationMethod:'登録済みの本人確認方法',customFields:{usedGoodsFeature:'テーブル／木製／円形'}},
+   {id:'sample1',quantity:2,sku:'B00001',transactionDate:'2026-11-12',name:'arper アルペール Catifa46 ダイニングチェア ブラック',categoryNames:['補修待ち'],usedGoodsItemType:'椅子',purchaseQuantity:3,purchasePrice:10000,dailyPurchaseTotal:50000,shippingCost:2000,transactionType:'買受',counterpartyName:'取引先サンプル株式会社',counterpartyAddress:'東京都（表示確認用）',counterpartyOccupation:'リサイクル販売業',identityVerificationMethod:'登録済みの本人確認方法',customFields:{usedGoodsFeature:'椅子／ブラック／arper'}},
+   {id:'sample2',quantity:1,sku:'B00002',transactionDate:'2026-11-12',name:'丸テーブル ナチュラル 木製',categoryNames:['撮影待ち'],usedGoodsItemType:'テーブル',purchaseQuantity:3,purchasePrice:30000,dailyPurchaseTotal:50000,shippingCost:3000,transactionType:'買受',counterpartyName:'取引先サンプル株式会社',counterpartyAddress:'東京都（表示確認用）',counterpartyOccupation:'リサイクル販売業',identityVerificationMethod:'登録済みの本人確認方法',customFields:{usedGoodsFeature:'テーブル／木製／円形'}},
  ],2026);
  await fs.writeFile(`${dir}/表示確認用.xlsx`,await usedGoodsLedgerWorkbook(fixture));
 }

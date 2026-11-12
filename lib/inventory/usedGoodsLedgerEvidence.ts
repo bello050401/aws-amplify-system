@@ -61,10 +61,27 @@ export function legacyRecordedAmount(source:Source):{amount:number|null;basis:st
  if(price===null)return {amount:null,basis:'購入価格が未記録'};
  if(memo&&memo.amount===price)return {amount:price,basis:`備考と購入価格が一致：${memo.excerpt}`};
  if(price===0)return {amount:0,basis:'登録購入価格0円'};
+ const quantity=integer(source.quantity);
+ if(quantity!==null&&quantity>0&&Number.isSafeInteger(price*quantity))return {amount:price*quantity,basis:`登録購入単価 ${price.toLocaleString()}円 × 在庫の数量 ${quantity}点（指定された集計方法）`};
  const pluralTitle=[...text(source.name).normalize('NFKC').matchAll(/(\d+)(?:個|脚|点|台|灯)(?:セット|山)/g)].some(m=>Number(m[1])>1);
  if(integer(source.purchaseQuantity)===1&&!(Number(source.quantity)>1)&&!pluralTitle)return {amount:price,basis:'購入価格×仕入数量1点（複数在庫・セット表記との矛盾なし）'};
- // The same field contains per-unit costs and allocated set costs in legacy records.
- // Summing it once per page would understate multi-unit acquisitions, even when
- // all numeric fields are populated. Never call that sum a verified transaction total.
- return {amount:null,basis:`登録購入価格 ${price.toLocaleString()}円。取引全体の数量と商品別の仕入数量・価格内訳を区別できる記録がありません`};
+ // Empty current quantity contributes zero to the displayed stock count, but does
+ // not prove that the historical purchase itself was free.
+ return {amount:null,basis:`登録購入価格 ${price.toLocaleString()}円。数量欄が空欄または0のため、元の購入金額は日次合計・取込情報・備考から確定できません`};
+}
+
+/** A date and a price alone do not constitute a completed goods-ledger entry.
+ * Preserve any existing dedicated ledger information, including partial entries. */
+export function hasRecordedLedgerEntry(source:Source):boolean {
+ return ['transactionType','usedGoodsItemType','purchaseQuantity','dailyPurchaseTotal','counterpartyName','counterpartyAddress','counterpartyOccupation','identityVerificationMethod']
+  .some(k=>source[k]!==undefined&&source[k]!==null&&String(source[k]).trim()!=='')||!!text(object(source.customFields).usedGoodsFeature);
+}
+
+/** Only positively identified ordinary furniture is eligible for automatic omission.
+ * Unknown goods and statutory exceptions stay in the output. Threshold is strictly
+ * below JPY 10,000 for the whole purchase, not per-unit price. */
+export function ordinaryFurnitureForLedger(source:Source):boolean {
+ const name=ledgerPublicName(source.name);
+ if(/バイク|オートバイ|二輪|原付|室外機|室外ユニット|ヒートポンプ|電線|グレーチング|ゲーム|ソフト|\b(?:CD|DVD|Blu.?ray)\b|書籍|古本|画集|写真集|ブック|美術品|骨董|絵画|宝石|貴金属|時計/i.test(name))return false;
+ return /椅子|チェア|スツール|ソファ|テーブル|デスク|机|棚|シェルフ|キャビネット|チェスト|ボード|ワゴン|照明|ランプ|ライト|ハンガー|ベッド|bench|chair|stool|sofa|table|desk|cabinet|shelf|lamp/i.test(name);
 }

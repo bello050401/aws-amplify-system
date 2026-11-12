@@ -44,6 +44,8 @@ export function UsedGoodsLedgerPanel() {
     <div className="space-y-1 text-sm text-gray-600">
       <p>受入れは「取引の年月日」、払出しは「販売終了日」が対象年に入る記録を出力します。</p>
       <p>同じ日・同じ仕入先を1行にまとめ、合計金額を表示します。購入金額と送料を合算し、登録済みの日次合計やヤフオクの送料を重複加算しません。</p>
+      <p>数量は在庫の「数量」欄を合計します。数量の空欄は在庫一覧と同じ0点、送料の未入力は0円として集計します。</p>
+      <p>取引総額が1万円未満で古物情報が未記入の家具類は出力対象外です。記入済み・1万円ちょうど・例外品目・総額不明の取引は残します。在庫データは削除しません。</p>
       <p>品目は商品名と商品分類から整理し、販売状態や社内メモを除きます。商品名・特徴・金額の根拠は「商品別明細」に保存します。</p>
       <p>備考の仕入合計や「履歴あり」の住所も照合します。記録同士が矛盾する場合や元情報がない場合だけ、照合結果に理由を残します。</p>
     </div>
@@ -52,6 +54,7 @@ export function UsedGoodsLedgerPanel() {
         <strong>{ledger.year}年　{ledger.rows.length.toLocaleString()}件</strong>
         <span>受入れ {ledger.rows.filter(r=>r.direction==='受入れ').length.toLocaleString()}件 ／ 払出し {ledger.rows.filter(r=>r.direction==='払出し').length.toLocaleString()}件</span>
         <span className="text-gray-500">分割先の仕入れ重複 {ledger.omittedSplits}件を除外</span>
+        <span className="text-gray-500">1万円未満・未記入の家具類 {ledger.omittedLowValue??0}件を出力対象外</span>
       </div>
       <div className="flex gap-2 border-b border-gray-200">
         {(['summary','rows','issues'] as const).map(tab=><button key={tab} type="button" onClick={()=>{setView(tab);setPage(0);}} aria-pressed={view===tab} className={`px-4 py-3 text-sm ${view===tab?'border-b-2 border-gray-900 font-bold':'text-gray-500'}`}>{tab==='summary'?'日付・仕入先別':tab==='rows'?'商品別明細':`確認事項（${ledger.issues.length}件）`}</button>)}

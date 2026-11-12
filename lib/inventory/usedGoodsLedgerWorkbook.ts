@@ -61,7 +61,7 @@ export async function usedGoodsLedgerWorkbook(ledger:UsedGoodsLedger):Promise<Bu
   const daily=sheet(book,'古物台帳',`${ledger.year}年 古物台帳（日付・仕入先別）`,'同じ日・同じ仕入先で集計。商品名・特徴・金額の根拠は「商品別明細」と併せて保管してください。',[
     {header:'取引年月日',key:'date',width:14,numFmt:'yyyy/mm/dd'},{header:'相手方（氏名・名称／住所／職業）',key:'counterpartyName',width:44},
     {header:'取引区分',key:'transactionType',width:10},{header:'品目',key:'itemTypes',width:30},
-    {header:'数量（台帳登録値）',key:'quantity',width:10,numFmt:'#,##0'},
+    {header:'数量（在庫欄の合計）',key:'quantity',width:10,numFmt:'#,##0'},
     {header:'購入金額（円）',key:'purchaseAmount',width:16,numFmt:'#,##0'},{header:'送料（円）',key:'shipping',width:13,numFmt:'#,##0'},
     {header:'合計金額（円）',key:'total',width:18,numFmt:'#,##0'},
     {header:'合計の根拠',key:'amountBasis',width:28},{header:'相手方住所',key:'counterpartyAddress',width:38},
@@ -83,7 +83,7 @@ export async function usedGoodsLedgerWorkbook(ledger:UsedGoodsLedger):Promise<Bu
     {header:'管理番号',key:'managementNumber',width:15},{header:'取引年月日',key:'date',width:14,numFmt:'yyyy/mm/dd'},
     {header:'受入れ・払出し',key:'direction',width:14},{header:'取引区分',key:'transactionType',width:12},
     {header:'商品名',key:'name',width:48},{header:'品目',key:'itemType',width:20},
-    {header:'数量（台帳登録値）',key:'quantity',width:12,numFmt:'#,##0'},{header:'古物の特徴',key:'feature',width:40},
+    {header:'数量（在庫欄）',key:'quantity',width:12,numFmt:'#,##0'},{header:'古物の特徴',key:'feature',width:40},
     {header:'相手方氏名・名称',key:'counterpartyName',width:24},{header:'相手方住所',key:'counterpartyAddress',width:38},
     {header:'相手方職業',key:'counterpartyOccupation',width:18},
     {header:'真偽確認の措置・方法',key:'verification',width:40},{header:'登録購入価格（円）',key:'unitPrice',width:15,numFmt:'#,##0'},
@@ -96,13 +96,13 @@ export async function usedGoodsLedgerWorkbook(ledger:UsedGoodsLedger):Promise<Bu
   const main=sheet(book,'商品別明細',`${ledger.year}年 商品別明細（受入れ）`,'取引の年月日を基準に抽出。未記録の項目は空欄です。',columns);
   const disposals=sheet(book,'払出記録',`${ledger.year}年 払出記録（売却）`,'販売終了日を基準に抽出。仕入先を売却相手として転記しません。',columns);
   main.getCell('A4').value='購入価格の内訳と取引合計は非表示列に保存。ヤフオクの単価は送料込み。金額は「古物台帳」で集計しています。';
-  daily.getCell('A4').value='A3横で印刷。金額の内訳は購入価格＋送料。注記・参照番号はセルのメモと非表示列に保存しています。';
+  daily.getCell('A4').value=`数量は在庫欄の合計。送料未入力は0円。1万円未満・未記入の家具類 ${ledger.omittedLowValue??0}件を出力対象外（元在庫は保持）。`;
   for(const s of [main,disposals])for(const key of ['direction','transactionType','itemType','counterpartyAddress','counterpartyOccupation','verification','purchaseAmount','shipping','total','amountBasis','transactionKey','market','issues'])s.getColumn(key).hidden=true;
   for(const r of ledger.rows){
     const s=r.direction==='受入れ'?main:disposals,firstRow=s.rowCount+1;
     add(s,{...r,date:new Date(r.date+'T00:00:00Z'),issues:r.issues.join('\n')});
     s.getCell(firstRow,13).note=[r.amountBasis,...(r.evidence||[])].join('\n');
-    if(r.direction==='受入れ'&&!r.transactionKey)s.getCell(firstRow,7).note='仕入台帳に登録された値です。同じ取引全体の数量が複数商品に記録されているため、商品間で合算していません。';
+    if(r.direction==='受入れ')s.getCell(firstRow,7).note='指定に従い、在庫の「数量」を使用。空欄は在庫一覧と同じ0点。明示された分割先の数量は分割元へ合算し、仕入れの二重登録はしません。';
   }
   const groups=sheet(book,'仕入取引集計',`${ledger.year}年 仕入取引集計`,'識別できるリステージの開催日・ヤフオク注文ごとに集約。単価の再計算は行いません。',[
     {header:'仕入取引番号',key:'key',width:30},{header:'取引年月日',key:'date',width:14,numFmt:'yyyy/mm/dd'},
