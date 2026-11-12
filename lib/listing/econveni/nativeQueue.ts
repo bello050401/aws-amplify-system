@@ -37,6 +37,8 @@ async function context(r:NativeRequest,shared?:Awaited<ReturnType<typeof nativeS
  const owners=new Set([...manual.links.filter(l=>l.productId===r.productId).map(l=>l.inventoryId),...flows.filter(f=>f.save.productId===r.productId).map(f=>f.inventoryId)]);
  if(owners.size!==1||!owners.has(r.inventoryId)||!item||!manual.snapshot)throw Error('商品の紐付けが変わりました。再確認してください。');
  const remote=manual.snapshot.products.find(p=>p.productId===r.productId);if(!remote)throw Error('eコンビニの商品が見つかりません。');
+ const siblingIds=new Set([...manual.links.filter(l=>l.inventoryId===r.inventoryId&&l.productId!==r.productId).map(l=>l.productId),...flows.filter(f=>f.inventoryId===r.inventoryId&&f.save.productId!==r.productId).flatMap(f=>f.save.productId?[f.save.productId]:[])]);
+ if(r.operation==='PUBLISH'&&manual.snapshot.products.some(p=>siblingIds.has(p.productId)&&p.channels[r.channel].state==='ACTIVE'))throw Error('同じ在庫の別ページがこの販売先に出品中です。重複出品を防ぐため停止しました。');
  if(legacy?.status==='PUBLISHING')throw Error('販売先の別の処理が進行中です。結果を確認してください。');
  if(legacy?.externalListingId&&legacy.externalListingId!==remote.channels[r.channel].listingId)throw Error('販売先の出品番号がeコンビニと一致しません。紐付けを確認してください。');
  const soldChannel=item.market==='ヤフオク'?'YAHOO':item.market==='メルカリSHOP'?'MERCARI_SHOPS':item.market==='ベイス'?'BASE':null;
@@ -46,7 +48,7 @@ async function context(r:NativeRequest,shared?:Awaited<ReturnType<typeof nativeS
  const link=manual.links.find(l=>l.inventoryId===r.inventoryId&&l.productId===r.productId),workflow=flows.find(f=>f.inventoryId===r.inventoryId&&f.save.productId===r.productId);
  if(flows.some(f=>f.inventoryId===r.inventoryId&&(f.save.state==='PENDING'||f.save.state==='VERIFY_REQUIRED'||Object.values(f.channels).some(c=>['PENDING','VERIFY_REQUIRED'].includes(c.state)))))throw Error('前回のeコンビニ処理の結果を先に確認してください。');
  const bindingChecks=link?[{ConditionCheck:{TableName:table,Key:{pk:manualLinkKey(link)},ConditionExpression:'revision=:r AND productId=:p AND (attribute_not_exists(disabled) OR disabled=:no)',ExpressionAttributeValues:{':r':link.revision,':p':r.productId,':no':false}}},{ConditionCheck:{TableName:table,Key:{pk:'ECONVENI#MANUAL_OWNER#'+r.productId},ConditionExpression:'inventoryId=:id',ExpressionAttributeValues:{':id':r.inventoryId}}}]:workflow?[{ConditionCheck:{TableName:table,Key:{pk:workflow.pk},ConditionExpression:'revision=:r',ExpressionAttributeValues:{':r':workflow.revision}}}]:[];
- return {manual,item,remote,protectedSale,bindingChecks,legacy};
+ return {manual,item,remote,protectedSale,bindingChecks,legacy,siblingIds};
 }
 export async function reviewNative(r:NativeRequest,shared?:Awaited<ReturnType<typeof nativeShared>>){
  const ctx=await context(r,shared),reason=nativeAllowed(r,ctx.remote,ctx.item,ctx.protectedSale);
@@ -125,6 +127,7 @@ export async function runNativeJob(job:NativeJob){
   const ctx=await context(job),remote=await session.readExternalProduct(job.productId);
   if((job.stockFingerprint?stockFingerprint(ctx.item)!==job.stockFingerprint:ctx.item.updatedAt!==job.inventoryVersion)||nativeFingerprint(remote,job.channel)!==job.fingerprint)throw Error('受付後に商品・数量・出品状態が変更されました。再確認してください。');
   const reason=nativeAllowed(job,remote,ctx.item,ctx.protectedSale);if(reason)throw Error(reason);
+  if(job.operation==='PUBLISH')for(const id of ctx.siblingIds){const sibling=await session.readExternalProduct(id);if(sibling.channels[job.channel].state==='ACTIVE')throw Error('同じ在庫の別ページがこの販売先に出品中です。重複出品を防ぐため停止しました。');}
   const command=await session.nativePreview(job.productId,job.channel,job.operation);
   await lease.commitNative(null,{...receiptKey,inventoryId:job.inventoryId,revision:0,updatedAt:'',operation:job.operation,channel:job.channel,jobId:job.id,state:'SENDING',legacyId:ctx.legacy?.id},[
    {ConditionCheck:{TableName:inventoryTable('Inventory'),Key:{id:job.inventoryId},ConditionExpression:'updatedAt=:v',ExpressionAttributeValues:{':v':ctx.item.updatedAt}}},
