@@ -7,12 +7,13 @@ function sheet(book:ExcelJS.Workbook,name:string,title:string,note:string,column
   s.columns=columns.map(({key,width,numFmt})=>({key,width,...(numFmt?{style:{numFmt}}:{})}));
   s.getCell('A2').value=title;s.getCell('A2').font={name:'Yu Gothic',size:15,bold:true,color:{argb:'FF183153'}};
   s.getCell('A3').value=note;s.getCell('A3').font={name:'Yu Gothic',size:10,color:{argb:'FF475569'}};
+  s.mergeCells(2,1,2,columns.length);s.mergeCells(3,1,3,columns.length);
   s.getRow(HEADER).values=columns.map(c=>c.header);s.getRow(HEADER).height=42;
   s.getRow(HEADER).eachCell(c=>{c.font={name:'Yu Gothic',size:10,bold:true,color:{argb:'FFFFFFFF'}};c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF183153'}};c.alignment={vertical:'middle',horizontal:'center',wrapText:true};});
   s.headerFooter.oddFooter='&L株式会社BELLO&R&P / &N';
   return s;
 }
-function add(s:ExcelJS.Worksheet,values:Record<string,unknown>) {
+function addRow(s:ExcelJS.Worksheet,values:Record<string,unknown>) {
   // Assign strings as literal cell values (never formula/hyperlink objects).
   const r=s.addRow(Object.fromEntries(Object.entries(values).map(([key,value])=>[key,value===''?null:value]))); let lines=1;
   r.eachCell((cell,col)=>{
@@ -28,38 +29,63 @@ function add(s:ExcelJS.Worksheet,values:Record<string,unknown>) {
   });
   r.height=Math.min(409,Math.max(30,lines*14+10));
 }
+/** Excel row height is limited to 409pt. Continue long descriptions without losing text
+ * or repeating numeric totals, so printed ledgers remain readable and summable. */
+function add(s:ExcelJS.Worksheet,values:Record<string,unknown>) {
+  const chunks=new Map<string,unknown[]>();let count=1;
+  for(const column of s.columns){
+    const key=String(column.key),value=values[key];
+    if(typeof value!=='string'){chunks.set(key,[value]);continue;}
+    const parts:string[]=[];let part='',width=0,lines=1;const limit=Math.max(10,(column.width??20)-2);
+    for(const char of value){
+      const size=char.codePointAt(0)!>255?2:1;
+      if(char==='\n'){lines++;width=0;}else if(width+size>limit){lines++;width=size;}else width+=size;
+      if(lines>24){parts.push(part);part='';lines=1;width=char==='\n'?0:size;}
+      part+=char;
+    }
+    parts.push(part);chunks.set(key,parts);count=Math.max(count,parts.length);
+  }
+  for(let i=0;i<count;i++)addRow(s,Object.fromEntries([...chunks].map(([key,parts])=>[key,parts[i]??null])));
+}
 export async function usedGoodsLedgerWorkbook(ledger:UsedGoodsLedger):Promise<Buffer> {
   const book=new ExcelJS.Workbook();book.creator='株式会社BELLO';book.created=new Date(ledger.generatedAt);book.modified=book.created;
   const daily=sheet(book,'古物台帳',`${ledger.year}年 古物台帳（日付・仕入先別）`,'同じ日・同じ仕入先を1行に集計。商品ごとの品目・特徴は「商品別明細」と併せて保管してください。',[
     {header:'取引年月日',key:'date',width:14,numFmt:'yyyy/mm/dd'},{header:'相手方氏名・名称',key:'counterpartyName',width:28},
-    {header:'取引区分',key:'transactionType',width:12},{header:'品目（登録内容）',key:'itemTypes',width:36},
-    {header:'取引数量',key:'quantity',width:12,numFmt:'#,##0'},{header:'仕入れ合計（円）',key:'total',width:18,numFmt:'#,##0'},
+    {header:'取引区分',key:'transactionType',width:12},{header:'品目（分類・カテゴリ・商品名）',key:'itemTypes',width:64},
+    {header:'取引数量',key:'quantity',width:10,numFmt:'#,##0'},
+    {header:'購入金額（円）',key:'purchaseAmount',width:16,numFmt:'#,##0'},{header:'送料（円）',key:'shipping',width:13,numFmt:'#,##0'},
+    {header:'合計金額（円）',key:'total',width:18,numFmt:'#,##0'},
     {header:'合計の根拠',key:'amountBasis',width:28},{header:'相手方住所',key:'counterpartyAddress',width:38},
-    {header:'相手方職業',key:'counterpartyOccupation',width:18},{header:'年齢・生年月日',key:'counterpartyAge',width:18},
+    {header:'相手方職業',key:'counterpartyOccupation',width:18},
     {header:'真偽確認の措置・方法',key:'verification',width:40},{header:'商品別明細の管理番号',key:'references',width:25},
-    {header:'商品ページ数',key:'products',width:13,numFmt:'#,##0'},{header:'確認事項',key:'issues',width:50},
+    {header:'確認事項',key:'issues',width:50},
   ]);
   for(const r of ledger.supplierDays)add(daily,{...r,date:new Date(r.date+'T00:00:00Z'),issues:r.issues.join('\n')});
   const columns=[
     {header:'管理番号',key:'managementNumber',width:15},{header:'取引年月日',key:'date',width:14,numFmt:'yyyy/mm/dd'},
     {header:'受入れ・払出し',key:'direction',width:14},{header:'取引区分',key:'transactionType',width:12},
-    {header:'商品名',key:'name',width:42},{header:'品目（登録内容）',key:'itemType',width:28},
+    {header:'商品名',key:'name',width:42},{header:'品目（分類・カテゴリ・商品名）',key:'itemType',width:48},
     {header:'数量',key:'quantity',width:10,numFmt:'#,##0'},{header:'古物の特徴',key:'feature',width:40},
     {header:'相手方氏名・名称',key:'counterpartyName',width:24},{header:'相手方住所',key:'counterpartyAddress',width:38},
-    {header:'相手方職業',key:'counterpartyOccupation',width:18},{header:'年齢・生年月日',key:'counterpartyAge',width:18},
+    {header:'相手方職業',key:'counterpartyOccupation',width:18},
     {header:'真偽確認の措置・方法',key:'verification',width:40},{header:'購入単価（円）',key:'unitPrice',width:15,numFmt:'#,##0'},
-    {header:'登録済み合計（円）※',key:'recordedTotal',width:18,numFmt:'#,##0'},
+    {header:'購入金額（円）',key:'purchaseAmount',width:16,numFmt:'#,##0'},
+    {header:'送料（円）',key:'shipping',width:13,numFmt:'#,##0'},
+    {header:'合計金額（円）',key:'total',width:18,numFmt:'#,##0'},
+    {header:'計算の根拠',key:'amountBasis',width:40},
     {header:'仕入取引番号',key:'transactionKey',width:28},{header:'販売経路',key:'market',width:18},{header:'確認事項',key:'issues',width:44},
   ];
   const main=sheet(book,'商品別明細',`${ledger.year}年 商品別明細（受入れ）`,'取引の年月日を基準に抽出。未記録の項目は空欄です。',columns);
   const disposals=sheet(book,'払出記録',`${ledger.year}年 払出記録（売却）`,'販売終了日を基準に抽出。仕入先を売却相手として転記しません。',columns);
-  main.getCell('A4').value='※受入れは「その日の仕入れ合計金額」、払出しは「販売価格」。受入れの合計を行ごとに足し合わせないでください。';
+  main.getCell('A4').value='日次合計は「古物台帳」で確認。商品別金額が確定できない欄は空欄です。ヤフオクの購入単価には送料が含まれます。';
+  daily.getCell('A4').value='長い品目は継続行に表示し、数量・金額は先頭行にのみ記載。未登録の送料は0円、ヤフオクの取得失敗は要確認です。';
   for(const r of ledger.rows)add(r.direction==='受入れ'?main:disposals,{...r,date:new Date(r.date+'T00:00:00Z'),issues:r.issues.join('\n')});
   const groups=sheet(book,'仕入取引集計',`${ledger.year}年 仕入取引集計`,'識別できるリステージの開催日・ヤフオク注文ごとに集約。単価の再計算は行いません。',[
     {header:'仕入取引番号',key:'key',width:30},{header:'取引年月日',key:'date',width:14,numFmt:'yyyy/mm/dd'},
-    {header:'相手方氏名・名称',key:'counterpartyName',width:26},{header:'品目（登録内容）',key:'itemTypes',width:46},
-    {header:'取引数量',key:'quantity',width:12,numFmt:'#,##0'},{header:'取引合計（円）',key:'total',width:18,numFmt:'#,##0'},
-    {header:'商品ページ数',key:'products',width:15,numFmt:'#,##0'},{header:'確認事項',key:'issues',width:52},
+    {header:'相手方氏名・名称',key:'counterpartyName',width:26},{header:'品目（分類・カテゴリ・商品名）',key:'itemTypes',width:64},
+    {header:'取引数量',key:'quantity',width:12,numFmt:'#,##0'},
+    {header:'購入金額（円）',key:'purchaseAmount',width:16,numFmt:'#,##0'},{header:'送料（円）',key:'shipping',width:13,numFmt:'#,##0'},
+    {header:'合計金額（円）',key:'total',width:18,numFmt:'#,##0'},{header:'確認事項',key:'issues',width:52},
   ]);
   for(const g of ledger.transactions)add(groups,{...g,date:new Date(g.date+'T00:00:00Z'),issues:g.issues.join('\n')});
   const checks=sheet(book,'確認事項',`${ledger.year}年 台帳の確認事項`,'取引日未登録は全期間から表示。空欄を推測で補完せず、元の商品情報で確認してください。',[

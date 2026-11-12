@@ -54,8 +54,8 @@ test('XLSX has typed dates/numbers, literal formula-like titles, filters, frozen
  const r=buildUsedGoodsLedger([source({name:'=HYPERLINK("https://example.invalid")',sku:'0000123'})],2026);
  const bytes=await usedGoodsLedgerWorkbook(r);const book=new ExcelJS.Workbook();await book.xlsx.load(new Uint8Array(bytes).buffer);
  assert.deepEqual(book.worksheets.map(s=>s.name),['古物台帳','商品別明細','払出記録','仕入取引集計','確認事項']);const s=book.getWorksheet('商品別明細')!;
- assert.equal(s.getCell('A6').value,'0000123');assert.ok(s.getCell('B6').value instanceof Date);assert.equal(s.getCell('G6').value,5);assert.equal(s.getCell('N6').value,1000);assert.equal(s.getCell('E6').formula,undefined);assert.match(s.getCell('E6').text,/^=HYPERLINK/);
- assert.equal(s.views[0].state,'frozen');assert.ok(s.autoFilter);assert.equal(s.getCell('N6').numFmt,'#,##0');
+ assert.equal(s.getCell('A6').value,'0000123');assert.ok(s.getCell('B6').value instanceof Date);assert.equal(s.getCell('G6').value,5);assert.equal(s.getCell('M6').value,1000);assert.equal(s.getCell('E6').formula,undefined);assert.match(s.getCell('E6').text,/^=HYPERLINK/);
+ assert.equal(s.views[0].state,'frozen');assert.ok(s.autoFilter);assert.equal(s.getCell('M6').numFmt,'#,##0');
 });
 test('same supplier and date is one summary row, daily total and quantity counted once',()=>{
  const r=buildUsedGoodsLedger([source({id:'a',dailyPurchaseTotal:5000}),source({id:'b',dailyPurchaseTotal:5000}),source({id:'c',dailyPurchaseTotal:5000})],2026);
@@ -87,4 +87,61 @@ test('missing purchase total is not inferred from current stock or a transaction
 });
 test('empty year still creates a usable workbook without claiming all records complete',async()=>{
  const r=buildUsedGoodsLedger([source({transactionDate:null})],2025);assert.equal(r.rows.length,0);assert.equal(r.issues.length,1);assert.ok((await usedGoodsLedgerWorkbook(r)).length>1000);
+});
+
+test('item description includes all categories and full titles even without a dedicated item type',()=>{
+ const records=[source({id:'a',name:'アルペール チェア ブラック',usedGoodsItemType:'',categoryNames:['販売中','川越移動予定'],dailyPurchaseTotal:2000}),source({id:'b',name:'丸テーブル ホワイト',categoryNames:['補修待ち'],dailyPurchaseTotal:2000})];
+ const r=buildUsedGoodsLedger(records,2026);
+ for(const text of ['販売中・川越移動予定','アルペール チェア ブラック','補修待ち','丸テーブル ホワイト'])assert.ok(r.supplierDays[0].itemTypes.includes(text));
+ assert.ok(!r.rows[0].issues.includes('品目が未記録'));
+});
+test('daily purchase total is counted once and shipping from each acquisition is added',()=>{
+ const r=buildUsedGoodsLedger([source({id:'a',dailyPurchaseTotal:3000,shippingCost:500}),source({id:'b',dailyPurchaseTotal:3000,shippingCost:200})],2026).supplierDays[0];
+ assert.equal(r.purchaseAmount,3000);assert.equal(r.shipping,700);assert.equal(r.total,3700);
+});
+test('a one-item receipt can total purchase price plus shipping without a daily total',()=>{
+ const r=buildUsedGoodsLedger([source({purchaseQuantity:1,quantity:0,purchasePrice:29700,shippingCost:2500})],2026);
+ assert.equal(r.supplierDays[0].total,32200);assert.equal(r.rows[0].purchaseAmount,29700);assert.equal(r.rows[0].total,32200);
+});
+test('zero and blank shipping do not make a known receipt total unavailable',()=>{
+ for(const shippingCost of [0,null,undefined,''])assert.equal(buildUsedGoodsLedger([source({purchaseQuantity:1,purchasePrice:0,shippingCost})],2026).supplierDays[0].total,0);
+});
+test('invalid recorded money is not silently converted to free shipping',()=>{
+ for(const shippingCost of [-1,'oops',true,0.5])assert.equal(buildUsedGoodsLedger([source({purchaseQuantity:1,shippingCost})],2026).supplierDays[0].total,null);
+});
+test('Yahoo exact total avoids rounding and adding included shipping twice',()=>{
+ const r=buildUsedGoodsLedger([source({purchasePrice:1167,purchaseQuantity:99,shippingCost:501,customFields:{__yahooPurchaseImport:{auctionId:'r1',quantity:3,itemTotal:3001,shipping:501}}})],2026);
+ assert.equal(r.supplierDays[0].purchaseAmount,3001);assert.equal(r.supplierDays[0].shipping,501);assert.equal(r.supplierDays[0].total,3502);assert.equal(r.rows[0].total,3502);
+});
+test('Yahoo unknown shipping remains unknown, while an explicit inventory correction is used once',()=>{
+ const record=source({customFields:{__yahooPurchaseImport:{auctionId:'r1',quantity:1,itemTotal:3000}}});
+ assert.equal(buildUsedGoodsLedger([record],2026).supplierDays[0].total,null);
+ assert.equal(buildUsedGoodsLedger([{...record,shippingCost:0}],2026).supplierDays[0].total,3000);
+});
+test('restage uses exact daily rounding once and does not reject different item descriptions',()=>{
+ const ledger={quantity:7,purchaseTotal:11881};
+ const r=buildUsedGoodsLedger(['a','b'].map((id,i)=>source({id,name:i?'テーブル':'椅子',shippingCost:i?200:300,customFields:{__restageImport:{date:'2026-10-01',goodsId:id,quantity:i?4:3,ledger}}})),2026);
+ assert.equal(r.supplierDays[0].purchaseAmount,11881);assert.equal(r.supplierDays[0].shipping,500);assert.equal(r.supplierDays[0].total,12381);
+});
+test('split copies never add duplicated shipping',()=>{
+ const r=buildUsedGoodsLedger([source({dailyPurchaseTotal:5000,shippingCost:500}),source({id:'b',dailyPurchaseTotal:5000,shippingCost:500,customFields:{__belloStockSplit:{sourceInventoryId:'a'}}})],2026);
+ assert.equal(r.supplierDays[0].total,5500);
+});
+test('mixed legacy Yahoo records preserve the shipping-inclusive daily total',()=>{
+ const r=buildUsedGoodsLedger([source({dailyPurchaseTotal:3500}),source({id:'b',dailyPurchaseTotal:3500,customFields:{__yahooPurchaseImport:{auctionId:'r1',quantity:1,itemTotal:3000,shipping:500}}})],2026);
+ assert.equal(r.supplierDays[0].total,3500);assert.equal(r.supplierDays[0].shipping,null);assert.match(r.supplierDays[0].issues.join(),/混在/);
+});
+test('age and page counts are absent from every exported worksheet and age is not a missing-field issue',async()=>{
+ const r=buildUsedGoodsLedger([source({purchaseQuantity:1,shippingCost:500})],2026);
+ assert.ok(!r.issues.some(x=>/年齢|生年月日/.test(x.message)));
+ const book=new ExcelJS.Workbook();await book.xlsx.load(new Uint8Array(await usedGoodsLedgerWorkbook(r)).buffer);
+ for(const s of book.worksheets)assert.ok(!/年齢|生年月日|商品ページ数/.test(JSON.stringify(s.getRow(5).values)));
+ const s=book.getWorksheet('古物台帳')!;assert.equal(s.getCell('F6').value,1000);assert.equal(s.getCell('G6').value,500);assert.equal(s.getCell('H6').value,1500);
+});
+test('long grouped descriptions are printed on continuation rows, preserving all text and totals once',async()=>{
+ const r=buildUsedGoodsLedger(Array.from({length:50},(_,i)=>source({id:String(i),name:`商品${i}：`+'大きなダイニングテーブル'.repeat(20),dailyPurchaseTotal:50000,shippingCost:10})),2026);
+ const book=new ExcelJS.Workbook();await book.xlsx.load(new Uint8Array(await usedGoodsLedgerWorkbook(r)).buffer);
+ const s=book.getWorksheet('古物台帳')!;let text='',total=0;
+ for(let i=6;i<=s.rowCount;i++){text+=s.getCell(`D${i}`).text;total+=Number(s.getCell(`H${i}`).value??0);assert.ok(s.getRow(i).height!<=409);}
+ assert.equal(text,r.supplierDays[0].itemTypes);assert.equal(total,50500);assert.ok(s.rowCount>6);
 });
