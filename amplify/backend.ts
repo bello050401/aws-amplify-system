@@ -162,7 +162,7 @@ const saleAutomation=new NodejsFunction(saleStack,'SaleAutomation',{
   '--alias:@/lib/saleCandidates/store':path.resolve('amplify/functions/sale-automation/store.ts'),
   '--alias:@/lib/listing/ecImage':path.resolve('amplify/functions/sale-automation/noPublishImages.ts'),
  }},
- environment:{NODE_ENV:'production',SALE_CANDIDATES_TABLE:purchaseTable.tableName,
+ environment:{NODE_ENV:'production',SALE_CANDIDATES_TABLE:purchaseTable.tableName,USER_POOL_ID:backend.auth.resources.userPool.userPoolId,
   CONVERSATION_TABLE_NAME:backend.data.resources.tables.Conversation.tableName,
   GENERATE_SKU_FUNCTION_NAME:backend.generateSku.resources.lambda.functionName,
   INVENTORY_BUCKET:backend.storage.resources.bucket.bucketName,
@@ -171,6 +171,7 @@ const saleAutomation=new NodejsFunction(saleStack,'SaleAutomation',{
   BASE_MANUAL_LISTING_ENABLED:'1',EXTERNAL_WRITES_ENABLED:'BASE',BASE_REQUEST_READ_ORDERS:'1',BASE_REQUEST_WRITE_ITEMS:'1',
  }});
 purchaseTable.grantReadWriteData(saleAutomation);
+saleAutomation.addToRolePolicy(new PolicyStatement({actions:['cognito-idp:AdminGetUser','cognito-idp:AdminListGroupsForUser'],resources:[backend.auth.resources.userPool.userPoolArn]}));
 grantInventoryHistoryReferences(saleAutomation);
 backend.generateSku.resources.lambda.grantInvoke(saleAutomation);
 for(const name of ['Inventory','InventoryCategory','InventoryHistory','ChannelListing','BaseOAuthToken']){

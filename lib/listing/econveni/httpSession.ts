@@ -3,6 +3,25 @@ import { parse, type DefaultTreeAdapterMap } from "parse5";
 import iconv from "iconv-lite";
 import { randomUUID, createHash } from "node:crypto";
 import type {ExternalProduct,ExternalStatus} from './manualSyncModel';
+import type {NativeOperation} from './nativeModel';
+import type {EcChannel} from '../ecManagement';
+export type NativeCommand={channel:EcChannel;operation:NativeOperation;productId:string;accountId:string;title:string;price:number;url:string};
+/** Contracts observed in the normal confirmation pages. CLEAR never means STOP. */
+export function readNativeCommand(page:HtmlPage,expected:Omit<NativeCommand,'url'>):NativeCommand{
+ if(expected.operation!=='CLEAR'&&expected.channel!=='BASE')return readEconveniCommand(page,expected as Omit<EconveniCommand,'url'>);
+ const labels={YAHOO:'上記のYahoo!オークションIDをすべて消す',MERCARI_SHOPS:'上記のメルカリShopsのItemIDを全て消す',BASE:'上記のBASEアイテムナンバーを全て消す'};
+ const label=expected.operation==='CLEAR'?labels[expected.channel]:expected.operation==='PUBLISH'?'BASE 出品実行':'上記のBASEアイテムを全て削除する';
+ const buttons=elements(parse(page.html)).filter(n=>['input','button'].includes(n.tagName)&&(attr(n,'value')||text(n)).trim()===label);
+ if(buttons.length!==1)throw new EconveniHttpError('CONTRACT_CHANGED');
+ const match=(expected.operation==='CLEAR'?/^location\.href='([^']+)'$/:/^window\.open\('([^']+)',/).exec(attr(buttons[0],'onclick'));
+ if(!match)throw new EconveniHttpError('CONTRACT_CHANGED');
+ const url=allowedUrl(match[1],page.url),action=expected.channel==='YAHOO'?'clear_product':expected.channel==='BASE'?'base_clear_product':'mercariShops_clear_product';
+ const keys=['action','users_id','products_id','mode','order_by','attribute_page','query'];
+ if(url.origin!==SMART||url.pathname!==(expected.operation==='CLEAR'?'/functions.php':expected.operation==='PUBLISH'?'/base_exhibit.php':'/base_cancel.php')||url.hash||url.searchParams.get('users_id')!==expected.accountId||url.searchParams.get('products_id')!=='T'+expected.productId||[...url.searchParams.keys()].some(k=>!keys.includes(k)||url.searchParams.getAll(k).length!==1)||expected.operation==='CLEAR'&&url.searchParams.get('action')!==action)throw new EconveniHttpError('CONTRACT_CHANGED');
+ const visible=text(parse(page.html)).replace(/\s+/g,' ');
+ if(!visible.includes(expected.title+' @'+expected.price.toLocaleString('en-US')+'円')||(visible.match(/@[\d,]+円/g)??[]).length!==1)throw new EconveniHttpError('CONTRACT_CHANGED');
+ return {...expected,url:url.href};
+}
 
 type Element = DefaultTreeAdapterMap["element"];
 type Node = DefaultTreeAdapterMap["node"];
@@ -420,6 +439,23 @@ export class EconveniHttpSession {
     const title=fields[channel==='YAHOO'?'products_name':'mercariShops_name'],price=fields[channel==='YAHOO'?'products_price':'mercariShops_price'];
     if(fields.products_id!==productId||!title||!/^\d+$/.test(price??''))throw new EconveniHttpError('CONTRACT_CHANGED');
     return this.publicationPreview({channel,operation:'STOP',productId,title,price:Number(price)});
+  }
+
+  async nativePreview(productId:string,channel:EcChannel,operation:NativeOperation):Promise<NativeCommand>{
+    const {values}=await this.saleProductFields(productId);
+    const accountId=values.users_id,title=values.products_name,price=Number(values.products_price);
+    if(!/^\d+$/.test(accountId??'')||!title||!Number.isSafeInteger(price)||price<0)throw new EconveniHttpError('CONTRACT_CHANGED');
+    const prefix=channel==='YAHOO'?'yahoo':channel==='BASE'?'base':'mercariShops';
+    const suffix=operation==='PUBLISH'?'exhibit':operation==='CLEAR'?'clear':'stop';
+    const page=await this.request(SMART+'/product_listing.php?'+new URLSearchParams({action:prefix+'_'+suffix+'_together',products_id:'T'+productId,mode:'',order_by:'',attribute_page:'',query:''}));
+    return readNativeCommand(page,{productId,channel,operation,accountId,title,price});
+  }
+  async executeNative(command:NativeCommand){
+    if(!this.authenticated||this.writeAttempted)throw new EconveniHttpError('CONTRACT_CHANGED');
+    const fresh=await this.nativePreview(command.productId,command.channel,command.operation);
+    if(JSON.stringify(fresh)!==JSON.stringify(command))throw new EconveniHttpError('CONTRACT_CHANGED');
+    this.writeAttempted=true;
+    return this.request(fresh.url);
   }
 
   /** Existing product fields only; used under a durable sale receipt, without changing photos or notes. */

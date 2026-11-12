@@ -7,20 +7,23 @@ import {econveniCredentialStore} from './credentials';
 import {withEconveniAccount} from './accountWorkflow';
 import {getInventoryRaw,inventoryTable} from '@/lib/inventory/categoryPersistence';
 import type {ExternalProduct,ExternalSnapshot,ManualLink,ManualSyncData} from './manualSyncModel';
+import {manualLinkKey} from './manualSyncModel';
 
 export class ManualSyncError extends Error { constructor(message:string){super(message);this.name='ManualSyncError';} }
 const cacheKey={pk:'ECONVENI#OBSERVED_CATALOG'};
 const linkKey=(id:string)=>({pk:'ECONVENI#MANUAL_LINK#'+id});
 const ownerKey=(id:string)=>({pk:'ECONVENI#MANUAL_OWNER#'+id});
 export const productFingerprint=(p:ExternalProduct)=>createHash('sha256').update(JSON.stringify(p)).digest('hex');
-export async function readManualSync(inventoryId?:string):Promise<ManualSyncData>{
+export async function readManualSync(inventoryId?:string,workflowProductIds:string[]=[]):Promise<ManualSyncData>{
  if(inventoryId){
   const [observed,linked]=await Promise.all([
    db.send(new GetCommand({TableName:table,Key:cacheKey,ConsistentRead:true})),
    db.send(new GetCommand({TableName:table,Key:linkKey(inventoryId),ConsistentRead:true})),
   ]);
   const link=linked.Item as ManualLink|undefined,snapshot=observed.Item as ExternalSnapshot|undefined;
-  return {snapshot:snapshot?{...snapshot,products:snapshot.products.filter(p=>p.productId===link?.productId)}:null,links:link&&!link.disabled?[link]:[]};
+  const related=link&&!link.disabled?await Promise.all((link.relatedProductIds??[]).map(productId=>db.send(new GetCommand({TableName:table,Key:{pk:linkKey(inventoryId).pk+'#'+productId},ConsistentRead:true})))):[];
+  const links=link&&!link.disabled?[link,...related.flatMap(r=>r.Item&&!r.Item.disabled?[r.Item as ManualLink]:[])]:[];
+  return {snapshot:snapshot?{...snapshot,products:snapshot.products.filter(p=>links.some(l=>l.productId===p.productId)||workflowProductIds.includes(p.productId))}:null,links};
  }
  const snapshot=(await db.send(new GetCommand({TableName:table,Key:cacheKey,ConsistentRead:true}))).Item as ExternalSnapshot|undefined;
  const links:ManualLink[]=[];let cursor:Record<string,unknown>|undefined;
@@ -46,30 +49,42 @@ export async function refreshManualSync():Promise<ManualSyncData>{
 export async function linkExternalProduct(input:{inventoryId:string;productId:string;version:string;fingerprint:string;confirmed:boolean},actor:string,allowCompletedSale=false){
  if(!input.confirmed||!/^\d{1,15}$/.test(input.productId))throw new ManualSyncError('商品名と写真を確認してください。');
  const [data,item,workflows]=await Promise.all([readManualSync(),getInventoryRaw(input.inventoryId),readEconveniCatalog()]);
- if(!item||item.isDeleted||item.deletedAt||item.quantity<1||item.saleEndDate&&!allowCompletedSale)throw new ManualSyncError('現在の在庫を確認してください。');
+ // Linking is metadata only. Completed / shipped stock must remain linkable for
+ // sale reconciliation; it does not grant permission to publish that stock.
+ if(!item||item.isDeleted||item.deletedAt||item.listingPartition==='MERGED'||!allowCompletedSale&&(item.quantity<1||item.saleEndDate))throw new ManualSyncError('現在の在庫を確認してください。');
  const snapshot=data.snapshot,remote=snapshot?.products.find(p=>p.productId===input.productId);
  if(!snapshot||snapshot.version!==input.version||Date.now()-Date.parse(snapshot.checkedAt)>30*60000||!remote||productFingerprint(remote)!==input.fingerprint)throw new ManualSyncError('取得した情報が変わったか、30分経過しました。状態を取得し直してください。');
  if(!remote.imageUrl)throw new ManualSyncError('eコンビニの写真を確認できないため、紐付けできません。');
  if(remote.inventoryMarker&&remote.inventoryMarker!==item.id)throw new ManualSyncError('別の在庫番号が登録されているため、紐付けできません。');
- if(workflows.some(w=>w.save.productId===remote.productId&&w.inventoryId!==item.id)||workflows.some(w=>w.inventoryId===item.id&&w.save.productId&&w.save.productId!==remote.productId))throw new ManualSyncError('別の商品との紐付けがあるため変更できません。');
- const old=data.links.find(l=>l.inventoryId===item.id);
- if(old&&old.productId!==remote.productId)throw new ManualSyncError('先に現在の紐付けを解除してください。');
+ if(workflows.some(w=>w.save.productId===remote.productId&&w.inventoryId!==item.id))throw new ManualSyncError('別の商品との紐付けがあるため変更できません。');
+ const primary=data.links.find(l=>l.inventoryId===item.id&&manualLinkKey(l)===linkKey(item.id).pk);
+ const old=data.links.find(l=>l.inventoryId===item.id&&l.productId===remote.productId);
+ const additional=!!primary&&primary.productId!==remote.productId;
+ if(additional&&!old){
+  if((primary.relatedProductIds?.length??0)>=10)throw new ManualSyncError('1在庫に紐付けできるページの上限です。既存の紐付けを確認してください。');
+  for(const channel of ['BASE','YAHOO','MERCARI_SHOPS'] as const)if(remote.channels[channel].state==='ACTIVE'&&data.links.some(l=>l.inventoryId===item.id&&(snapshot.products.find(p=>p.productId===l.productId)?.channels[channel]??l.baseline[channel]).state==='ACTIVE'))throw new ManualSyncError('同じ販売先に出品中のページが複数あります。既存の紐付けを確認してください。');
+ }
  if(data.links.some(l=>l.productId===remote.productId&&l.inventoryId!==item.id))throw new ManualSyncError('このeコンビニ商品は別の在庫と紐付いています。');
- const link:ManualLink={inventoryId:item.id,productId:remote.productId,inventoryName:String(item.name),remoteTitle:remote.title,linkedAt:new Date().toISOString(),actor,baseline:remote.channels,revision:(old?.revision??0)+1};
+ const key=old?{pk:manualLinkKey(old)}:{pk:linkKey(item.id).pk+(additional?'#'+remote.productId:'')};
+ const link:ManualLink={...old,...key,disabled:false,inventoryId:item.id,productId:remote.productId,inventoryName:String(item.name),remoteTitle:remote.title,linkedAt:new Date().toISOString(),actor,baseline:remote.channels,revision:(old?.revision??0)+1};
  try{await db.send(new TransactWriteCommand({TransactItems:[
   {ConditionCheck:{TableName:table,Key:cacheKey,ConditionExpression:'#v=:v',ExpressionAttributeNames:{'#v':'version'},ExpressionAttributeValues:{':v':snapshot.version}}},
   {ConditionCheck:{TableName:inventoryTable('Inventory'),Key:{id:item.id},ConditionExpression:'updatedAt=:v AND (attribute_not_exists(isDeleted) OR isDeleted=:no)',ExpressionAttributeValues:{':v':item.updatedAt,':no':false}}},
   {Put:{TableName:table,Item:{...ownerKey(remote.productId),inventoryId:item.id},ConditionExpression:'attribute_not_exists(inventoryId) OR inventoryId=:id',ExpressionAttributeValues:{':id':item.id}}},
-  {Put:{TableName:table,Item:{...linkKey(item.id),...link},ConditionExpression:old?'revision=:revision':'attribute_not_exists(pk) OR disabled=:yes',ExpressionAttributeValues:old?{':revision':old.revision}:{':yes':true}}}
+  {Put:{TableName:table,Item:link,ConditionExpression:old?'revision=:revision':'attribute_not_exists(pk) OR disabled=:yes',ExpressionAttributeValues:old?{':revision':old.revision}:{':yes':true}}},
+  ...(additional&&!old?[{Update:{TableName:table,Key:linkKey(item.id),UpdateExpression:'SET relatedProductIds=:ids, revision=:next',ConditionExpression:'revision=:r AND productId=:p',ExpressionAttributeValues:{':ids':[...new Set([...(primary!.relatedProductIds??[]),remote.productId])],':next':primary!.revision+1,':r':primary!.revision,':p':primary!.productId}}}]:[])
  ]}));}catch{throw new ManualSyncError('紐付けの保存結果を確認できません。一覧を読み直してください。');}
  return readManualSync();
 }
-export async function unlinkExternalProduct(inventoryId:string,revision:number,actor:string){
- const {links}=await readManualSync(),link=links.find(l=>l.inventoryId===inventoryId);
+export async function unlinkExternalProduct(inventoryId:string,revision:number,actor:string,productId?:string){
+ const {links}=await readManualSync(inventoryId),link=links.find(l=>l.inventoryId===inventoryId&&(!productId||l.productId===productId));
  if(!link)return readManualSync();
+ const primary=links.find(l=>manualLinkKey(l)===linkKey(inventoryId).pk),secondary=manualLinkKey(link)!==linkKey(inventoryId).pk;
+ if(!secondary&&links.length>1)throw new ManualSyncError('先に追加ページの紐付けを解除してください。');
  if(link.revision!==revision)throw new ManualSyncError('紐付けが変わりました。画面を読み直してください。');
  await db.send(new TransactWriteCommand({TransactItems:[
-  {Update:{TableName:table,Key:linkKey(inventoryId),UpdateExpression:'SET disabled=:yes, unlinkedAt=:at, unlinkedBy=:actor, revision=:next',ConditionExpression:'revision=:rev',ExpressionAttributeValues:{':yes':true,':at':new Date().toISOString(),':actor':actor,':rev':revision,':next':revision+1}}},
-  {Update:{TableName:table,Key:ownerKey(link.productId),UpdateExpression:'REMOVE inventoryId',ConditionExpression:'inventoryId=:id',ExpressionAttributeValues:{':id':inventoryId}}}
+  {Update:{TableName:table,Key:{pk:manualLinkKey(link)},UpdateExpression:'SET disabled=:yes, unlinkedAt=:at, unlinkedBy=:actor, revision=:next',ConditionExpression:'revision=:rev',ExpressionAttributeValues:{':yes':true,':at':new Date().toISOString(),':actor':actor,':rev':revision,':next':revision+1}}},
+  {Update:{TableName:table,Key:ownerKey(link.productId),UpdateExpression:'REMOVE inventoryId',ConditionExpression:'inventoryId=:id',ExpressionAttributeValues:{':id':inventoryId}}},
+  ...(secondary&&primary?[{Update:{TableName:table,Key:linkKey(inventoryId),UpdateExpression:'SET relatedProductIds=:ids, revision=:next',ConditionExpression:'revision=:r',ExpressionAttributeValues:{':ids':(primary.relatedProductIds??[]).filter(id=>id!==link.productId),':next':primary.revision+1,':r':primary.revision}}}]:[])
  ]}));return readManualSync();
 }

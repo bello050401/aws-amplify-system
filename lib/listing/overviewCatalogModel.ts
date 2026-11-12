@@ -57,7 +57,7 @@ export function overviewChannel(
   catalog: EcCatalog | null,
   channel: EcChannel,
 ): EcChannelState {
-  if (item.row)
+  if (item.row && !item.remote)
     return ecStateFor(
       catalog,
       channel,
@@ -65,6 +65,8 @@ export function overviewChannel(
       item.row.hasDraft,
     );
   const s = item.remote?.channels[channel];
+  const own=item.row?catalog?.channels[channel]?.[item.row.inventoryId]:undefined;
+  if(own&&s?.listingId&&own.externalId===s.listingId&&(own.state==='PENDING'||own.state==='ERROR'||own.checkedAt&&own.checkedAt>(catalog?.econveni?.checkedAt??'')))return own;
   return {
     state: !s
       ? "UNKNOWN"

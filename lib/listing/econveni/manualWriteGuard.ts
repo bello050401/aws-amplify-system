@@ -1,15 +1,16 @@
 import 'server-only';
-import {GetCommand} from '@aws-sdk/lib-dynamodb';
-import {econveniDatabase as db,ECONVENI_WORKFLOW_TABLE as table,econveniStore} from './runtimeStore';
+import {econveniStore} from './runtimeStore';
 import type {EcChannel} from '../ecManagement';
-import type {ManualLink,ExternalSnapshot} from './manualSyncModel';
+import type {ManualLink} from './manualSyncModel';
+import {selectManualLink} from './manualSyncModel';
+import {readManualSync} from './manualSync';
 export const MANUAL_READ_ONLY_MESSAGE='eコンビニの既存商品と連携済みです。重複出品を防ぐため、新しい商品登録・商品情報の上書きは行いません。出品停止はEC出品画面から販売先を選んで確認してください。';
 /** A read-only association must never make a legacy command target a different listing or create a duplicate. */
 export async function manualWriteRestriction(id:string,channel?:EcChannel,nativeListingId?:string|null):Promise<string|null>{
- const link=(await db.send(new GetCommand({TableName:table,Key:{pk:'ECONVENI#MANUAL_LINK#'+id},ConsistentRead:true}))).Item as ManualLink|undefined;
+ const data=await readManualSync(id);
+ let link:ManualLink|undefined;try{link=selectManualLink(data,id,channel);}catch(e){return (e as Error).message;}
  if(!link||link.disabled)return null;
- const snapshot=(await db.send(new GetCommand({TableName:table,Key:{pk:'ECONVENI#OBSERVED_CATALOG'},ConsistentRead:true}))).Item as ExternalSnapshot|undefined;
- const remote=snapshot?.products.find(p=>p.productId===link.productId);
+ const remote=data.snapshot?.products.find(p=>p.productId===link.productId);
  if(!remote)return MANUAL_READ_ONLY_MESSAGE;
  if(channel==='BASE')return nativeListingId&&nativeListingId===remote.channels.BASE.listingId?null:MANUAL_READ_ONLY_MESSAGE;
  const state=await econveniStore(id).read();

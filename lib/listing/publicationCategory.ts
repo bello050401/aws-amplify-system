@@ -6,8 +6,8 @@ import {clearInventoryCountCache} from '@/lib/inventory/inventoryPage';
 import {withHumanEdits} from '@/lib/inventory/humanEdits';
 import {parseCustomFields,stringifyCustomFields} from '@/lib/inventory/customFieldsCodec';
 /** Run only after the remote channel is confirmed active. Optimistic locking preserves concurrent edits. */
-export async function markInventoryPublished(id:string,actor:string){
- const [item,masters]=await Promise.all([getInventoryRaw(id),listCategories()]);if(!item)throw Error('INVENTORY_MISSING');
+export async function markInventoryPublished(id:string,actor:string,masterSource:()=>Promise<{id:string;name:string}[]>=listCategories){
+ const [item,masters]=await Promise.all([getInventoryRaw(id),masterSource()]);if(!item)throw Error('INVENTORY_MISSING');
  const before=inventoryCategoryIds(item),pending=masters.filter(c=>['補修待ち','撮影待ち','出品待ち'].includes(c.name)).map(c=>c.id);
  if(!before.some(x=>pending.includes(x)))return;
  if(masters.some(c=>c.name==='売り切れ'&&before.includes(c.id)))throw Error('INVENTORY_ALREADY_SOLD');

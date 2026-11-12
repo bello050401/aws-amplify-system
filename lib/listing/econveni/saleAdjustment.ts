@@ -12,22 +12,23 @@ import {getChannelListing} from '../service';
 import {readBaseItem,claimBaseManual,finishBaseManual} from '../base/manualLifecycle';
 import {setManualBaseStock} from '../base/adapter';
 import {adjustmentFingerprint,adjustmentKey,runSaleAdjustment,type SaleAdjustment,type AdjustmentReceipt} from './saleAdjustmentCore';
-import type {ExternalProduct,ExternalSnapshot,ManualLink} from './manualSyncModel';
+import type {ExternalProduct,ExternalSnapshot} from './manualSyncModel';
+import {selectManualLink,manualLinkKey} from './manualSyncModel';
+import {readManualSync} from './manualSync';
 import type {EcChannel,EcReview} from '../ecManagement';
 import {manualLinkedStop} from './manualStop';
 export async function saleAdjustmentStarted(request:SaleAdjustment){return !!(await db.send(new GetCommand({TableName:table,Key:{pk:adjustmentKey(request)},ConsistentRead:true}))).Item;}
 
-async function binding(id:string){
- const [item,linkResult,workflow]=await Promise.all([getInventoryRaw(id),db.send(new GetCommand({TableName:table,Key:{pk:'ECONVENI#MANUAL_LINK#'+id},ConsistentRead:true})),econveniStore(id).read()]);
- const saved=linkResult.Item as ManualLink|undefined,link=saved&&!saved.disabled?saved:null;
+async function binding(id:string,channel?:EcChannel){
+ const [item,data,workflow]=await Promise.all([getInventoryRaw(id),readManualSync(id),econveniStore(id).read()]);
+ const link=selectManualLink(data,id,channel)??null;
  if(!item||item.isDeleted||item.deletedAt)throw Error('在庫を確認できません。');
  const productId=link?.productId??workflow?.save.productId;
  if(!productId)return null;
- if(link&&workflow?.save.productId&&link.productId!==workflow.save.productId)throw Error('eコンビニの紐付けが一致しません。');
  if(workflow&&(['PENDING','VERIFY_REQUIRED'].includes(workflow.save.state)||Object.values(workflow.channels).some(c=>['PENDING','VERIFY_REQUIRED'].includes(c.state))))throw Error('eコンビニの前回の処理結果を先に確認してください。');
  const version=adjustmentFingerprint([productId,link?.revision??null,workflow?.revision??null]);
  const checks:NonNullable<TransactWriteCommandInput['TransactItems']>=[{ConditionCheck:{TableName:inventoryTable('Inventory'),Key:{id},ConditionExpression:'updatedAt=:v AND (attribute_not_exists(isDeleted) OR isDeleted=:no)',ExpressionAttributeValues:{':v':item.updatedAt,':no':false}}}];
- if(link){checks.push({ConditionCheck:{TableName:table,Key:{pk:'ECONVENI#MANUAL_LINK#'+id},ConditionExpression:'revision=:r AND productId=:p AND (attribute_not_exists(disabled) OR disabled=:no)',ExpressionAttributeValues:{':r':link.revision,':p':productId,':no':false}}},{ConditionCheck:{TableName:table,Key:{pk:'ECONVENI#MANUAL_OWNER#'+productId},ConditionExpression:'inventoryId=:id',ExpressionAttributeValues:{':id':id}}});}
+ if(link){checks.push({ConditionCheck:{TableName:table,Key:{pk:manualLinkKey(link)},ConditionExpression:'revision=:r AND productId=:p AND (attribute_not_exists(disabled) OR disabled=:no)',ExpressionAttributeValues:{':r':link.revision,':p':productId,':no':false}}},{ConditionCheck:{TableName:table,Key:{pk:'ECONVENI#MANUAL_OWNER#'+productId},ConditionExpression:'inventoryId=:id',ExpressionAttributeValues:{':id':id}}});}
  if(workflow)checks.push({ConditionCheck:{TableName:table,Key:{pk:workflow.pk},ConditionExpression:'revision=:r',ExpressionAttributeValues:{':r':workflow.revision}}});
  return {item,link,workflow,productId,version,checks};
 }
@@ -51,24 +52,24 @@ export async function reviewSaleBinding(id:string,actor?:string,stopChannels:EcC
  const b=await binding(id);if(!b)return {remote:null,reviews:{}};
  const session=new EconveniHttpSession();
  return withEconveniAccount(econveniStore(id),session,()=>econveniCredentialStore.credentials(),async()=>{
-  const remote=await session.readExternalProduct(b.productId);
-  if(remote.inventoryMarker&&remote.inventoryMarker!==id)throw Error('eコンビニに別の在庫番号が登録されています。');
+  const data=await readManualSync(id),remotes=new Map<string,ExternalProduct>(),reviews:Partial<Record<EcChannel,EcReview>>={};
+  const remote=await session.readExternalProduct(b.productId);remotes.set(b.productId,remote);
+  const channels={...remote.channels};
   for(const channel of ['BASE','YAHOO','MERCARI_SHOPS'] as const){
-   const expected=b.link?.baseline[channel].listingId??(channel==='BASE'?null:b.workflow?.channels[channel].listingId);
-   if(expected&&remote.channels[channel].listingId&&expected!==remote.channels[channel].listingId)throw Error('出品IDが変わっています。eコンビニ連携で写真と商品を確認してください。');
+   const link=selectManualLink(data,id,channel),productId=link?.productId??b.productId;
+   let observed=remotes.get(productId);if(!observed){observed=await session.readExternalProduct(productId);remotes.set(productId,observed);}
+   if(observed.inventoryMarker&&observed.inventoryMarker!==id)throw Error('eコンビニに別の在庫番号が登録されています。');
+   const expected=link?.baseline[channel].listingId??(channel==='BASE'?null:b.workflow?.channels[channel].listingId);
+   if(expected&&observed.channels[channel].listingId&&expected!==observed.channels[channel].listingId)throw Error('出品IDが変わっています。eコンビニ連携で写真と商品を確認してください。');
+   channels[channel]=observed.channels[channel];
+   if(actor&&link&&stopChannels.includes(channel)&&(expected||observed.channels[channel].listingId)){const review=await manualLinkedStop(id,channel,actor,undefined,{session,remote:observed});if(review)reviews[channel]=review;}
   }
-  await remember(remote);
-  const reviews:Partial<Record<EcChannel,EcReview>>={};
-  if(actor&&b.link)for(const channel of stopChannels){
-   if(!b.link.baseline[channel].listingId&&!remote.channels[channel].listingId)continue;
-   const review=await manualLinkedStop(id,channel,actor,undefined,{session,remote});
-   if(review)reviews[channel]=review;
-  }
-  return {remote,reviews};
+  for(const value of remotes.values())await remember(value);
+  return {remote:{...remote,channels},reviews};
  });
 }
 export async function reviewSaleAdjustment(input:{candidateId:string;inventoryId:string;channel:'BASE'|'YAHOO';listingId:string;remaining:number;pack:number;inventoryVersion:string}):Promise<SaleAdjustment|null>{
- const b=await binding(input.inventoryId);if(!b)return null;
+ const b=await binding(input.inventoryId,input.channel);if(!b)return null;
  const session=new EconveniHttpSession();
  return withEconveniAccount(econveniStore(input.inventoryId),session,()=>econveniCredentialStore.credentials(),async()=>{
   const remote=await session.readExternalProduct(b.productId),{values}=await session.saleProductFields(b.productId);
@@ -92,7 +93,7 @@ export async function reviewSaleAdjustment(input:{candidateId:string;inventoryId
 export async function executeSaleAdjustment(request:SaleAdjustment){
  const store=econveniStore(request.inventoryId),session=new EconveniHttpSession();
  try{return await withEconveniAccount(store,session,()=>econveniCredentialStore.credentials(),async()=>{
-  const b=await binding(request.inventoryId);if(!b)throw Error('紐付けがありません。');
+  const b=await binding(request.inventoryId,request.channel);if(!b)throw Error('紐付けがありません。');
   return runSaleAdjustment(request,{
    read:async()=>((await db.send(new GetCommand({TableName:table,Key:{pk:adjustmentKey(request)},ConsistentRead:true}))).Item as AdjustmentReceipt)??null,
    checkBinding:async()=>{if(b.productId!==request.productId||b.version!==request.bindingVersion||b.item.updatedAt!==request.inventoryVersion)throw Error('紐付けまたは在庫が変更されています。');},
@@ -128,8 +129,8 @@ export async function executeSaleAdjustment(request:SaleAdjustment){
     const writes:NonNullable<TransactWriteCommandInput['TransactItems']>=[];
     if(request.channel==='YAHOO'){
      if(!receipt.newListingId||remote.channels.YAHOO.listingId!==receipt.newListingId)throw Error('新しい出品IDを確認できません。');
-     if(b.link)writes.push({Put:{TableName:table,Item:{pk:'ECONVENI#MANUAL_LINK#'+request.inventoryId,...b.link,baseline:{...b.link.baseline,YAHOO:remote.channels.YAHOO},revision:b.link.revision+1},ConditionExpression:'revision=:r',ExpressionAttributeValues:{':r':b.link.revision}}});
-     if(b.workflow)writes.push({Put:{TableName:table,Item:{...b.workflow,revision:b.workflow.revision+1,updatedAt:now,approvals:{},channels:{...b.workflow.channels,YAHOO:{state:'SUCCEEDED',operation:'PUBLISH',remoteStatus:'ACTIVE',listingId:receipt.newListingId,listingUrl:receipt.newListingUrl,publishedAt:now}}},ConditionExpression:'revision=:r',ExpressionAttributeValues:{':r':b.workflow.revision}}});
+     if(b.link)writes.push({Put:{TableName:table,Item:{...b.link,pk:manualLinkKey(b.link),baseline:{...b.link.baseline,YAHOO:remote.channels.YAHOO},revision:b.link.revision+1},ConditionExpression:'revision=:r',ExpressionAttributeValues:{':r':b.link.revision}}});
+     if(b.workflow?.save.productId===request.productId)writes.push({Put:{TableName:table,Item:{...b.workflow,revision:b.workflow.revision+1,updatedAt:now,approvals:{},channels:{...b.workflow.channels,YAHOO:{state:'SUCCEEDED',operation:'PUBLISH',remoteStatus:'ACTIVE',listingId:receipt.newListingId,listingUrl:receipt.newListingUrl,publishedAt:now}}},ConditionExpression:'revision=:r',ExpressionAttributeValues:{':r':b.workflow.revision}}});
     }
     const changed=new Set(writes.map(w=>w.Put?.Item?.pk));
     await db.send(new TransactWriteCommand({TransactItems:[...b.checks.filter(c=>!changed.has(c.ConditionCheck?.Key?.pk)),...writes,{Put:{TableName:table,Item:{...receipt,complete:true,revision:receipt.revision+1,updatedAt:now},ConditionExpression:'revision=:r',ExpressionAttributeValues:{':r':receipt.revision}}}]}));

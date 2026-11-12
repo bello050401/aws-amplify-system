@@ -1,0 +1,35 @@
+import assert from 'node:assert/strict';
+import {readNativeCommand} from '../../lib/listing/econveni/httpSession';
+import {nativeAllowed,nativeResultMatches,type NativeRequest} from '../../lib/listing/econveni/nativeModel';
+import {selectManualLink,overlayManualStatuses,observedChannel,type ExternalProduct,type ManualLink,type ManualSyncData} from '../../lib/listing/econveni/manualSyncModel';
+import {overviewChannel} from '../../lib/listing/overviewCatalogModel';
+const channels=['YAHOO','MERCARI_SHOPS','BASE'] as const,ops=['PUBLISH','CLEAR','STOP'] as const;
+const inactive={state:'INACTIVE' as const,listingId:null,listingUrl:null};
+const product=(id='123'):ExternalProduct=>({productId:id,title:'照合 チェア',quantity:1,price:99999,imageUrl:'photo.jpg',inventoryMarker:null,channels:{BASE:{...inactive},YAHOO:{...inactive},MERCARI_SHOPS:{...inactive}}});
+let count=0;const check=(name:string,f:()=>void)=>{f();count++;console.log('PASS',name);};
+const labels={YAHOO:{PUBLISH:'Yahoo!オークションガイドラインに同意して出品する',CLEAR:'上記のYahoo!オークションIDをすべて消す',STOP:'上記のYahoo!アイテムを全て終了する'},MERCARI_SHOPS:{PUBLISH:'メルカリShops 出品実行',CLEAR:'上記のメルカリShopsのItemIDを全て消す',STOP:'上記のメルカリShopsアイテムを全て終了する'},BASE:{PUBLISH:'BASE 出品実行',CLEAR:'上記のBASEアイテムナンバーを全て消す',STOP:'上記のBASEアイテムを全て削除する'}};
+for(const channel of channels)for(const operation of ops){
+ const expected={channel,operation,productId:'123',accountId:'9350',title:'照合 チェア',price:99999};
+ const clear={YAHOO:'clear_product',BASE:'base_clear_product',MERCARI_SHOPS:'mercariShops_clear_product'};
+ const path=operation==='CLEAR'?'https://smart.e-conveni.net/functions.php?action='+clear[channel]:channel==='BASE'?'https://smart.e-conveni.net/base_'+(operation==='PUBLISH'?'exhibit':'cancel')+'.php?':channel==='YAHOO'?'https://smart.e-conveni.net/yahoo_'+(operation==='PUBLISH'?'submit':'cancel')+'.php?action=exhibit_product':'https://img.e-conveni.net/exhibit/'+(operation==='PUBLISH'?'mercariShopsCreateProduct.php?':'mercariShopsDeleteProductInput.php?');
+ const url=path+'&users_id=9350&products_id=T123&mode=&order_by=&attribute_page=&query=';
+ const html=`<p>照合 チェア @99,999円</p><input value="${labels[channel][operation]}" onclick="${operation==='CLEAR'?`location.href='${url}'`:`window.open('${url}','target')`}">`;
+ const page={html,url:'https://smart.e-conveni.net/product_listing.php',status:200};
+ check(channel+'/'+operation+' observed confirmation contract',()=>assert.equal(readNativeCommand(page,expected).productId,'123'));
+ check(channel+'/'+operation+' wrong product/account/batch rejected',()=>{for(const changed of [html.replace('T123','T999'),html.replace('9350','1'),html+'<p>別商品 @99円</p>'])assert.throws(()=>readNativeCommand({...page,html:changed},expected));});
+ check(channel+'/'+operation+' external host rejected',()=>assert.throws(()=>readNativeCommand({...page,html:html.replace(/https:\/\/[^/]+/,'https://untrusted.example')},expected)));
+}
+const request:NativeRequest={inventoryId:'i',productId:'123',channel:'YAHOO',operation:'PUBLISH'};
+check('publish stock and protected sale safety',()=>{assert.equal(nativeAllowed(request,product(),{quantity:1},false),null);for(const stock of [{quantity:0},{quantity:1,saleEndDate:'2026-11-12'},{quantity:1,isDeleted:true},{quantity:1,listingPartition:'MERGED'}])assert.ok(nativeAllowed(request,product(),stock,false));assert.ok(nativeAllowed(request,product(),{quantity:1},true));});
+check('no duplicate publication with an old ID',()=>{const p=product();p.channels.YAHOO.listingId='r123';assert.ok(nativeAllowed(request,p,{quantity:1},false));p.channels.YAHOO.state='ACTIVE';assert.ok(nativeAllowed(request,p,{quantity:1},false));});
+check('CLEAR retains permission to preserve sold page; STOP blocks sold page',()=>{const p=product();p.channels.YAHOO={state:'ACTIVE',listingId:'r123',listingUrl:null};assert.equal(nativeAllowed({...request,operation:'CLEAR'},p,{quantity:0},true),null);assert.ok(nativeAllowed({...request,operation:'STOP'},p,{quantity:0},true));});
+check('result cannot confirm different product or replacement listing',()=>{const before=product();before.channels.YAHOO={state:'ACTIVE',listingId:'r123',listingUrl:null};const after=product();assert.ok(nativeResultMatches({channel:'YAHOO',operation:'STOP',before},after));after.channels.YAHOO.listingId='r999';assert.equal(nativeResultMatches({channel:'YAHOO',operation:'STOP',before},after),false);assert.equal(nativeResultMatches({channel:'YAHOO',operation:'CLEAR',before},product('wrong')),false);});
+const primary=product('1'),secondary=product('2');primary.channels.BASE={state:'ACTIVE',listingId:'b1',listingUrl:null};primary.channels.MERCARI_SHOPS={state:'ACTIVE',listingId:'m1',listingUrl:null};primary.channels.YAHOO={state:'INACTIVE',listingId:'old',listingUrl:null};secondary.channels.YAHOO={state:'ACTIVE',listingId:'y2',listingUrl:null};
+const link=(p:ExternalProduct,extra=false):ManualLink=>({pk:'ECONVENI#MANUAL_LINK#i'+(extra?'#'+p.productId:''),inventoryId:'i',productId:p.productId,inventoryName:'chair',remoteTitle:p.title,revision:1,baseline:p.channels,actor:'staff',linkedAt:'now'});
+const data:ManualSyncData={snapshot:{version:'v',checkedAt:'2026-11-12',products:[primary,secondary]},links:[link(primary),link(secondary,true)]};
+check('complementary pages select correct marketplace, independent of list order',()=>{for(const links of [data.links,[...data.links].reverse()]){const d={...data,links};assert.equal(selectManualLink(d,'i','BASE')?.productId,'1');assert.equal(selectManualLink(d,'i','YAHOO')?.productId,'2');assert.equal(selectManualLink(d,'i','MERCARI_SHOPS')?.productId,'1');}});
+check('ambiguous two active pages fail closed',()=>{const d=structuredClone(data);d.snapshot!.products[0].channels.YAHOO.state='ACTIVE';assert.throws(()=>selectManualLink(d,'i','YAHOO'));const c=overlayManualStatuses({channels:{},errors:[],archivedIds:[]},d);assert.equal(c.channels.YAHOO!.i.state,'ERROR');});
+check('aggregated sale catalog preserves every channel',()=>{const c=overlayManualStatuses({channels:{},errors:[],archivedIds:[]},data);assert.equal(c.channels.YAHOO!.i.externalId,'y2');assert.equal(c.channels.BASE!.i.externalId,'b1');});
+check('e-conveni rows display their own state instead of combined stock state',()=>{const c=overlayManualStatuses({channels:{},errors:[],archivedIds:[]},data);const row={inventoryId:'i',hasDraft:false} as any;assert.equal(overviewChannel({key:'1',remote:primary,row},c,'YAHOO').state,'STOPPED');assert.equal(overviewChannel({key:'2',remote:secondary,row},c,'BASE').state,'UNLISTED');});
+check('cleared ID is never resurrected by baseline',()=>{const cleared=structuredClone(primary);cleared.channels.BASE={...inactive};assert.equal(observedChannel(cleared,'BASE',data.links[0],'now').externalId,null);});
+console.log(`PASS ${count} contract / safety / multi-page scenarios; no live EC writes`);

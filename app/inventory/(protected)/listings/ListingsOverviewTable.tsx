@@ -41,6 +41,8 @@ import {
 import { EcBulkDialog, type EcDialogAction } from "./EcBulkDialog";
 import { EconveniManualDialog } from "./EconveniManualDialog";
 import { econveniManualSyncAction } from "@/app/actions/econveniManualSync";
+import {EconveniNativeDialog,EconveniNativeProgress,rememberNativeJobs} from './EconveniNativeDialog';
+import {NATIVE_LABEL,NATIVE_DESCRIPTION,type NativeRequest,type NativeOperation} from '@/lib/listing/econveni/nativeModel';
 
 const button =
   "inline-flex min-h-9 items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40";
@@ -73,6 +75,8 @@ export function ListingsOverviewTable({
   const [catalog, setCatalog] = useState<EcCatalog | null>(initialCatalog ?? null),
     [catalogBusy, setCatalogBusy] = useState(false);
   const [source, setSource] = useState<"ECONVENI" | "BELLO">("ECONVENI");
+  const [nativeRequests,setNativeRequests]=useState<NativeRequest[]|null>(null),[nativeRefresh,setNativeRefresh]=useState(0);
+  function openNative(items:typeof all,channel:EcChannel,operation:NativeOperation){setNativeRequests(items.flatMap(i=>i.row&&i.remote?[{inventoryId:i.row.inventoryId,productId:i.remote.productId,channel,operation}]:[]));}
   const [query, setQuery] = useState(""),
     [filter, setFilter] = useState<ListingStateFilter>("ALL"),
     [filterChannel, setFilterChannel] = useState<EcChannel | "ALL">("ALL");
@@ -193,7 +197,7 @@ export function ListingsOverviewTable({
       setSelected((s) =>
         retainVisibleSelection(
           s,
-          filtered.flatMap((i) => (i.row ? [i.row.inventoryId] : [])),
+          filtered.flatMap((i) => (i.row ? [i.key] : [])),
         ),
       ),
     [filtered],
@@ -218,9 +222,9 @@ export function ListingsOverviewTable({
     pageItems.flatMap((i) => (i.row ? [i.row.inventoryId] : [])),
   );
   const checkedRows = filtered.flatMap((i) =>
-    i.row && selected.has(i.row.inventoryId) ? [i.row] : [],
+    i.row && selected.has(i.key) ? [i.row] : [],
   );
-  const selectable = pageItems.flatMap((i) => (i.row ? [i.row] : []));
+  const selectable = pageItems.filter(i=>!!i.row);
   const actionsReady = !!catalog && !catalogBusy && !catalog.errors.length;
   function open(
     kind: EcOperation,
@@ -489,7 +493,7 @@ export function ListingsOverviewTable({
               ))}
             </select>
           </label>
-          <button
+          {source==='ECONVENI'?<div className="flex gap-2">{(['PUBLISH','CLEAR','STOP'] as const).map(op=><button key={op} className={button} disabled={selected.size>50||!actionsReady} title={NATIVE_DESCRIPTION[op]} onClick={()=>openNative(filtered.filter(i=>!!i.row&&selected.has(i.key)),bulkChannel,op)}>{NATIVE_LABEL[op]} {op==='PUBLISH'?'出品':op==='CLEAR'?'番号解除':'終了'}</button>)}</div>:<><button
             className={button}
             disabled={
               selected.size > 10 ||
@@ -498,7 +502,7 @@ export function ListingsOverviewTable({
               filtered.some(
                 (i) =>
                   i.row &&
-                  selected.has(i.row.inventoryId) &&
+                  selected.has(i.key) &&
                   isProtectedSale(i, catalog, bulkChannel),
               )
             }
@@ -514,7 +518,7 @@ export function ListingsOverviewTable({
               filtered.some(
                 (i) =>
                   i.row &&
-                  selected.has(i.row.inventoryId) &&
+                  selected.has(i.key) &&
                   isProtectedSale(i, catalog, bulkChannel),
               )
             }
@@ -524,9 +528,10 @@ export function ListingsOverviewTable({
           </button>
           <span className="text-xs text-slate-500">
             1回10件まで・実行前に確認
-          </span>
+          </span></>}
         </div>
       )}
+      {canEdit&&<EconveniNativeProgress refresh={nativeRefresh} onChanged={()=>void loadCatalog()}/>}
       <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
         <table className="w-full min-w-[1120px] table-fixed border-collapse text-sm">
           <colgroup>
@@ -548,7 +553,7 @@ export function ListingsOverviewTable({
                     aria-label="このページの商品をすべて選択"
                     checked={
                       selectable.length > 0 &&
-                      selectable.every((r) => selected.has(r.inventoryId))
+                      selectable.every((r) => selected.has(r.key))
                     }
                     disabled={!selectable.length}
                     onChange={(e) =>
@@ -556,8 +561,8 @@ export function ListingsOverviewTable({
                         const n = new Set(s);
                         selectable.forEach((r) =>
                           e.target.checked
-                            ? n.add(r.inventoryId)
-                            : n.delete(r.inventoryId),
+                            ? n.add(r.key)
+                            : n.delete(r.key),
                         );
                         return n;
                       })
@@ -588,7 +593,7 @@ export function ListingsOverviewTable({
                 <tr
                   key={item.key}
                   className={
-                    row && selected.has(row.inventoryId)
+                    row && selected.has(item.key)
                       ? "bg-teal-50/40"
                       : "hover:bg-slate-50/50"
                   }
@@ -600,14 +605,14 @@ export function ListingsOverviewTable({
                         type="checkbox"
                         aria-label={title + "を一括操作の対象に選択"}
                         disabled={!row}
-                        checked={!!row && selected.has(row.inventoryId)}
+                        checked={!!row && selected.has(item.key)}
                         onChange={(e) =>
                           row &&
                           setSelected((s) => {
                             const n = new Set(s);
                             e.target.checked
-                              ? n.add(row.inventoryId)
-                              : n.delete(row.inventoryId);
+                              ? n.add(item.key)
+                              : n.delete(item.key);
                             return n;
                           })
                         }
@@ -751,13 +756,8 @@ export function ListingsOverviewTable({
                     ) ? (
                       <button
                         className={button + " whitespace-nowrap !px-2 !text-xs"}
-                        disabled={!actionsReady}
-                        onClick={() =>
-                          setOperation({
-                            action: { kind: "COMMON_PUBLISH" },
-                            items: [row],
-                          })
-                        }
+                        disabled={!actionsReady||!!item.remote&&!EC_CHANNELS.some(c=>item.remote!.channels[c].state==='INACTIVE'&&!item.remote!.channels[c].listingId)}
+                        onClick={() => item.remote ? setNativeRequests(EC_CHANNELS.filter(c=>item.remote!.channels[c].state==='INACTIVE'&&!item.remote!.channels[c].listingId).map(channel=>({inventoryId:row.inventoryId,productId:item.remote!.productId,channel,operation:'PUBLISH' as const}))) : setOperation({action:{kind:'COMMON_PUBLISH'},items:[row]})}
                       >
                         まとめて出品
                       </button>
@@ -802,7 +802,7 @@ export function ListingsOverviewTable({
                             ? "—"
                             : price.toLocaleString("ja-JP") + "円"}
                         </p>
-                        {canEdit && row && !archived && !protectedSale && (
+                        {canEdit&&row&&item.remote&&!archived?<div className="flex gap-1.5">{(['PUBLISH','CLEAR','STOP'] as const).map(op=><button key={op} className={button+' !min-h-9 !px-3'} title={NATIVE_DESCRIPTION[op]} aria-label={EC_CHANNEL_LABEL[c]+'：'+NATIVE_DESCRIPTION[op]} disabled={!actionsReady||op==='PUBLISH'&&(sold||row.quantity<1||protectedSale||s.state==='ACTIVE'||!!s.externalId)||op==='CLEAR'&&!s.externalId||op==='STOP'&&(protectedSale||s.state!=='ACTIVE'||!s.externalId)} onClick={()=>openNative([item],c,op)}>{NATIVE_LABEL[op]}</button>)}</div>:canEdit && row && !archived && !protectedSale && (
                           <div className="flex flex-wrap gap-2">
                             {["ACTIVE", "ERROR"].includes(s.state) ? (
                               <button
@@ -867,6 +867,7 @@ export function ListingsOverviewTable({
                                 row &&
                                 s.externalId &&
                                 !protectedSale && (
+                                <><button className={button+' !text-xs'} disabled={!actionsReady} onClick={()=>open('STOP',[row],c)}>通常の出品停止{c==='BASE'?'（非公開）':''}</button>
                                   <button
                                     className={button + " !text-xs"}
                                     disabled={
@@ -876,7 +877,7 @@ export function ListingsOverviewTable({
                                     onClick={() => open("UPDATE", [row], c)}
                                   >
                                     商品内容を更新
-                                  </button>
+                                  </button></>
                                 )}
                             </div>
                           </details>
@@ -939,6 +940,7 @@ export function ListingsOverviewTable({
           )}
         />
       )}
+      {nativeRequests&&<EconveniNativeDialog requests={nativeRequests} onClose={()=>setNativeRequests(null)} onQueued={ids=>{rememberNativeJobs(ids);setNativeRefresh(n=>n+1);}}/>}
       {operation && (
         <EcBulkDialog
           items={operation.items}

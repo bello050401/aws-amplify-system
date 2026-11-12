@@ -1,0 +1,61 @@
+const {build}=require('esbuild'),vm=require('node:vm'),assert=require('node:assert/strict'),crypto=require('node:crypto');
+async function load(path,ports){const code=(await build({entryPoints:[path],bundle:true,platform:'node',format:'cjs',write:false,plugins:[{name:'ports',setup(b){b.onResolve({filter:/.*/},a=>a.kind==='entry-point'?undefined:{path:a.path,external:true});}}]})).outputFiles[0].text;const m={exports:{}};vm.runInNewContext(code,{module:m,exports:m.exports,require:k=>{if(k in ports)return ports[k];throw Error('UNMOCKED_IMPORT '+k);},Date,Map,Set,Buffer,process:{env:{}},AbortSignal});return m.exports;}
+const inactive=()=>({state:'INACTIVE',listingId:null,listingUrl:null});
+const product=()=>({productId:'123',title:'チェア',price:99999,quantity:1,inventoryMarker:null,imageUrl:'photo',channels:{BASE:inactive(),YAHOO:inactive(),MERCARI_SHOPS:inactive()}});
+const commands={};for(const n of ['GetCommand','PutCommand','QueryCommand','ScanCommand','BatchGetCommand','TransactWriteCommand'])commands[n]=class{constructor(input){this.input=input;this.kind=n;}};
+(async()=>{
+const model=await load('lib/listing/econveni/nativeModel.ts',{}),linkModel=await load('lib/listing/econveni/manualSyncModel.ts',{});
+let records,stock,remote,manual,refs,sends,mode,allowed,marks,reads,failSave,flows;
+function reset(){records=new Map();stock={id:'i',name:'チェア',quantity:1,updatedAt:'v1'};remote=product();manual={snapshot:{version:'v',checkedAt:new Date().toISOString(),products:[structuredClone(remote)]},links:[{inventoryId:'i',productId:'123',revision:1,baseline:structuredClone(remote.channels)}]};refs={};flows=[];sends=0;mode='success';allowed=true;marks=0;reads=0;failSave=false;}
+const key=(table,k)=>table+':'+(k.id??k.pk),get=(table,k)=>records.get(key(table,k));
+async function send(c){const x=c.input;if(c.kind==='GetCommand')return {Item:structuredClone(get(x.TableName,x.Key))};if(c.kind==='PutCommand'){records.set(key(x.TableName,x.Item),structuredClone(x.Item));return {};}
+ if(c.kind==='TransactWriteCommand'){
+  for(const t of x.TransactItems){if(t.Put){const p=t.Put,old=get(p.TableName,p.Item);if(p.ConditionExpression==='attribute_not_exists(id)'&&old)throw Error('exists');if(p.ConditionExpression?.includes('attribute_not_exists(active)')&&old?.active)throw Error('locked');if(p.ConditionExpression==='#p=:p'&&old?.phase!==p.ExpressionAttributeValues[':p'])throw Error('phase');if(p.Item.phase==='COMPLETE'&&failSave){failSave=false;throw Error('db response lost');}}
+   if(t.ConditionCheck?.TableName==='inventory'&&t.ConditionCheck.ExpressionAttributeValues[':v']!==stock.updatedAt)throw Error('inventory conflict');}
+  for(const t of x.TransactItems){if(t.Put)records.set(key(t.Put.TableName,t.Put.Item),structuredClone(t.Put.Item));if(t.Update){const u=t.Update,v=u.ExpressionAttributeValues,old=get(u.TableName,u.Key);if(u.ConditionExpression.includes('lastError=:token')&&old.lastError!==v[':token'])throw Error('lock');records.set(key(u.TableName,u.Key),{...old,status:v[':s']??v[':busy'],lastError:v[':empty']===null?null:v[':token'],updatedAt:v[':now'],...(':id'in v?{externalListingId:v[':id'],listingUrl:v[':url']}:{})});}}return {};
+ }
+ if(c.kind==='QueryCommand'&&x.TableName==='channels')return {Items:[...records].filter(([k,v])=>k.startsWith('channels:')&&v.inventoryId===x.ExpressionAttributeValues[':id']).map(([,v])=>structuredClone(v))};
+ if(c.kind==='QueryCommand')return {Items:[...records].filter(([k,v])=>k.startsWith('queue:')&&v.state===x.ExpressionAttributeValues[':s']).map(([,v])=>structuredClone(v))};
+ if(c.kind==='ScanCommand')return {Items:[]};
+ if(c.kind==='BatchGetCommand'){const [t,r]=Object.entries(x.RequestItems)[0];return {Responses:{[t]:r.Keys.flatMap(k=>get(t,k)?[structuredClone(get(t,k))]:[])}};}
+ throw Error(c.kind);
+}
+class Session{async readExternalProduct(){reads++;if(mode==='read-fail')throw Error('read failed');return structuredClone(remote);}async nativePreview(){return {};}async executeNative(){sends++;if(mode==='no-change')throw Error('response lost');const job=[...records.values()].find(j=>j.phase==='SENDING');const s=remote.channels[job.channel];if(job.operation==='PUBLISH'){s.state='ACTIVE';s.listingId='new-'+job.channel;}else{s.state='INACTIVE';if(job.operation==='CLEAR')s.listingId=null;}if(mode==='write-then-timeout')throw Error('timeout');return {};}}
+const ports={
+ 'server-only':{},'node:crypto':crypto,'@aws-sdk/lib-dynamodb':commands,
+ '@aws-sdk/client-cognito-identity-provider':{CognitoIdentityProviderClient:class{async send(c){return c.kind==='user'?{Enabled:allowed}:{Groups:[{GroupName:'ADMIN'}]};}},AdminGetUserCommand:class{kind='user'},AdminListGroupsForUserCommand:class{kind='groups'}},
+ '@aws-sdk/client-lambda':{LambdaClient:class{async send(){return {};}},InvokeCommand:class{}},
+ '../../../amplify_outputs.json':{auth:{user_pool_id:'pool'},custom:{}},
+ '@/lib/saleCandidates/store':{candidateConfig:()=>({tableName:'queue'})},
+ '@/lib/inventory/categoryPersistence':{getInventoryRaw:async()=>structuredClone(stock),inventoryTable:n=>n==='Inventory'?'inventory':n==='ChannelListing'?'channels':'categories'},
+ '@/lib/inventory/customFieldsCodecCore':{parseCustomFields:v=>v?JSON.parse(v):{}},
+ './runtimeStore':{econveniDatabase:{send},ECONVENI_WORKFLOW_TABLE:'workflow',readEconveniCatalog:async()=>structuredClone(flows),econveniStore:()=>({read:async()=>flows[0]??null,commitNative:async(_old,next,checks)=>{await send(new commands.TransactWriteCommand({TransactItems:checks.filter(c=>c.Update)}));const k=key('workflow',next);if(records.has(k))throw Error('receipt exists');records.set(k,next);return next;}})},
+ './manualSync':{readManualSync:async(id,extra=[])=>{const data=structuredClone(manual);if(id)data.snapshot.products=data.snapshot.products.filter(p=>data.links.some(l=>l.productId===p.productId)||extra.includes(p.productId));return data;},productFingerprint:v=>crypto.createHash('sha256').update(JSON.stringify(v)).digest('hex')},
+ './manualSyncModel':linkModel,'./overviewCatalog':{soldListingReferences:async()=>refs},
+ './httpSession':{EconveniHttpSession:Session},'./accountWorkflow':{withEconveniAccount:async(_a,_b,_c,fn)=>fn()},'./credentials':{econveniCredentialStore:{}},'./nativeModel':model,
+ '../publicationCategory':{markInventoryPublished:async()=>{marks++;stock.updatedAt='category-update';}},
+};
+const queue=await load('lib/listing/econveni/nativeQueue.ts',ports);
+const r={inventoryId:'i',productId:'123',channel:'BASE',operation:'PUBLISH'};
+async function enqueue(extra={}){const request={...r,...extra},review=await queue.reviewNative(request);return queue.enqueueNative({...review,requestId:extra.requestId??crypto.randomUUID(),confirmed:true,terms:true},'staff');}
+let count=0;async function check(name,fn){reset();await fn();count++;console.log('PASS',name);}
+await check('acceptance writes job only and double-click returns same job',async()=>{const id=crypto.randomUUID(),a=await enqueue({requestId:id}),b=await enqueue({requestId:id});assert.equal(a.id,b.id);assert.equal(sends,0);assert.equal([...records.values()].filter(x=>x.phase==='QUEUED').length,1);});
+await check('second command on same target stays locked',async()=>{await enqueue();await assert.rejects(enqueue());assert.equal(sends,0);});
+await check('successful publication readback and stock category finish',async()=>{const j=await enqueue();await queue.runNativeJob(j);assert.equal(j.phase,'COMPLETE');assert.equal(sends,1);assert.equal(marks,1);});
+await check('other channel mutation does not invalidate next channel in batch',async()=>{const a=await enqueue(),b=await enqueue({channel:'YAHOO'});await queue.runNativeJob(a);await queue.runNativeJob(b);assert.equal(sends,2);assert.equal(b.phase,'COMPLETE');});
+await check('inventory quantity changed after acceptance prevents write',async()=>{const j=await enqueue();stock.quantity=0;stock.updatedAt='v2';await assert.rejects(queue.runNativeJob(j));assert.equal(sends,0);});
+await check('link revoked after acceptance prevents write',async()=>{const j=await enqueue();manual.links=[];await assert.rejects(queue.runNativeJob(j));assert.equal(sends,0);});
+await check('remote price changed after acceptance prevents write',async()=>{const j=await enqueue();remote.price++;await assert.rejects(queue.runNativeJob(j));assert.equal(sends,0);});
+await check('disabled actor prevents queued write',async()=>{const j=await enqueue();allowed=false;await assert.rejects(queue.runNativeJob(j));assert.equal(sends,0);});
+await check('write succeeded but response lost: readback completes once',async()=>{const j=await enqueue();mode='write-then-timeout';await queue.runNativeJob(j);assert.equal(j.phase,'COMPLETE');assert.equal(sends,1);});
+await check('unconfirmed send never retries: human recheck is read-only',async()=>{const j=await enqueue();mode='no-change';await queue.runNativeJob(j);assert.equal(j.phase,'ATTENTION');await queue.recheckNative(j.id);const stored=get('queue',{id:j.id});await queue.runNativeJob(stored);assert.equal(stored.phase,'ATTENTION');assert.equal(sends,1);});
+await check('crash after send before final DB save does not duplicate publication',async()=>{const j=await enqueue();failSave=true;await assert.rejects(queue.runNativeJob(j));const stored=get('queue',{id:j.id});assert.equal(stored.phase,'SENDING');await queue.runNativeJob(stored);assert.equal(stored.phase,'COMPLETE');assert.equal(sends,1);});
+await check('Yahoo payment waiting blocks publication without decreasing stock',async()=>{stock.customFields=JSON.stringify({__belloYahooPayment:{state:'WAITING'}});await assert.rejects(enqueue({channel:'YAHOO'}));assert.equal(stock.quantity,1);assert.equal(sends,0);});
+await check('sold marketplace STOP denied, other marketplace permitted',async()=>{remote.channels.BASE={state:'ACTIVE',listingId:'b1',listingUrl:null};manual.snapshot.products=[structuredClone(remote)];refs={i:{BASE:['b1']}};await assert.rejects(enqueue({operation:'STOP'}));refs={i:{YAHOO:['y1']}};const j=await enqueue({operation:'STOP'});await queue.runNativeJob(j);assert.equal(j.phase,'COMPLETE');assert.equal(stock.quantity,1);});
+await check('CLEAR removes only link, never decrements stock or categorizes sale',async()=>{remote.channels.BASE={state:'ACTIVE',listingId:'b1',listingUrl:null};manual.snapshot.products=[structuredClone(remote)];const j=await enqueue({operation:'CLEAR'});await queue.runNativeJob(j);assert.equal(j.phase,'COMPLETE');assert.equal(stock.quantity,1);assert.equal(marks,0);});
+await check('legacy BASE operation lock prevents concurrent native command',async()=>{records.set('channels:c',{id:'c',inventoryId:'i',channel:'BASE',status:'PUBLISHING',updatedAt:'x'});await assert.rejects(enqueue());assert.equal(sends,0);});
+await check('native republication updates legacy BASE external ID and releases its lock',async()=>{records.set('channels:c',{id:'c',inventoryId:'i',channel:'BASE',status:'DRAFT',updatedAt:'x'});const j=await enqueue();await queue.runNativeJob(j);const c=get('channels',{id:'c'});assert.equal(c.externalListingId,'new-BASE');assert.equal(c.status,'ACTIVE');assert.equal(c.lastError,null);});
+await check('different legacy marketplace ID prevents mutation',async()=>{records.set('channels:c',{id:'c',inventoryId:'i',channel:'BASE',status:'ACTIVE',externalListingId:'wrong',updatedAt:'x'});await assert.rejects(enqueue());assert.equal(sends,0);});
+await check('system-created product without a manual link remains actionable in the worker',async()=>{manual.links=[];flows=[{pk:'flow',inventoryId:'i',revision:1,save:{state:'SUCCEEDED',productId:'123'},channels:{YAHOO:{state:'READY'},MERCARI_SHOPS:{state:'READY'}}}];const j=await enqueue();await queue.runNativeJob(j);assert.equal(j.phase,'COMPLETE');assert.equal(sends,1);});
+console.log(`PASS ${count} persisted queue scenarios; all ports isolated, no live EC writes`);
+})().catch(e=>{console.error(e);process.exitCode=1;});

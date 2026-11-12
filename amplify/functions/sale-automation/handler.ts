@@ -20,6 +20,7 @@ import {shouldSeedAutomation} from '../../../lib/saleCandidates/automationEligib
 import {runPostSaleJob,type PostSaleJob} from '../../../lib/saleCandidates/postSaleQueueCore';
 import type {PostSalePlan} from '../../../lib/saleCandidates/postSaleModel';
 import {ECONVENI_WORKFLOW_TABLE} from '../../../lib/listing/econveni/runtimeStore';
+import {processNativeQueue} from '../../../lib/listing/econveni/nativeQueue';
 
 const required=(name:string)=>{const v=process.env[name];if(!v)throw Error('SALE_CONFIGURATION_MISSING');return v;};
 const table=()=>required('SALE_CANDIDATES_TABLE');
@@ -58,6 +59,8 @@ export async function handler(event?:{mode?:string}){
  catch(e){if((e as Error).name==='ConditionalCheckFailedException')return {busy:true};throw e;}
  let processed=0,complete=0,attention=0;
  try{
+  const nativeProcessed=await processNativeQueue(started+40000);
+  if(event?.mode==='EC_NATIVE')return {nativeProcessed};
   // Staff-confirmed work is independent of mail auto-sale. The persisted request is the authority.
   const queueCursor=await get('POST_SALE_CURSOR');
   const queued=await db.send(new QueryCommand({TableName:table(),IndexName:'ByState',KeyConditionExpression:'#s=:s',ExpressionAttributeNames:{'#s':'state'},ExpressionAttributeValues:{':s':'SALE_EC_ACTIVE'},Limit:20,ExclusiveStartKey:queueCursor?.cursor as QueryCommandInput['ExclusiveStartKey']}));

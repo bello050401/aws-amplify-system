@@ -10,6 +10,8 @@ import {readBaseItem} from '../base/manualLifecycle';
 import {setManualBaseVisibility} from '../base/adapter';
 import {econveniFailure} from './failure';
 import type {ManualLink,ExternalSnapshot,ManualSyncData,ExternalProduct} from './manualSyncModel';
+import {selectManualLink,manualLinkKey} from './manualSyncModel';
+import {readManualSync} from './manualSync';
 import type {EcChannel,EcReview,EcCatalog} from '../ecManagement';
 import {runManualStop,stopReceiptKey,stopFingerprint,type StopReceipt} from './manualStopCore';
 
@@ -17,7 +19,8 @@ import {runManualStop,stopReceiptKey,stopFingerprint,type StopReceipt} from './m
 export async function manualLinkedStop(id:string,channel:EcChannel,actor:string,token?:string,preflight?:{session:EconveniHttpSession;remote:ExternalProduct}):Promise<EcReview|null>{
  // Internal read-only batch context. An execution token must always acquire its own lease and read afresh.
  if(preflight&&token)throw Error('PREFLIGHT_ONLY');
- const link=(await db.send(new GetCommand({TableName:table,Key:{pk:'ECONVENI#MANUAL_LINK#'+id},ConsistentRead:true}))).Item as ManualLink|undefined;
+ let link:ManualLink|undefined;
+ try{link=selectManualLink(await readManualSync(id),id,channel);}catch(e){return {inventoryId:id,channel,operation:'STOP',title:'',status:'BLOCKED',message:(e as Error).message};}
  if(!link||link.disabled)return token?.startsWith('MSTOP.')?{inventoryId:id,channel,operation:'STOP',title:'',status:'BLOCKED',message:'紐付けが解除されています。確認し直してください。'}:null;
  const base:EcReview={inventoryId:id,channel,operation:'STOP',title:link.inventoryName,status:'BLOCKED',message:'出品番号と紐付けを確認できません。再取得してください。'};
  if(!actor)return {...base,message:'ログイン状態を確認してください。'};
@@ -25,11 +28,11 @@ export async function manualLinkedStop(id:string,channel:EcChannel,actor:string,
   const [item,snapshot]=await Promise.all([getInventoryRaw(id),db.send(new GetCommand({TableName:table,Key:{pk:'ECONVENI#OBSERVED_CATALOG'},ConsistentRead:true}))]);
   if(!item||item.isDeleted||item.deletedAt)return base;
   const cached=preflight?.remote.channels[channel]??(snapshot.Item as ExternalSnapshot|undefined)?.products.find(p=>p.productId===link.productId)?.channels[channel];
-  const listingId=cached?.listingId??link.baseline[channel].listingId;
+  const listingId=cached?cached.listingId:link.baseline[channel].listingId;
   // Never silently accept a replacement listing ID from a refreshed catalog.
   if(!listingId||link.baseline[channel].listingId&&listingId!==link.baseline[channel].listingId)return base;
   const [workflow,native]=await Promise.all([econveniStore(id).read(),channel==='YAHOO'?Promise.resolve(null):getChannelListing(id,channel)]);
-  if(workflow?.save.productId&&workflow.save.productId!==link.productId||native?.externalListingId&&native.externalListingId!==listingId)return base;
+  if(native?.externalListingId&&native.externalListingId!==listingId)return base;
   // Existing native bindings keep their existing per-listing locks and confirmation path.
   if(!token?.startsWith('MSTOP.')&&(channel==='BASE'&&native?.externalListingId===listingId||channel!=='BASE'&&workflow?.save.productId===link.productId&&workflow.channels[channel].listingId===listingId))return null;
   if(workflow&&(['PENDING','VERIFY_REQUIRED'].includes(workflow.save.state)||Object.values(workflow.channels).some(c=>['PENDING','VERIFY_REQUIRED'].includes(c.state)))||native?.status==='PUBLISHING')return {...base,message:'別の処理の結果が未確認です。先に結果を確認してください。'};
@@ -37,7 +40,7 @@ export async function manualLinkedStop(id:string,channel:EcChannel,actor:string,
   if(preflight&&preflight.remote.productId!==link.productId)return base;
   const binding={inventoryId:id,productId:link.productId,linkRevision:link.revision,inventoryVersion:item.updatedAt,title:String(item.name),listingId};
   const checks=[
-   {ConditionCheck:{TableName:table,Key:{pk:'ECONVENI#MANUAL_LINK#'+id},ConditionExpression:'revision=:r AND productId=:p AND (attribute_not_exists(disabled) OR disabled=:no)',ExpressionAttributeValues:{':r':link.revision,':p':link.productId,':no':false}}},
+   {ConditionCheck:{TableName:table,Key:{pk:manualLinkKey(link)},ConditionExpression:'revision=:r AND productId=:p AND (attribute_not_exists(disabled) OR disabled=:no)',ExpressionAttributeValues:{':r':link.revision,':p':link.productId,':no':false}}},
    {ConditionCheck:{TableName:table,Key:{pk:'ECONVENI#MANUAL_OWNER#'+link.productId},ConditionExpression:'inventoryId=:id',ExpressionAttributeValues:{':id':id}}},
    {ConditionCheck:{TableName:inventoryTable('Inventory'),Key:{id},ConditionExpression:'updatedAt=:v AND (attribute_not_exists(isDeleted) OR isDeleted=:no)',ExpressionAttributeValues:{':v':item.updatedAt,':no':false}}},
   ];
@@ -75,7 +78,7 @@ export async function overlayManualStops(catalog:EcCatalog,manual:ManualSyncData
   const r=inventoryId?{Items:(await Promise.all((['BASE','MERCARI_SHOPS','YAHOO'] as const).map(channel=>db.send(new GetCommand({TableName:table,Key:{pk:stopReceiptKey(inventoryId,channel)},ConsistentRead:true}))))).flatMap(result=>result.Item?[result.Item]:[]),LastEvaluatedKey:undefined}:await db.send(new ScanCommand({TableName:table,ExclusiveStartKey:cursor,ConsistentRead:true,FilterExpression:'begins_with(pk,:p)',ExpressionAttributeValues:{':p':'ECONVENI#MANUAL_STOP#'}}));
   for(const receipt of (r.Items??[]) as StopReceipt[]){
    if(receipt.state==='READY')continue;
-   const link=manual.links.find(l=>!l.disabled&&l.inventoryId===receipt.inventoryId);
+   const link=manual.links.find(l=>!l.disabled&&l.inventoryId===receipt.inventoryId&&l.productId===receipt.productId);
    if(!link||link.productId!==receipt.productId||link.revision!==receipt.linkRevision)continue;
    const own=catalog.channels[receipt.channel]?.[receipt.inventoryId];
    if(!own||own.externalId!==receipt.listingId||own.source!=='ECONVENI'&&own.checkedAt&&own.checkedAt>receipt.updatedAt)continue;
