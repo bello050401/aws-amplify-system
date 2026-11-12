@@ -18,6 +18,7 @@ export interface LedgerTransaction {
 export interface LedgerIssue { inventoryId: string; managementNumber: string; name: string; date: string; message: string }
 export interface LedgerSupplierDay {
   key:string;date:string;counterpartyName:string;counterpartyAddress:string;counterpartyOccupation:string;verification:string;
+  inventoryIds:string[];
   transactionType:string;itemTypes:string;references:string;products:number;quantity:number|null;purchaseAmount:number|null;shipping:number|null;total:number|null;amountBasis:string;issues:string[];
 }
 export interface UsedGoodsLedger {
@@ -259,6 +260,6 @@ export function groupLedgerBySupplierDay(rows:UsedGoodsLedgerRow[],transactions:
     if(quantity===null)issues.push('在庫の数量欄に不正な値があります。');
     for(const field of ['counterpartyAddress','counterpartyOccupation','verification'] as const)if(unique(items.map(r=>r[field])).length>1)issues.push(`${field==='counterpartyAddress'?'相手方住所':field==='verification'?'本人確認方法':'職業'}に複数の記録があります。明細を確認してください。`);
     if(unidentifiedSupplier(normalizeSupplier(first.counterpartyName)))issues.push('実際の仕入先名が未記録、または販売サイト名のみのため、他の商品とはまとめていません。');
-    return {key,date:first.date,counterpartyName:first.counterpartyName,counterpartyAddress:text('counterpartyAddress'),counterpartyOccupation:text('counterpartyOccupation'),verification:text('verification'),transactionType:text('transactionType'),itemTypes:unique(items.map(r=>r.itemType)).join('・'),references:items.map(r=>r.managementNumber).join('\n'),products:items.length,quantity,purchaseAmount,shipping,total,amountBasis,issues};
+    return {key,inventoryIds:items.map(r=>r.inventoryId),date:first.date,counterpartyName:first.counterpartyName,counterpartyAddress:text('counterpartyAddress'),counterpartyOccupation:text('counterpartyOccupation'),verification:text('verification'),transactionType:text('transactionType'),itemTypes:unique(items.map(r=>r.itemType)).join('・'),references:items.map(r=>r.managementNumber).join('\n'),products:items.length,quantity,purchaseAmount,shipping,total,amountBasis,issues};
   }).sort((a,b)=>a.date.localeCompare(b.date)||a.counterpartyName.localeCompare(b.counterpartyName));
 }

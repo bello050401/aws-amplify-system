@@ -1,6 +1,7 @@
 "use client";
-import {useEffect,useRef,useState} from 'react';
+import {useEffect,useMemo,useRef,useState} from 'react';
 import type {UsedGoodsLedger} from '@/lib/inventory/usedGoodsLedger';
+import {ledgerPresentation} from '@/lib/inventory/usedGoodsLedgerPresentation';
 
 export function UsedGoodsLedgerPanel() {
   const [year,setYear]=useState(new Date(Date.now()+9*3600000).getUTCFullYear());
@@ -8,6 +9,8 @@ export function UsedGoodsLedgerPanel() {
   const [page,setPage]=useState(0),[view,setView]=useState<'summary'|'rows'|'issues'>('summary');
   const [direction,setDirection]=useState('受入れ');
   const [amountReviewOnly,setAmountReviewOnly]=useState(false);
+  const [detailGroup,setDetailGroup]=useState<string|null>(null);
+  const summaryPage=useRef(0);
   const controller=useRef<AbortController|null>(null);
   const urls=useRef(new Set<string>());
   useEffect(()=>()=>{controller.current?.abort();for(const url of urls.current)URL.revokeObjectURL(url);},[]);
@@ -23,13 +26,15 @@ export function UsedGoodsLedgerPanel() {
         const url=URL.createObjectURL(blob);urls.current.add(url);
         const a=document.createElement('a');a.href=url;a.download=`BELLO_古物台帳_${year}年.xlsx`;document.body.appendChild(a);a.click();a.remove();
         window.setTimeout(()=>{URL.revokeObjectURL(url);urls.current.delete(url);},30000);
-      }else{setLedger(await response.json());setPage(0);}
+      }else{setLedger(await response.json());setDetailGroup(null);setPage(0);}
     }catch(e){if(!c.signal.aborted)setError(e instanceof Error?e.message:'台帳を取得できませんでした。');}
     finally{if(!c.signal.aborted)setBusy('');}
   }
-  const visibleRows=ledger?.rows.filter(r=>r.direction===direction)??[];
+  const presentation=useMemo(()=>ledger?ledgerPresentation(ledger):null,[ledger]);
+  const selectedGroup=presentation?.groups.find(g=>g.ledgerNo===detailGroup);
+  const visibleRows=ledger?.rows.filter(r=>r.direction===direction&&(!selectedGroup||selectedGroup.inventoryIds.includes(r.inventoryId)))??[];
   const amountMissing=ledger?.supplierDays.filter(g=>g.total===null).length??0;
-  const visibleGroups=ledger?.supplierDays.filter(g=>!amountReviewOnly||g.total===null)??[];
+  const visibleGroups=presentation?.groups.filter(g=>!amountReviewOnly||g.total===null)??[];
   const list=ledger?(view==='summary'?visibleGroups:view==='rows'?visibleRows:ledger.issues):[];
   const pages=Math.max(1,Math.ceil(list.length/50));
   return <section className="space-y-5" aria-label="古物台帳">
@@ -44,7 +49,7 @@ export function UsedGoodsLedgerPanel() {
     <div className="space-y-1 text-sm text-gray-600">
       <p>受入れは「取引の年月日」、払出しは「販売終了日」が対象年に入る記録を出力します。</p>
       <p>同じ日・同じ仕入先を1行にまとめ、合計金額を表示します。購入金額と送料を合算し、登録済みの日次合計やヤフオクの送料を重複加算しません。</p>
-      <p>数量は在庫の「数量」欄を合計します。数量の空欄は在庫一覧と同じ0点、送料の未入力は0円として集計します。</p>
+      <p>数量は出力時点の在庫欄の合計です。仕入当時の数量を復元した値ではありません。数量の空欄は0点、送料の未入力は0円として集計します。</p>
       <p>取引総額が1万円未満で古物情報が未記入の家具類は出力対象外です。記入済み・1万円ちょうど・例外品目・総額不明の取引は残します。在庫データは削除しません。</p>
       <p>品目は商品名と商品分類から整理し、販売状態や社内メモを除きます。商品名・特徴・金額の根拠は「商品別明細」に保存します。</p>
       <p>備考の仕入合計や「履歴あり」の住所も照合します。記録同士が矛盾する場合や元情報がない場合だけ、照合結果に理由を残します。</p>
@@ -57,20 +62,30 @@ export function UsedGoodsLedgerPanel() {
         <span className="text-gray-500">1万円未満・未記入の家具類 {ledger.omittedLowValue??0}件を出力対象外</span>
       </div>
       <div className="flex gap-2 border-b border-gray-200">
-        {(['summary','rows','issues'] as const).map(tab=><button key={tab} type="button" onClick={()=>{setView(tab);setPage(0);}} aria-pressed={view===tab} className={`px-4 py-3 text-sm ${view===tab?'border-b-2 border-gray-900 font-bold':'text-gray-500'}`}>{tab==='summary'?'日付・仕入先別':tab==='rows'?'商品別明細':`確認事項（${ledger.issues.length}件）`}</button>)}
+        {(['summary','rows','issues'] as const).map(tab=><button key={tab} type="button" onClick={()=>{setView(tab);setDetailGroup(null);setPage(0);}} aria-pressed={view===tab} className={`px-4 py-3 text-sm ${view===tab?'border-b-2 border-gray-900 font-bold':'text-gray-500'}`}>{tab==='summary'?'日付・仕入先別':tab==='rows'?'商品別明細':`確認事項（${ledger.issues.length}件）`}</button>)}
       </div>
       {view==='summary'&&<div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-200 bg-gray-50 p-4 text-sm">
-        <div><strong>金額集計済み {ledger.supplierDays.length-amountMissing}組 ／ 元記録の不足・不一致 {amountMissing}組</strong><p className="mt-1 text-gray-600">在庫の購入価格・送料・備考を照合して集計します。合計の計算方法は各行に表示します。</p></div>
-        <label className="flex items-center gap-2"><input type="checkbox" checked={amountReviewOnly} onChange={e=>{setAmountReviewOnly(e.target.checked);setPage(0);}} />不足・不一致のみ表示</label>
+        <div><strong>算出できた金額の小計 {presentation?.knownAmount.toLocaleString()}円 ／ 金額未確定 {amountMissing}組</strong><p className="mt-1 text-gray-600">{ledger.supplierDays.length-amountMissing}組の小計です。未確定を含む年間総額ではありません。「明細を見る」で元の商品を照合できます。</p></div>
+        <label className="flex items-center gap-2"><input type="checkbox" checked={amountReviewOnly} onChange={e=>{setAmountReviewOnly(e.target.checked);setPage(0);}} />金額未確定のみ表示</label>
       </div>}
-      {view==='rows'&&<label className="flex items-center gap-3 text-sm">表示する記録<select aria-label="表示する記録" value={direction} onChange={e=>{setDirection(e.target.value);setPage(0);}} className="rounded border border-gray-300 bg-white px-3 py-2"><option value="受入れ">受入れ（仕入れ）</option><option value="払出し">払出し（売却）</option></select></label>}
+      {view==='rows'&&selectedGroup&&<div className="flex items-center justify-between rounded-lg bg-slate-50 p-3 text-sm"><span>明細番号 {selectedGroup.ledgerNo} ／ {selectedGroup.date} ／ {selectedGroup.counterpartyName||'仕入先未記録'}</span><button type="button" onClick={()=>{setView('summary');setPage(summaryPage.current);setDetailGroup(null);}} className="rounded border bg-white px-4 py-2">集計に戻る</button></div>}
+      {view==='rows'&&!selectedGroup&&<label className="flex items-center gap-3 text-sm">表示する記録<select aria-label="表示する記録" value={direction} onChange={e=>{setDirection(e.target.value);setPage(0);}} className="rounded border border-gray-300 bg-white px-3 py-2"><option value="受入れ">受入れ（仕入れ）</option><option value="払出し">払出し（売却）</option></select></label>}
       <div className="max-h-[60vh] overflow-auto rounded-lg border border-gray-200">
-        {view==='summary'&&<table className="w-full min-w-[1000px] text-left text-sm"><thead className="sticky top-0 bg-gray-100"><tr>{['取引日','仕入先','品目・数量','合計金額（購入＋送料）','管理番号','確認事項'].map(h=><th key={h} className="p-3">{h}</th>)}</tr></thead><tbody>{visibleGroups.slice(page*50,(page+1)*50).map(g=><tr key={g.key} className="border-t align-top"><td className="whitespace-nowrap p-3">{g.date}</td><td className="min-w-44 p-3"><strong>{g.counterpartyName||'未記録'}</strong><p className="mt-1 whitespace-pre-wrap text-gray-500">{g.counterpartyAddress}</p></td><td className="min-w-40 whitespace-pre-wrap p-3">{g.itemTypes||'品目未記録'}<p className="mt-1 font-semibold">{g.quantity===null?'数量要確認':`${g.quantity}点`}</p></td><td className="min-w-40 p-3"><strong>{g.total===null?'合計要確認':`${g.total.toLocaleString()}円`}</strong><p className="mt-2 text-xs text-gray-600">購入金額 {g.purchaseAmount===null?"要確認":g.purchaseAmount.toLocaleString()+"円"}<br/>送料 {g.shipping===null?"内訳要確認":g.shipping.toLocaleString()+"円"}</p><p className="mt-1 text-xs text-gray-500">{g.amountBasis}</p></td><td className="p-3"><p className="mt-1 max-w-44 whitespace-pre-wrap text-xs text-gray-500">{g.references}</p></td><td className="min-w-52 max-w-72 whitespace-pre-wrap p-3 text-amber-800">{g.issues.join('\n')||'—'}</td></tr>)}</tbody></table>}
+        {view==='summary'&&<table className="w-full min-w-[1000px] text-left text-sm">
+          <thead className="sticky top-0 bg-gray-100"><tr>{['取引日・明細番号','仕入先','品目・在庫数量','合計金額（購入＋送料）','記録状況'].map(h=><th key={h} className="p-3">{h}</th>)}</tr></thead>
+          <tbody>{visibleGroups.slice(page*50,(page+1)*50).map(g=><tr key={g.key} className="border-t align-top">
+            <td className="whitespace-nowrap p-3">{g.date}<p className="mt-1 text-xs text-gray-500">{g.ledgerNo}</p><button type="button" aria-label={`明細を見る ${g.ledgerNo}`} onClick={()=>{summaryPage.current=page;setDetailGroup(g.ledgerNo);setDirection('受入れ');setView('rows');setPage(0);}} className="mt-3 rounded border px-3 py-2 text-blue-700">明細を見る</button></td>
+            <td className="min-w-44 p-3"><strong>{g.counterpartyName||'未記録'}</strong><p className="mt-1 whitespace-pre-wrap text-gray-500">{g.counterpartyAddress||'住所未記録'}</p></td>
+            <td className="min-w-40 whitespace-pre-wrap p-3">{g.itemTypes||'品目未記録'}<p className="mt-1 font-semibold">{g.quantity===null?'数量未確定':`${g.quantity}点`}</p><p className="text-xs text-gray-500">出力時点の在庫数量</p></td>
+            <td className="min-w-40 p-3"><strong>{g.total===null?'金額未確定':`${g.total.toLocaleString()}円`}</strong><p className="mt-2 text-xs text-gray-600">購入金額 {g.purchaseAmount===null?'未確定':g.purchaseAmount.toLocaleString()+'円'}<br/>送料 {g.shipping===null?'内訳未確定':g.shipping.toLocaleString()+'円'}</p><p className="mt-1 text-xs text-gray-500">{g.amountBasis}</p></td>
+            <td className="min-w-44 max-w-72 whitespace-pre-wrap p-3"><p className={g.recordStatus==='登録情報あり'?'text-gray-600':'text-amber-800'}>{g.recordStatus}</p>{g.issues.length>0&&<details className="mt-2 text-xs text-gray-600"><summary className="cursor-pointer">照合内容</summary>{g.issues.join('\n')}</details>}</td>
+          </tr>)}</tbody>
+        </table>}
         {view==='rows'&&<table className="w-full min-w-[1150px] text-left text-sm">
           <thead className="sticky top-0 bg-gray-100"><tr>{['取引日','区分','管理番号・商品名','品目・数量','特徴','相手方・住所','本人確認','確認事項'].map(h=><th key={h} className="px-3 py-3 font-semibold">{h}</th>)}</tr></thead>
           <tbody>{visibleRows.slice(page*50,(page+1)*50).map((r,i)=><tr key={`${r.inventoryId}:${r.direction}:${i}`} className="border-t border-gray-100 align-top">
             <td className="whitespace-nowrap p-3">{r.date}</td><td className="whitespace-nowrap p-3">{r.direction}<br/>{r.transactionType||'未記録'}</td>
-            <td className="min-w-60 max-w-80 p-3"><a className="font-semibold text-blue-700 underline" href={`/inventory/${encodeURIComponent(r.inventoryId)}`} target="_blank" rel="noreferrer">{r.managementNumber}</a><p className="mt-1 break-words">{r.name}</p></td>
+            <td className="min-w-60 max-w-80 p-3"><a className="font-semibold text-blue-700 underline" href={`/inventory/${encodeURIComponent(r.inventoryId)}`} target="_blank" rel="noreferrer">{r.managementNumber}</a><p className="mt-1 break-words">{r.name}</p>{r.direction==='受入れ'&&<p className="mt-2 text-xs text-gray-500">明細番号 {presentation?.byInventoryId.get(r.inventoryId)?.ledgerNo}</p>}</td>
             <td className="min-w-32 p-3">{r.itemType||'未記録'}<p className="mt-1 font-semibold">{r.quantity===null?'数量未記録':`${r.quantity}点`}</p></td>
             <td className="min-w-40 max-w-60 whitespace-pre-wrap p-3">{r.feature||'未記録'}</td>
             <td className="min-w-44 max-w-64 p-3">{r.counterpartyName||'未記録'}<p className="mt-1 text-gray-500">{r.counterpartyAddress}</p><p>{r.counterpartyOccupation}</p></td>
