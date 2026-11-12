@@ -34,7 +34,8 @@ async function binding(id:string,channel?:EcChannel){
 }
 async function remember(remote:ExternalProduct){
  const key={pk:'ECONVENI#OBSERVED_CATALOG'},old=(await db.send(new GetCommand({TableName:table,Key:key,ConsistentRead:true}))).Item as ExternalSnapshot|undefined;
- const value={...key,version:randomUUID(),checkedAt:new Date().toISOString(),products:[...(old?.products??[]).filter(p=>p.productId!==remote.productId),remote]};
+ const products=old?.products??[];
+ const value={...key,version:randomUUID(),checkedAt:new Date().toISOString(),products:products.some(p=>p.productId===remote.productId)?products.map(p=>p.productId===remote.productId?remote:p):[...products,remote]};
  // Do not claim that all cached products were checked now. Their snapshot time remains unchanged.
  if(old)value.checkedAt=old.checkedAt;
  try{await db.send(new PutCommand({TableName:table,Item:value,ConditionExpression:old?'#v=:v':'attribute_not_exists(pk)',...(old?{ExpressionAttributeNames:{'#v':'version'},ExpressionAttributeValues:{':v':old.version}}:{})}));}
