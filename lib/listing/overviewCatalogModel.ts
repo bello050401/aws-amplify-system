@@ -98,6 +98,12 @@ export function isProtectedSale(
     (isSoldInventory(item.row) && item.row.soldChannel === channel)
   );
 }
+/** A second e-conveni page may own the active listing for the same stock. */
+export function hasOtherActiveListing(item: OverviewItem, catalog: EcCatalog | null, channel: EcChannel): boolean {
+  return !!item.row && !!item.remote && !!catalog?.econveni?.products.some(p =>
+    p.inventoryId === item.row!.inventoryId && p.product.productId !== item.remote!.productId && p.product.channels[channel].state === 'ACTIVE',
+  );
+}
 /** All-channel inactive means ALL channels, not any one inactive channel on an active product. */
 export function matchesListingState(
   item: OverviewItem,

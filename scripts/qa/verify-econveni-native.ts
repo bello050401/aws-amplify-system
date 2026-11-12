@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import {readNativeCommand} from '../../lib/listing/econveni/httpSession';
 import {nativeAllowed,nativeResultMatches,type NativeRequest} from '../../lib/listing/econveni/nativeModel';
 import {selectManualLink,overlayManualStatuses,observedChannel,type ExternalProduct,type ManualLink,type ManualSyncData} from '../../lib/listing/econveni/manualSyncModel';
-import {overviewChannel} from '../../lib/listing/overviewCatalogModel';
+import type {ListingOverviewRow} from '../../lib/listing/overviewTypes';
+import {overviewChannel,hasOtherActiveListing} from '../../lib/listing/overviewCatalogModel';
 const channels=['YAHOO','MERCARI_SHOPS','BASE'] as const,ops=['PUBLISH','CLEAR','STOP'] as const;
 const inactive={state:'INACTIVE' as const,listingId:null,listingUrl:null};
 const product=(id='123'):ExternalProduct=>({productId:id,title:'照合 チェア',quantity:1,price:99999,imageUrl:'photo.jpg',inventoryMarker:null,channels:{BASE:{...inactive},YAHOO:{...inactive},MERCARI_SHOPS:{...inactive}}});
@@ -30,6 +31,14 @@ const data:ManualSyncData={snapshot:{version:'v',checkedAt:'2026-11-12',products
 check('complementary pages select correct marketplace, independent of list order',()=>{for(const links of [data.links,[...data.links].reverse()]){const d={...data,links};assert.equal(selectManualLink(d,'i','BASE')?.productId,'1');assert.equal(selectManualLink(d,'i','YAHOO')?.productId,'2');assert.equal(selectManualLink(d,'i','MERCARI_SHOPS')?.productId,'1');}});
 check('ambiguous two active pages fail closed',()=>{const d=structuredClone(data);d.snapshot!.products[0].channels.YAHOO.state='ACTIVE';assert.throws(()=>selectManualLink(d,'i','YAHOO'));const c=overlayManualStatuses({channels:{},errors:[],archivedIds:[]},d);assert.equal(c.channels.YAHOO!.i.state,'ERROR');});
 check('aggregated sale catalog preserves every channel',()=>{const c=overlayManualStatuses({channels:{},errors:[],archivedIds:[]},data);assert.equal(c.channels.YAHOO!.i.externalId,'y2');assert.equal(c.channels.BASE!.i.externalId,'b1');});
-check('e-conveni rows display their own state instead of combined stock state',()=>{const c=overlayManualStatuses({channels:{},errors:[],archivedIds:[]},data);const row={inventoryId:'i',hasDraft:false} as any;assert.equal(overviewChannel({key:'1',remote:primary,row},c,'YAHOO').state,'STOPPED');assert.equal(overviewChannel({key:'2',remote:secondary,row},c,'BASE').state,'UNLISTED');});
+check('e-conveni rows display their own state instead of combined stock state',()=>{const c=overlayManualStatuses({channels:{},errors:[],archivedIds:[]},data);const row={inventoryId:'i',hasDraft:false} as ListingOverviewRow;assert.equal(overviewChannel({key:'1',remote:primary,row},c,'YAHOO').state,'STOPPED');assert.equal(overviewChannel({key:'2',remote:secondary,row},c,'BASE').state,'UNLISTED');});
 check('cleared ID is never resurrected by baseline',()=>{const cleared=structuredClone(primary);cleared.channels.BASE={...inactive};assert.equal(observedChannel(cleared,'BASE',data.links[0],'now').externalId,null);});
+check('UI blocks publishing on complementary pages but never unrelated stock',()=>{
+ const row={inventoryId:'i',hasDraft:false} as ListingOverviewRow;
+ const catalog={channels:{},errors:[],archivedIds:[],econveni:{checkedAt:'now',products:[primary,secondary].map(p=>({product:p,inventoryId:'i',inventory:row}))}};
+ assert.equal(hasOtherActiveListing({key:'1',remote:primary,row},catalog,'YAHOO'),true);
+ assert.equal(hasOtherActiveListing({key:'2',remote:secondary,row},catalog,'BASE'),true);
+ assert.equal(hasOtherActiveListing({key:'2',remote:secondary,row},catalog,'YAHOO'),false);
+ assert.equal(hasOtherActiveListing({key:'1',remote:primary,row:{...row,inventoryId:'unrelated'}},catalog,'YAHOO'),false);
+});
 console.log(`PASS ${count} contract / safety / multi-page scenarios; no live EC writes`);

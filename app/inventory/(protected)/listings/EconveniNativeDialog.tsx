@@ -28,7 +28,7 @@ export function EconveniNativeDialog({requests,onClose,onQueued}:{requests:Nativ
    {error&&<p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-800">{error}</p>}
    {receipts.length>0?<p role="status" className="rounded-lg bg-teal-50 p-4 font-semibold text-teal-900">{receipts.length}件を受け付けました。結果は一覧の「処理状況」に表示します。</p>:<><label className="flex gap-3 text-sm"><input type="checkbox" checked={confirmed} onChange={e=>setConfirmed(e.target.checked)} disabled={busy}/>対象商品・販売先・操作内容を確認しました</label>{termsRequired&&<label className="flex gap-3 text-sm"><input type="checkbox" checked={terms} onChange={e=>setTerms(e.target.checked)} disabled={busy}/>Yahoo!オークションの利用規約・ガイドラインに同意して出品します</label>}</>}
   </div>
-  <div className="flex justify-end gap-3 border-t bg-slate-50 px-6 py-4"><button className={button} disabled={busy} onClick={onClose}>{receipts.length?'作業に戻る':'キャンセル'}</button>{!receipts.length&&<button className={button+' !border-teal-800 !bg-teal-800 text-white'} disabled={busy||!confirmed||termsRequired&&!terms||reviews.length!==requests.length||reviews.some(r=>!r.ok)} onClick={()=>void execute()}>{busy?'受付中…':requests.length+'件を実行'}</button>}</div>
+  <div className="flex justify-end gap-3 border-t bg-slate-50 px-6 py-4"><button className={button} disabled={busy} onClick={onClose}>{receipts.length?'作業に戻る':'キャンセル'}</button>{!receipts.length&&<button className={button+' !border-teal-800 !bg-teal-800 text-white'} disabled={busy||!confirmed||termsRequired&&!terms||reviews.length!==requests.length||reviews.some(r=>!r.ok)} onClick={()=>void execute()}>{busy?(reviews.length?'受付中…':'確認中…'):requests.length+'件を実行'}</button>}</div>
  </dialog>;
 }
 const key='bello-econveni-native-jobs-v1';

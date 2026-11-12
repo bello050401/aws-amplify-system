@@ -23,6 +23,7 @@ import {
 import {
   overviewItems,
   overviewChannel,
+  hasOtherActiveListing,
   isProtectedSale,
   isSoldInventory,
   matchesListingState,
@@ -756,8 +757,8 @@ export function ListingsOverviewTable({
                     ) ? (
                       <button
                         className={button + " whitespace-nowrap !px-2 !text-xs"}
-                        disabled={!actionsReady||!!item.remote&&!EC_CHANNELS.some(c=>item.remote!.channels[c].state==='INACTIVE'&&!item.remote!.channels[c].listingId)}
-                        onClick={() => item.remote ? setNativeRequests(EC_CHANNELS.filter(c=>item.remote!.channels[c].state==='INACTIVE'&&!item.remote!.channels[c].listingId).map(channel=>({inventoryId:row.inventoryId,productId:item.remote!.productId,channel,operation:'PUBLISH' as const}))) : setOperation({action:{kind:'COMMON_PUBLISH'},items:[row]})}
+                        disabled={!actionsReady||!!item.remote&&!EC_CHANNELS.some(c=>item.remote!.channels[c].state==='INACTIVE'&&!item.remote!.channels[c].listingId&&!hasOtherActiveListing(item,catalog,c))}
+                        onClick={() => item.remote ? setNativeRequests(EC_CHANNELS.filter(c=>item.remote!.channels[c].state==='INACTIVE'&&!item.remote!.channels[c].listingId&&!hasOtherActiveListing(item,catalog,c)).map(channel=>({inventoryId:row.inventoryId,productId:item.remote!.productId,channel,operation:'PUBLISH' as const}))) : setOperation({action:{kind:'COMMON_PUBLISH'},items:[row]})}
                       >
                         まとめて出品
                       </button>
@@ -802,7 +803,7 @@ export function ListingsOverviewTable({
                             ? "—"
                             : price.toLocaleString("ja-JP") + "円"}
                         </p>
-                        {canEdit&&row&&item.remote&&!archived?<div className="flex gap-1.5">{(['PUBLISH','CLEAR','STOP'] as const).map(op=><button key={op} className={button+' !min-h-9 !px-3'} title={NATIVE_DESCRIPTION[op]} aria-label={EC_CHANNEL_LABEL[c]+'：'+NATIVE_DESCRIPTION[op]} disabled={!actionsReady||op==='PUBLISH'&&(sold||row.quantity<1||protectedSale||s.state==='ACTIVE'||!!s.externalId)||op==='CLEAR'&&!s.externalId||op==='STOP'&&(protectedSale||s.state!=='ACTIVE'||!s.externalId)} onClick={()=>openNative([item],c,op)}>{NATIVE_LABEL[op]}</button>)}</div>:canEdit && row && !archived && !protectedSale && (
+                        {canEdit&&row&&item.remote&&!archived?<div className="flex gap-1.5">{(['PUBLISH','CLEAR','STOP'] as const).map(op=><button key={op} className={button+' !min-h-9 !px-3'} title={op==='PUBLISH'&&hasOtherActiveListing(item,catalog,c)?'同じ在庫の別ページがこの販売先で出品中です':NATIVE_DESCRIPTION[op]} aria-label={EC_CHANNEL_LABEL[c]+'：'+NATIVE_DESCRIPTION[op]} disabled={!actionsReady||op==='PUBLISH'&&(sold||row.quantity<1||protectedSale||s.state==='ACTIVE'||!!s.externalId||hasOtherActiveListing(item,catalog,c))||op==='CLEAR'&&!s.externalId||op==='STOP'&&(protectedSale||s.state!=='ACTIVE'||!s.externalId)} onClick={()=>openNative([item],c,op)}>{NATIVE_LABEL[op]}</button>)}</div>:canEdit && row && !archived && !protectedSale && (
                           <div className="flex flex-wrap gap-2">
                             {["ACTIVE", "ERROR"].includes(s.state) ? (
                               <button
