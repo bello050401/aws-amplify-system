@@ -21,6 +21,7 @@ import type {SoldOutRequest,SoldOutResult} from '../../../lib/inventory/soldOutI
 import type {CatalogDelta} from '../domain/catalogProtocol';
 import {singleFlight} from '../domain/singleFlight';
 import {detailTiming} from './detailTiming';
+import {validCategoryChoices,type CategoryChoice} from '../domain/categoryFilter';
 
 const isWeb = Platform.OS === "web";
 // The web app is served by BELLO itself and uses its existing authenticated session.
@@ -249,9 +250,15 @@ export async function removeInventory(request: DeleteRequest): Promise<void> {
 
 export async function readInventoryOptions(): Promise<InventoryOptions> {
   const session=await authenticatedSession();
-  const value=await jsonRequest("/api/mobile/options",session.cookie) as InventoryOptions & {owner:string};
+  const value=await jsonRequest("/api/mobile/options",session.cookie,true) as InventoryOptions & {owner:string};
   if(value.owner!==session.owner||!Array.isArray(value.categories)||!Array.isArray(value.locations)||!Array.isArray(value.statuses)) throw new Error("選択肢を取得できませんでした。");
   return value;
+}
+export async function readFilterCategories():Promise<CategoryChoice[]> {
+  const session=await authenticatedSession();
+  const value=await jsonRequest('/api/mobile/options?scope=categories',session.cookie,true) as {owner:string;choices:unknown};
+  if(value.owner!==session.owner||!validCategoryChoices(value.choices))throw new Error('カテゴリを取得できませんでした。');
+  return value.choices;
 }
 export async function uploadInventoryPhoto(photo:PendingPhoto):Promise<UploadedPhoto> {
   if(!mobileWritesEnabled())throw new InventoryWriteError("forbidden");

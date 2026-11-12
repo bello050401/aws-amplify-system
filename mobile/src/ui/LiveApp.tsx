@@ -20,6 +20,7 @@ import { loginErrorMessage, loginUsername, requestedLoginMode, type LoginMode } 
 import type { InventorySearchInput } from "../domain/search";
 import {DetailReadAhead} from '../domain/detailReadAhead';
 import {readInventoryGallery} from '../runtime/service';
+import {readFilterCategories} from '../runtime/service';
 
 function connected(state: Network.NetworkState) { return state.isConnected !== false && state.isInternetReachable !== false; }
 const loginModeKey = `bello.login-mode.${API_ORIGIN}`;
@@ -150,6 +151,7 @@ export function LiveApp() {
     },
     clearPreparedDetails: () => detailAhead.clear(),
     loadOptions: readInventoryOptions,
+    loadCategories: readFilterCategories,
     uploadPhoto: uploadInventoryPhoto,
     loadSales: readSales,
     save: (...args) => {detailAhead.clear();return saveInventory(...args);},

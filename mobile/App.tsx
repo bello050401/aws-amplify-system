@@ -24,6 +24,9 @@ function Preview() {
   const offlineRef = useRef(false);
   const refreshTest = useRef(__DEV__ && typeof window !== "undefined" && new URLSearchParams(window.location.search).get("refresh-test") === "1").current;
   const readAttempt = useRef(0);
+  const categoryTest=useRef(__DEV__&&typeof window!=='undefined'?new URLSearchParams(window.location.search).get('category-test'):null).current;
+  const categoryAttempts=useRef(0);
+  const categoryNames=['補修待ち','撮影待ち','出品待ち','販売中','売り切れ','入金待ち','出荷指示済','発送完了','保留','市川確認','川越移動予定','プラスロジ移動予定'];
   const [catalogReads,setCatalogReads]=useState(0),[pageReads,setPageReads]=useState(0);
   const loadingTest = useRef(__DEV__ && typeof window !== "undefined" && new URLSearchParams(window.location.search).get("loading-test") === "1").current;
   const galleryDelayTest = useRef(__DEV__ && typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('gallery-delay-test')).current;
@@ -34,6 +37,7 @@ function Preview() {
     ? galleryPreviewItems() : previewItems.map((item,index) => ({ ...item, ...(__DEV__ && index===0 && typeof window!=='undefined' && new URLSearchParams(window.location.search).get('photo-delete-test')==='1' ? {photosComplete:true,photos:[{id:'photo-00000000-0000-4000-8000-000000000001',source:'PHOTO_ASSET' as const,url:'http://127.0.0.1:8146/photo.jpg',type:'NORMAL' as const,primary:true},{id:'preview-image',source:'INVENTORY' as const,url:'http://127.0.0.1:8146/photo.jpg',type:'NORMAL' as const,primary:false}]} : {}) })));
   if(photoPreviewTest==='race'&&galleryAttempts.current===0){for(const item of records.current)item.photos=[{id:'main-'+item.id,url:'http://127.0.0.1:43138/qa-late-image-error',primary:true}];}
   const uploadedPhotos=useRef(new Map<string,string>());
+  if(categoryTest){records.current[0].category='補修待ち,市川確認';}
   const ports = useMemo<StaffAppPorts>(() => ({
     listPreferences:new ListPreferences(AsyncStorage,'ui-preview','preview-only'),
     snapshot: new SnapshotStore(loadingTest ? { ...AsyncStorage, setItem: async (key, value) => {
@@ -67,7 +71,8 @@ function Preview() {
     } : {}),
     online: async () => !offlineRef.current,
     newMutationId: () => Crypto.randomUUID(),
-    loadOptions: async()=>({categories:["販売中","撮影待ち"],locations:["川越倉庫","所沢倉庫"],statuses:previewItems[0].statusOptions??[]}),
+    loadOptions: async()=>{if(categoryTest)throw Error('Synthetic full-options outage');return {categories:["販売中","撮影待ち"],locations:["川越倉庫","所沢倉庫"],statuses:previewItems[0].statusOptions??[]};},
+    ...(categoryTest?{loadCategories:async()=>{const attempt=++categoryAttempts.current;await new Promise(resolve=>setTimeout(resolve,700));if(categoryTest==='retry'&&attempt===1)throw Error('Synthetic category outage');return categoryNames.map((label,i)=>({value:'category-'+i,label}));}}:{}),
     ...(galleryDelayTest ? {
       loadEditableDetail: async (id: string) => {
         await new Promise(resolve => setTimeout(resolve,200));
