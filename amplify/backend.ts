@@ -1058,6 +1058,8 @@ const salesAggregateSnapshotTable = backend.data.resources.tables["SalesAggregat
 const salesAggregateRunStatusTable = backend.data.resources.tables["SalesAggregateRunStatus"];
 
 inventoryTable.grantReadData(backend.salesAggregateScheduler.resources.lambda);
+categoryTable.grantReadData(backend.salesAggregateScheduler.resources.lambda);
+backend.salesAggregateScheduler.addEnvironment("CATEGORY_TABLE_NAME", categoryTable.tableName);
 salesAggregateSnapshotTable.grantReadWriteData(backend.salesAggregateScheduler.resources.lambda);
 salesAggregateRunStatusTable.grantReadWriteData(backend.salesAggregateScheduler.resources.lambda);
 // Queue only the existing singleton ZAICO job; the worker keeps its own scoped permissions.
@@ -1069,6 +1071,8 @@ backend.salesAggregateScheduler.addEnvironment("SALES_AGGREGATE_RUN_STATUS_TABLE
 backend.salesAggregateScheduler.addEnvironment("ZAICO_SYNC_JOB_TABLE_NAME", zaicoSyncJobTable.tableName);
 backend.data.resources.tables["ZaicoTransitionRecord"].grantReadData(backend.salesAggregateScheduler.resources.lambda);
 backend.salesAggregateScheduler.addEnvironment("ZAICO_TRANSITION_TABLE_NAME", backend.data.resources.tables["ZaicoTransitionRecord"].tableName);
+backend.storage.resources.bucket.grantRead(backend.salesAggregateScheduler.resources.lambda,'zaico-transition/*');
+backend.salesAggregateScheduler.addEnvironment('INVENTORY_ARCHIVE_BUCKET',backend.storage.resources.bucket.bucketName);
 
 // Only the existing BELLO host receives the new authenticated inventory/outbound adapter permissions.
 if (process.env.AWS_APP_ID === 'd4hkkg7dty2du' && process.env.AWS_BRANCH === 'claude/inventory-management-system-5vbvc7') {

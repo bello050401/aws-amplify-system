@@ -13,9 +13,11 @@ import { InventoryHeader } from "../../InventoryHeader";
 import { YearMonthPicker } from "./YearMonthPicker";
 import { SalesTrendChart } from "./SalesTrendChart";
 import { SalesItemsSection } from "./SalesItemsSection";
+import {InventoryValuePanel,SalesViewTabs} from './InventoryValuePanel';
+import {loadInventoryValue} from '@/lib/inventory/inventoryValueStore';
 
 interface SalesPageProps {
-  searchParams: Promise<{ y?: string; m?: string }>;
+  searchParams: Promise<{ y?: string; m?: string; view?: string; month?:string }>;
 }
 
 /**
@@ -59,6 +61,10 @@ export default async function SalesPage(props: SalesPageProps) {
   const searchParams = await props.searchParams;
   const role = await getInventoryRole();
   if (!role) return null;
+  if(searchParams.view==='inventory') {
+    const inventory=await loadInventoryValue(searchParams.month||undefined);
+    return <div className="flex h-full flex-col"><InventoryHeader role={role} center={<h1 className="text-base font-bold">売上</h1>}/><div className="min-h-0 flex-1 overflow-y-auto px-6 py-5"><SalesViewTabs inventory/><InventoryValuePanel view={inventory} month={searchParams.month}/></div></div>;
+  }
 
   // 追加修正指示 §5: 「今日」「今月」の判定はすべてJST(Asia/Tokyo)基準
   // で行う — サーバーの実行タイムゾーン(AWS/Amplify Hostingは通常UTC)
@@ -129,6 +135,7 @@ export default async function SalesPage(props: SalesPageProps) {
     <div className="flex h-full flex-col">
       <InventoryHeader role={role} center={<h1 className="text-base font-bold text-gray-900">売上</h1>} />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+        <SalesViewTabs/>
         {/* 集計をいつ作り直したか、そもそも集計が無い/読めないのかを
             隠さずに出す —— §8「初期未集計と実0件を区別」の要件その
             もの。0円と「まだ集計されていない」を絶対に混同させない。

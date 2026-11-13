@@ -2409,12 +2409,14 @@ const schema = a.schema({
 
   SalesAggregateSnapshot: a
     .model({
-      /** 常に "current"。この表は最新世代のスナップショット1行だけを持つ。 */
+      /** Sales/current inventory: "current". Closed inventory months: "inventory:YYYY-MM" (immutable). */
       id: a.string().required(),
       /** この世代を作った定期実行の開始時刻(ISO文字列)。新しい世代ほど文字列として大きい(=楽観的排他制御の比較キー)。 */
       generation: a.string().required(),
       /** 全月ぶんの SalesMonthlyAggregateRow[] を JSON.stringify したもの。 */
       monthsJson: a.string().required(),
+      /** Same scan/generation as sales; no per-page inventory scan. */
+      inventoryValueJson: a.string(),
       /** 何件の在庫レコードから作ったか(母集団の大きさ)。 */
       sourceRecordCount: a.integer().required(),
       /** いつ作り直したか(= generation と同じ値)。画面に「○○時点の集計」と出すため。 */

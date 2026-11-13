@@ -1,6 +1,9 @@
 import { ConditionalCheckFailedException, DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, ScanCommand, GetCommand, PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { buildMonthlyAggregates } from "@/lib/inventory/salesAggregate";
+import { buildInventoryValue, type ValueSource } from "@/lib/inventory/inventoryValue";
+import {ensureInventoryMonth} from '@/lib/inventory/inventoryValueArchive';
+import {lastClosedInventoryMonth} from '@/lib/inventory/inventoryValueCalendar';
 import type { SalesSourceRecord } from "@/lib/inventory/sales";
 import { planScheduledZaicoDelta } from "@/lib/inventory/scheduledZaicoDelta";
 import { ZAICO_SYNC_JOB_ID } from "@/lib/inventory/zaicoSyncJobId";
@@ -71,7 +74,8 @@ export async function queueZaicoDelta(client: Pick<typeof ddb, "send"> = ddb, ta
   }
 }
 
-interface InvRow {
+interface InvRow extends ValueSource {
+  sourceInventoryId?:string|null;
   id: string;
   sku: string;
   name: string;
@@ -89,7 +93,7 @@ async function scanInventory(): Promise<InvRow[]> {
     const res = await ddb.send(
       new ScanCommand({
         TableName: INVENTORY_TABLE,
-        ProjectionExpression: "id, sku, #n, saleEndDate, salePrice, purchasePrice, shippingCost, deletedAt",
+        ProjectionExpression: "id, sku, #n, saleEndDate, salePrice, purchasePrice, shippingCost, deletedAt, quantity, categoryId, categoryIds, sourceInventoryId",
         ExpressionAttributeNames: { "#n": "name" },
         ExclusiveStartKey: key,
       }),
@@ -164,6 +168,15 @@ export const handler = async () => {
 
   try {
     const rows = (await scanInventory()).filter((r) => !r.deletedAt);
+    if (!process.env.CATEGORY_TABLE_NAME) throw new Error('Category table is not configured');
+    const categories: {id:string;name:string}[] = [];
+    let categoryKey: Record<string,unknown> | undefined;
+    do {
+      const page = await ddb.send(new ScanCommand({TableName:process.env.CATEGORY_TABLE_NAME,ProjectionExpression:'id, #n',ExpressionAttributeNames:{'#n':'name'},ExclusiveStartKey:categoryKey}));
+      categories.push(...(page.Items??[]) as {id:string;name:string}[]);
+      categoryKey=page.LastEvaluatedKey;
+    } while(categoryKey);
+    const inventoryValue = buildInventoryValue(rows,categories,startedAt);
     const records: SalesSourceRecord[] = rows.map((r) => ({
       id: r.id,
       displayId: r.sku,
@@ -198,6 +211,7 @@ export const handler = async () => {
             __typename: "SalesAggregateSnapshot",
             generation,
             monthsJson: serializeSnapshotMonths(recomputed),
+            inventoryValueJson: JSON.stringify(inventoryValue),
             sourceRecordCount: records.length,
             rebuiltAt: generation,
             rebuiltBy: "sales-aggregate-scheduler",
@@ -220,6 +234,10 @@ export const handler = async () => {
     }
 
     const completedAt = new Date().toISOString();
+    // A month-end failure must not replace a valid current total or fabricate a past zero balance.
+    const inventoryMonth = await ensureInventoryMonth(ddb,lastClosedInventoryMonth(),new Map(rows.filter(r=>r.sourceInventoryId).map(r=>[r.sourceInventoryId!,{id:r.id,sku:r.sku}]))).catch(error=>{
+      console.error('[inventory-month] month-end restore failed',error instanceof Error?error.message:'unknown');return 'failed';
+    });
     // フィールド組み立ては純粋関数(lib/inventory/salesAggregateFreshness.ts の
     // buildSuccessRunStatusFields)に委ね、publishedGenerationキーの省略
     // (undefined値を持たせない)をverify-sales-aggregate-snapshot.tsの単体
@@ -242,7 +260,7 @@ export const handler = async () => {
       console.error("[sales-aggregate-scheduler] ZAICO差分同期の予約に失敗。次回の定期実行で再試行します", error);
       return "queue-failed";
     });
-    return { ok: true, published, monthsInSnapshot: recomputed.length, sourceRecordCount: records.length, zaicoDelta };
+    return { ok: true, published, monthsInSnapshot: recomputed.length, sourceRecordCount: records.length, zaicoDelta,inventoryMonth };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[sales-aggregate-scheduler] 失敗", message);

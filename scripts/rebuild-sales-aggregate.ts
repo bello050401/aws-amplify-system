@@ -1,3 +1,4 @@
+import {buildInventoryValue,type ValueSource} from '../lib/inventory/inventoryValue';
 /**
  * 売上月次集計の再構築(2026-09-02 指示書§19、2026-09-11 世代整合性
  * 修正)。
@@ -77,7 +78,7 @@ async function table(model: string): Promise<string> {
   return hits[0];
 }
 
-interface InvRow {
+interface InvRow extends ValueSource {
   id: string;
   sku: string;
   name: string;
@@ -95,7 +96,7 @@ async function scanInventory(t: string): Promise<InvRow[]> {
     const res = await ddb.send(
       new ScanCommand({
         TableName: t,
-        ProjectionExpression: "id, sku, #n, saleEndDate, salePrice, purchasePrice, shippingCost, deletedAt",
+        ProjectionExpression: "id, sku, #n, saleEndDate, salePrice, purchasePrice, shippingCost, deletedAt, quantity, categoryId, categoryIds",
         ExpressionAttributeNames: { "#n": "name" },
         ExclusiveStartKey: key,
       }),
@@ -120,6 +121,7 @@ async function getSnapshot(t: string): Promise<{ generation: string | null; mont
 }
 
 async function main() {
+  const generation = new Date().toISOString();
   const inventoryTable = await table("Inventory");
   const snapshotTable = await table("SalesAggregateSnapshot");
   console.log(`inventory  = ${inventoryTable}`);
@@ -138,6 +140,15 @@ async function main() {
     shippingCost: r.shippingCost ?? null,
   }));
 
+  const categories: {id:string;name:string}[]=[];
+  const categoryTable=await table('Category');
+  let categoryKey:Record<string,unknown>|undefined;
+  do {
+    const page=await ddb.send(new ScanCommand({TableName:categoryTable,ProjectionExpression:'id, #n',ExpressionAttributeNames:{'#n':'name'},ExclusiveStartKey:categoryKey}));
+    categories.push(...(page.Items??[]) as {id:string;name:string}[]);categoryKey=page.LastEvaluatedKey;
+  } while(categoryKey);
+  const inventoryValue=buildInventoryValue(rows,categories,generation);
+  console.log('Inventory valuation:',inventoryValue.total,'JPY,',inventoryValue.quantity,'units,',inventoryValue.issues.length,'issues');
   const recomputed = buildMonthlyAggregates(records);
   const { generation: storedGeneration, months: stored } = await getSnapshot(snapshotTable);
 
@@ -167,7 +178,6 @@ async function main() {
   // しても、直前まで公開されていた世代のスナップショットは1バイトも
   // 変わらず残る(新旧世代が混在した状態は構造的に発生しない、
   // lib/inventory/salesAggregateSnapshot.ts冒頭コメント参照)。
-  const generation = new Date().toISOString();
   let published = true;
   try {
     await ddb.send(
@@ -178,6 +188,7 @@ async function main() {
           __typename: "SalesAggregateSnapshot",
           generation,
           monthsJson: serializeSnapshotMonths(recomputed),
+          inventoryValueJson: JSON.stringify(inventoryValue),
           sourceRecordCount: records.length,
           rebuiltAt: generation,
           rebuiltBy: "rebuild-sales-aggregate script",

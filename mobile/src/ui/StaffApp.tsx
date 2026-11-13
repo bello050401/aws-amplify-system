@@ -62,6 +62,7 @@ export interface StaffAppPorts extends EditorPorts {
   loadOptions?: () => Promise<InventoryOptions>;
   loadCategories?: () => Promise<CategoryChoice[]>;
   loadSales?: (year:number,month:number,items?:boolean)=>Promise<SalesResponse>;
+  loadInventoryValue?:(month?:string)=>Promise<import('../../../lib/inventory/inventoryValue').InventoryValueView>;
   loadDetail?: (id: string, expectedVersion?: string) => Promise<InventoryItem>;
   loadEditableDetail?: (id: string, expectedVersion?: string) => Promise<InventoryItem>;
   loadPhotos?: (id: string) => Promise<InventoryGallery>;
@@ -585,7 +586,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
             <View style={[s.rowRight,selecting&&{width:46}]}><View style={s.quantityBox}><Text style={s.quantity}>{item.quantityUnset?"—":item.quantity}</Text></View><Text numberOfLines={1} style={s.rowLocation}>● {item.location || "未設定"}</Text></View>
             </Pressable>
           </View>} />
-      </View> : tab === "outbound" ? <OutboundEntry offline={offline}/> : tab === "sales" && ports.loadSales ? <SalesScreen canIssueDocuments={canIssueDocuments} load={ports.loadSales} offline={offline} onOpen={id=>{if(ports.loadDetail)void ports.loadDetail(id).then(item=>{setTab("inventory");void openItem(item,true);}).catch(()=>setError("商品を取得できませんでした。"));}}/> : <View style={s.pending}><Text style={s.pendingText}>売上を取得できませんでした。</Text></View>}
+      </View> : tab === "outbound" ? <OutboundEntry offline={offline}/> : tab === "sales" && ports.loadSales ? <SalesScreen loadInventoryValue={ports.loadInventoryValue} canIssueDocuments={canIssueDocuments} load={ports.loadSales} offline={offline} onOpen={id=>{if(ports.loadDetail)void ports.loadDetail(id).then(item=>{setTab("inventory");void openItem(item,true);}).catch(()=>setError("商品を取得できませんでした。"));}}/> : <View style={s.pending}><Text style={s.pendingText}>売上を取得できませんでした。</Text></View>}
       {tab==='inventory'&&!selected&&selecting&&<View style={s.selectionActions}>
         <View style={s.selectionHeading}><Text style={s.selectText}>{editIds.size}件選択中</Text><Pressable accessibilityRole="button" accessibilityLabel="選択解除" onPress={()=>setEditIds(new Set())}><Text style={s.selectText}>解除</Text></Pressable></View>
         <View style={{flexDirection:'row',gap:8}}>{([{mode:'edit',label:'編集',icon:'create-outline'},{mode:'undo',label:'戻る',icon:'arrow-undo-outline'},{mode:'redo',label:'進む',icon:'arrow-redo-outline'},{mode:'history',label:'履歴',icon:'time-outline'}] as const).map(action=><Pressable key={action.mode} accessibilityRole="button" accessibilityLabel={'選択商品の'+action.label} disabled={!editIds.size||offline} onPress={()=>openSelection(action.mode)} style={[action.mode==='edit'?s.primaryAction:s.secondaryAction,(!editIds.size||offline)&&{opacity:.4}]}><Ionicons name={action.icon} size={18} color={action.mode==='edit'?'white':colors.text}/><Text style={action.mode==='edit'?s.editLabel:s.selectText}>{action.label}</Text></Pressable>)}</View>

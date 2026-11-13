@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireMobileFeature } from "@/lib/mobile/session";
 import { loadSalesSummary, loadSalesItems } from "@/lib/inventory/salesView";
+import { loadInventoryValue } from '@/lib/inventory/inventoryValueStore';
 import { nowInJst, isCurrentJstYearMonth, forecastReferenceDay, calculateMonthEndForecast } from "@/lib/inventory/sales";
 export const dynamic="force-dynamic";
 export async function GET(request:Request) {
@@ -12,6 +13,7 @@ export async function GET(request:Request) {
   if(!Number.isInteger(year)||year<2000||year>current.year+1||!Number.isInteger(month)||month<1||month>12)
     return NextResponse.json({error:"INVALID_MONTH"},{status:422,headers});
   try {
+    if(params.get('view')==='inventory') return NextResponse.json({owner:session.owner,inventory:await loadInventoryValue(params.get('month')||undefined)},{headers});
     if(params.get("items")==="1") return NextResponse.json({owner:session.owner,items:await loadSalesItems(year,month)},{headers});
     const view=await loadSalesSummary(year,month);
     const reference=isCurrentJstYearMonth(year,month,now)&&view.status==="ok"&&view.aggregateRebuiltAt ? forecastReferenceDay(view.aggregateRebuiltAt,year,month,now):null;

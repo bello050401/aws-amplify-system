@@ -280,6 +280,12 @@ export async function readSales(year:number,month:number,items=false):Promise<Sa
   if(value.owner!==session.owner)throw new Error("売上を取得できませんでした。");
   return value;
 }
+export async function readInventoryValue(month?:string):Promise<import('../../../lib/inventory/inventoryValue').InventoryValueView> {
+  const session=await authenticatedSession();
+  const value=await jsonRequest('/api/mobile/sales?view=inventory'+(month?'&month='+encodeURIComponent(month):''),session.cookie) as {owner:string;inventory:import('../../../lib/inventory/inventoryValue').InventoryValueView};
+  if(value.owner!==session.owner)throw new Error('在庫金額を取得できませんでした。');
+  return value.inventory;
+}
 
 export async function removeInventoryPhotoAsset(id:string,photoId:string):Promise<void>{
  if(!mobileWritesEnabled())throw new Error('写真を削除する権限がありません。');

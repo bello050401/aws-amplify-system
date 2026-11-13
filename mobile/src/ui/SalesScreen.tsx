@@ -7,8 +7,16 @@ import type {SalesSummaryView} from "../../../lib/inventory/salesViewTypes";
 import {calculateItemGrossProfit,nowInJst,shiftYearMonth,formatJstDateTime,type SalesTargetItem} from "../../../lib/inventory/sales";
 import {SalesTrendChart} from "./SalesTrendChart";
 import {colors} from "./theme";
+import {InventoryValueScreen} from './InventoryValueScreen';
+import type {InventoryValueView} from '../../../lib/inventory/inventoryValue';
 export interface SalesResponse {view:SalesSummaryView;forecast:null|{averageDailySales:number;projectedMonthEndSales:number;month:number;today:number;totalDaysInMonth:number};forecastUnavailable:boolean;items?:SalesTargetItem[]}
-export function SalesScreen({load,offline,onOpen,canIssueDocuments=false}:{load:(year:number,month:number,items?:boolean)=>Promise<SalesResponse>;offline:boolean;onOpen:(id:string)=>void;canIssueDocuments?:boolean}){
+type SalesProps={load:(year:number,month:number,items?:boolean)=>Promise<SalesResponse>;loadInventoryValue?:(month?:string)=>Promise<InventoryValueView>;offline:boolean;onOpen:(id:string)=>void;canIssueDocuments?:boolean};
+export function SalesScreen(props:SalesProps){
+  const [tab,setTab]=useState<'sales'|'inventory'>('sales');
+  const [visited,setVisited]=useState(false);
+  return <View style={{flex:1,backgroundColor:'white'}}><View style={{flexDirection:'row',marginHorizontal:18,marginVertical:10,padding:4,borderRadius:12,backgroundColor:'#eef2ef'}}>{(['sales','inventory'] as const).map(key=><Pressable key={key} accessibilityRole="tab" accessibilityState={{selected:tab===key}} onPress={()=>{setTab(key);if(key==='inventory')setVisited(true);}} style={{flex:1,minHeight:44,alignItems:'center',justifyContent:'center',borderRadius:9,backgroundColor:tab===key?'white':'transparent'}}><Text style={{fontSize:16,fontWeight:'700',color:tab===key?'#264e47':'#77817b'}}>{key==='sales'?'売上':'在庫金額'}</Text></Pressable>)}</View><View style={{flex:1,display:tab==='sales'?'flex':'none'}}><SalesSummaryScreen {...props}/></View>{visited&&<View style={{flex:1,display:tab==='inventory'?'flex':'none'}}>{props.loadInventoryValue?<InventoryValueScreen load={props.loadInventoryValue} offline={props.offline} onOpen={props.onOpen}/>:<Text style={{padding:20}}>在庫金額を取得できませんでした。</Text>}</View>}</View>;
+}
+function SalesSummaryScreen({load,offline,onOpen,canIssueDocuments=false}:SalesProps){
   const [document,setDocument]=useState<"invoice"|"purchases"|null>(null);
   const today=nowInJst(new Date());const [month,setMonth]=useState({year:today.year,month:today.month});
   const [data,setData]=useState<SalesResponse|null>(null);const [error,setError]=useState("");const [busy,setBusy]=useState(false);
