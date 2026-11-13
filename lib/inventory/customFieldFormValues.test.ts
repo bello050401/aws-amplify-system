@@ -35,3 +35,11 @@ test("Yahoo import identity survives editing, but is hidden and not copied to an
   assert.deepEqual(customFieldFormValues(original,[],{}),visible);
   assert.deepEqual(withHumanEdits({}, {}, original, visible),original);
 });
+
+test("Trefac receipt is hidden and never duplicated, while ordinary edits retain it", () => {
+  const original={usedGoodsFeature:'品目：椅子',__trefacImport:{goodsId:'5809352',account:'fixture',quantity:2}};
+  const visible={usedGoodsFeature:'品目：椅子'};
+  assert.deepEqual(productCustomFields(original),visible);
+  assert.deepEqual(customFieldFormValues(original,[],{}),visible);
+  assert.deepEqual(withHumanEdits({}, {}, original, visible),original);
+});

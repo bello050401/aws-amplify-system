@@ -3,7 +3,7 @@ import { valuesEqual } from "./zaicoUpdatePolicy";
 
 export const HUMAN_EDITED_FIELDS = "__belloEditedFields";
 const fields = new Set(["name", "categoryId", "categoryIds", "locationId", "quantity", "unit", "note", "barcode", "purchasePrice", "salePrice", ...ALL_EXTENDED_FIELDS.map(field => field.key)]);
-export const internalInventoryField = (key: string) => key.startsWith("__bello") || key === "__restageImport" || key === "__yahooPurchaseImport";
+export const internalInventoryField = (key: string) => key.startsWith("__bello") || key === "__restageImport" || key === "__yahooPurchaseImport" || key === "__trefacImport";
 const internal = internalInventoryField;
 export function productCustomFields(custom: Record<string, unknown> | null | undefined): Record<string, unknown> {
   return Object.fromEntries(Object.entries(custom ?? {}).filter(([key]) => !internal(key)));
