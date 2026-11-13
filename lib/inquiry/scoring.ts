@@ -14,6 +14,7 @@
  */
 import type { ProductMatch, ProductResolution } from "./types";
 import { PRODUCT_MATCH_AUTO_CONFIRM, PRODUCT_MATCH_CANDIDATE_FLOOR } from "./types";
+import { yahooAuctionIdFromUrl } from "@/lib/messaging/yahoo/questionMailParser";
 
 /** 照合対象として渡す在庫1件分の情報(必要な項目だけ)。 */
 export interface MatchableInventory {
@@ -199,6 +200,11 @@ export function scoreInventory(inv: MatchableInventory, signals: MatchSignals): 
     }
   }
   if (signals.normalizedUrls.length > 0) {
+    const auctionIds = signals.normalizedUrls.map(yahooAuctionIdFromUrl).filter(Boolean);
+    if (inv.listings.some(l => l.channel === "YAHOO_AUCTION" && l.externalListingId && auctionIds.includes(l.externalListingId.toLowerCase()))) {
+      strong = Math.max(strong, SCORE_URL_EXACT);
+      reasons.push("Yahoo!オークションの商品IDが一致");
+    }
     const urls = inv.listings.map((l) => l.listingUrl).filter((u): u is string => Boolean(u));
     if (urls.some((u) => signals.normalizedUrls.includes(u))) {
       strong = Math.max(strong, SCORE_URL_EXACT);

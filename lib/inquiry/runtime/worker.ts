@@ -163,7 +163,7 @@ export async function runInquiry(
       params.conversationId,
       sourceKeys.get(latest.id),
     );
-    if(CUSTOMER_DELIVERY_ENABLED&&outcome==='ANSWERABLE'&&result.draft){
+    if(CUSTOMER_DELIVERY_ENABLED&&!params.yahooAuctionId&&outcome==='ANSWERABLE'&&result.draft){
       const currentSettings=await inquirySettings();
       if(currentSettings.delivery?.mode==='AUTO')await runWithDirectData(()=>enqueueCustomerDelivery(pk,result.draft!.id,result.draft!.updatedAt,'AUTO',false));
     }

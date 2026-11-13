@@ -20,6 +20,7 @@ import ReplyReviewPanel from './ReplyReviewPanel';
 import {REVIEW_REASONS,type ReviewReason} from '@/lib/inquiry/review';
 import { copyInquiryText, copyValidatedInquiryText } from "@/lib/inquiry/copyText";
 import { InventoryThumbnail } from "@/app/inventory/InventoryThumbnail";
+import { MESSAGE_CHANNEL_LABEL, type MessageChannel } from "@/lib/messaging/types";
 type Queue = Awaited<ReturnType<typeof readInquiryQueue>>;
 type Detail = Awaited<ReturnType<typeof readInquiryDetail>>;
 export function InquiryQueue({ isAdmin,compact=false }: { isAdmin: boolean;compact?:boolean }) {
@@ -183,7 +184,7 @@ export function InquiryQueue({ isAdmin,compact=false }: { isAdmin: boolean;compa
             >
               <div className="flex items-center justify-between text-sm">
                 <strong>
-                  {item.channel === "LINE" ? "LINE" : "メルカリShops"}
+                  {MESSAGE_CHANNEL_LABEL[item.channel as MessageChannel] ?? item.channel}
                 </strong>
                 <time>
                   {new Date(item.messageAt ?? item.lastAt).toLocaleString("ja-JP", {
@@ -255,6 +256,11 @@ export function InquiryQueue({ isAdmin,compact=false }: { isAdmin: boolean;compa
                     : "社員が対応する"}
                 </button>
               </div>
+              {detail.yahooQuestion && <div className="mb-3 rounded-lg border bg-white p-3 text-sm">
+                <p className="font-semibold">{detail.yahooQuestion.productName || "Yahoo!オークションの商品質問"}</p>
+                <p className="mt-2 text-slate-600">返信案をコピーして、ヤフオクの質問画面から回答してください。回答は公開されます。</p>
+                {detail.yahooQuestion.answerUrl && <a className="mt-3 inline-flex min-h-11 items-center rounded-lg border px-4 font-medium text-teal-800" href={detail.yahooQuestion.answerUrl} target="_blank" rel="noopener noreferrer">ヤフオクで回答する ↗</a>}
+              </div>}
               {detail.remoteRead&&<div className="mb-3 rounded-lg border bg-white p-3 text-sm">
                 <p>{detail.remoteRead.status==='DONE'?'メルカリの問い合わせ画面から全文を取得済み':detail.remoteRead.status==='READING'?'問い合わせ画面を確認しています':'問い合わせ画面の取得待ちです。確認用ブラウザが接続されると再開します。'}</p>
                 {isAdmin&&detail.remoteRead.status==='BLOCKED'&&<button disabled={busy} className="mt-2 min-h-11 rounded-lg border px-3" onClick={async()=>{setBusy(true);try{await retryInquiryReadAction(selected);await open(selected);setNotice('問い合わせ画面の取得を再開します。');}catch{setError('取得を再開できませんでした。接続状態を確認してください。');}finally{setBusy(false);}}}>本文の取得を再試行</button>}
@@ -321,7 +327,7 @@ export function InquiryQueue({ isAdmin,compact=false }: { isAdmin: boolean;compa
                           {REVIEW_REASONS.map(r=><option key={r}>{r}</option>)}
                         </select>
                       </label>
-                      {isAdmin&&queue?.settings.deliveryEnabled&&<button disabled={busy||draftText!==d.draftText||!!detail.delivery&&['QUEUED','SENDING','ACCEPTED','UNKNOWN'].includes(detail.delivery.status)} className="min-h-11 rounded-lg bg-teal-800 px-4 text-white disabled:opacity-50" onClick={async()=>{if(!window.confirm('表示中の会話・商品・返信内容を確認しましたか？このお客様に返信を送信します。'))return;setBusy(true);try{await sendInquiryDraftAction(selected,d.id,d.updatedAt);await open(selected);setNotice('送信前の最終確認を受け付けました。結果は再読み込みで確認できます。');}catch{setError('送信を予約できませんでした。最新の会話・返信案と接続を確認してください。');}finally{setBusy(false);}}}>内容を確認して送信</button>}
+                      {isAdmin&&detail.conversation.channel!=="YAHOO_AUCTION"&&queue?.settings.deliveryEnabled&&<button disabled={busy||draftText!==d.draftText||!!detail.delivery&&['QUEUED','SENDING','ACCEPTED','UNKNOWN'].includes(detail.delivery.status)} className="min-h-11 rounded-lg bg-teal-800 px-4 text-white disabled:opacity-50" onClick={async()=>{if(!window.confirm('表示中の会話・商品・返信内容を確認しましたか？このお客様に返信を送信します。'))return;setBusy(true);try{await sendInquiryDraftAction(selected,d.id,d.updatedAt);await open(selected);setNotice('送信前の最終確認を受け付けました。結果は再読み込みで確認できます。');}catch{setError('送信を予約できませんでした。最新の会話・返信案と接続を確認してください。');}finally{setBusy(false);}}}>内容を確認して送信</button>}
                       <button
                         disabled={busy || !draftText.trim()}
                         className="rounded-lg bg-teal-800 px-4 py-2 text-white disabled:opacity-50"

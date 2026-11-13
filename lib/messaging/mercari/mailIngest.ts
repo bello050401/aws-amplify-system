@@ -18,6 +18,7 @@ import {
 } from "./notificationMailParser";
 import { listAllMercariOrderContexts } from "./orderContextStore";
 import { recordOrderContextFromMail, restoreOrderProduct } from "./orderProductContext";
+import { ingestYahooQuestionMail } from "../yahoo/questionMailIngest";
 
 /**
  * 2026-09-03 追加指示 §1-§6: メルカリShops問い合わせメールの取り込み。
@@ -175,6 +176,13 @@ export async function ingestMercariNotificationMails(params: {
 
   for (const mail of mails) {
     try {
+      const yahoo = await ingestYahooQuestionMail(mail, params);
+      if (yahoo) {
+        if (yahoo.duplicated) result.duplicated++;
+        else result.ingested++;
+        if (yahoo.parseFailed) result.parseFailed++;
+        continue;
+      }
       const parsed = parseMercariNotificationMail(mail);
 
       // 問い合わせ通知でないメール(キャンペーン・売上速報・サポート返信)は

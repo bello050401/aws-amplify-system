@@ -25,7 +25,7 @@ const db = DynamoDBDocumentClient.from(
 export type EventPayload =
   | { channel: "LINE"; account: string; event: LineWebhookEvent }
   | {
-      channel: "MERCARI_SHOPS";
+      channel: "MERCARI_SHOPS" | "YAHOO_AUCTION";
       params: Parameters<typeof processInquiryAndNotify>[0];
     };
 export type InboxEvent = {
@@ -56,6 +56,7 @@ export type InboxState = {
   overrideInventoryId?: string;
   overrideVersion?: number;
   lastDeliveryJobId?:string;
+  yahooQuestion?: { auctionId: string | null; productName: string | null };
 };
 const conditional = (e: unknown) =>
   ["ConditionalCheckFailedException", "TransactionCanceledException"].includes(
@@ -136,7 +137,8 @@ export async function enqueueInquiry(
                 TableName: c.table,
                 Key: { pk, sk: "STATE" },
                 UpdateExpression:
-                  "SET #v=:v, firstAt=:first, lastAt=:activity, activityVersion=:activityVersion, dueAt=:due, #result=:queued, kind=:kind, channel=:channel,lastEventSk=:event",
+                  "SET #v=:v, firstAt=:first, lastAt=:activity, activityVersion=:activityVersion, dueAt=:due, #result=:queued, kind=:kind, channel=:channel,lastEventSk=:event" +
+                  (payload.channel === "YAHOO_AUCTION" ? ", yahooQuestion=:question, conversationId=:conversationId" : ""),
                 ConditionExpression: state
                   ? "#v=:old"
                   : "attribute_not_exists(#v)",
@@ -154,6 +156,10 @@ export async function enqueueInquiry(
                   ":kind": "INBOX",
                   ":channel": channel,
                   ":event": sk,
+                  ...(payload.channel === "YAHOO_AUCTION" ? {
+                    ":question": {auctionId: payload.params.yahooAuctionId ?? null, productName: payload.params.productTitle ?? null},
+                    ":conversationId": payload.params.conversationId,
+                  } : {}),
                   ...(state ? { ":old": state.version } : {}),
                 },
               },

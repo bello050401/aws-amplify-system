@@ -18,6 +18,7 @@ import {
   type MatchSignals,
 } from "./scoring";
 import type { ProductMatch, ProductResolution } from "./types";
+import { yahooAuctionIdFromUrl } from "@/lib/messaging/yahoo/questionMailParser";
 
 /**
  * §4 商品の自動特定(サーバー側)。
@@ -72,6 +73,9 @@ async function findByListingSignals(signals: MatchSignals): Promise<ChannelListi
   if (signals.baseItemIds.length === 0 && signals.normalizedUrls.length === 0) return [];
   const conditions: Record<string, unknown>[] = [];
   for (const id of signals.baseItemIds) conditions.push({ externalListingId: { eq: id } });
+  for (const id of signals.normalizedUrls.map(yahooAuctionIdFromUrl).filter(Boolean)) {
+    conditions.push({ and: [{ channel: { eq: "YAHOO_AUCTION" } }, { externalListingId: { eq: id } }] });
+  }
   // 出品URLは表記ゆれがあるためcontainsで引き、最終判定はスコアリングに任せる。
   for (const url of signals.normalizedUrls) {
     const path = url.replace(/^https?:\/\//, "");

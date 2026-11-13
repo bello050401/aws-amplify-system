@@ -20,6 +20,7 @@ import { createAttachmentViewUrl } from "@/lib/messaging/attachmentStore";
 import { getInventoryDetail } from "@/lib/inventory/queries";
 import {readJobKey} from '@/lib/inquiry/runtime/readContract';
 import {CUSTOMER_DELIVERY_ENABLED} from '@/lib/messaging/featureState';
+import {yahooQuestionUrl} from '@/lib/messaging/yahoo/questionMailParser';
 import {enqueueCustomerDelivery} from '@/lib/inquiry/runtime/deliveryJobs';
 import {retryInquiryRead,type InquiryReadJob} from '@/lib/inquiry/runtime/readJobs';
 import {
@@ -133,12 +134,22 @@ export async function readInquiryDetail(pk: string) {
     const p = await getInventoryDetail(id,{consistentDirectRead:true});
     return p ? {id, storageKey:p.mainImageThumbnailKey??p.mainImageStorageKey, quantity:p.quantity, sku:p.sku} : null;
   }));
-  const event=state.sourceEventSk?await getRuntimeRecord(pk,state.sourceEventSk):null;
+  const sourceEventKey=state.sourceEventSk??state.lastEventSk;
+  const event=sourceEventKey?await getRuntimeRecord(pk,sourceEventKey):null;
   const sourceId=event?.payload?.params?.sourceMessageId;
   const readJob=sourceId?await getRuntimeRecord(readJobKey(pk,state.version,sourceId)) as InquiryReadJob|undefined:null;
   const delivery=state.lastDeliveryJobId?await getRuntimeRecord(state.lastDeliveryJobId):null;
+  // The event body expires after 30 days; keep only public product identifiers on the inbox state.
+  const yahooQuestion = state.yahooQuestion ?? (event?.payload?.channel === "YAHOO_AUCTION" ? {
+    auctionId: event.payload.params?.yahooAuctionId, productName: event.payload.params?.productTitle,
+  } : null);
   return {
     conversation,
+    yahooQuestion: yahooQuestion ? {
+      auctionId: String(yahooQuestion.auctionId ?? ""),
+      answerUrl: yahooQuestionUrl(String(yahooQuestion.auctionId ?? "")),
+      productName: String(yahooQuestion.productName ?? ""),
+    } : null,
     messages,
     drafts: currentDrafts,
     attachments,

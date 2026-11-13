@@ -3,6 +3,7 @@ import { getGmailCredentials, type GmailOAuthCredentials } from "./gmailSecretSt
 import type { MercariMailInput } from "@/lib/messaging/mercari/notificationMailParser";
 import { fetchWithTimeout } from "@/lib/http/fetchWithTimeout";
 import {trustedMercariNotification} from '@/lib/messaging/mercari/trustedNotification';
+import {trustedYahooQuestionNotification, YAHOO_QUESTION_QUERY} from '@/lib/messaging/yahoo/questionMailParser';
 
 /**
  * この経路の外部呼び出し。応答が返らないまま固まらないよう上限を持つ
@@ -92,7 +93,7 @@ async function apiGet<T>(path: string, accessToken: string): Promise<T> {
   return (await res.json()) as T;
 }
 
-export interface GmailDeltaCursor {historyId?:string;pageToken?:string;resync?:boolean;snapshot?:string;}
+export interface GmailDeltaCursor {historyId?:string;pageToken?:string;resync?:boolean;snapshot?:string;questionMailVersion?:number;}
 /** Return one complete page. The caller advances this cursor only after durable ingestion. */
 export async function readGmailDelta(cursor:GmailDeltaCursor):Promise<{ids:string[];mailbox:string;next:GmailDeltaCursor;done:boolean}>{
  const creds=await getGmailCredentials();if(!creds)throw new GmailError('CONFIG_REQUIRED','Gmail接続を確認してください。');
@@ -101,15 +102,17 @@ export async function readGmailDelta(cursor:GmailDeltaCursor):Promise<{ids:strin
  const resync=async():Promise<{ids:string[];mailbox:string;next:GmailDeltaCursor;done:boolean}>=>{
    const snapshot=cursor.snapshot??profile.historyId;
    // Initial catch-up is bounded to the last three months, with every page processed.
-   const q='from:no-reply@mercari-shops.com newer_than:90d';
+   const q='{' + 'from:no-reply@mercari-shops.com ' + '(' + YAHOO_QUESTION_QUERY + ')' + '} newer_than:90d';
    const page=await apiGet<{messages?:{id:string}[];nextPageToken?:string}>('/messages?maxResults=20&q='+encodeURIComponent(q)+(cursor.resync&&cursor.pageToken?'&pageToken='+encodeURIComponent(cursor.pageToken):''),token);
-   return {ids:(page.messages??[]).map(m=>m.id),mailbox:profile.emailAddress,next:page.nextPageToken?{resync:true,pageToken:page.nextPageToken,snapshot}:{historyId:snapshot},done:!page.nextPageToken};
+   return {ids:(page.messages??[]).map(m=>m.id),mailbox:profile.emailAddress,next:page.nextPageToken?{resync:true,pageToken:page.nextPageToken,snapshot,questionMailVersion:1}:{historyId:snapshot,questionMailVersion:1},done:!page.nextPageToken};
  };
+ // One bounded, paginated catch-up when enabling Yahoo; never reset the cursor every poll.
+ if(cursor.questionMailVersion!==1){cursor={};return resync();}
  if(!cursor.historyId||cursor.resync)return resync();
  try{
    const page=await apiGet<{history?:{messagesAdded?:{message:{id:string}}[]}[];historyId:string;nextPageToken?:string}>('/history?maxResults=20&historyTypes=messageAdded&startHistoryId='+encodeURIComponent(cursor.historyId)+(cursor.pageToken?'&pageToken='+encodeURIComponent(cursor.pageToken):''),token);
    const ids=[...new Set((page.history??[]).flatMap(h=>(h.messagesAdded??[]).map(m=>m.message.id)))];
-   return {ids,mailbox:profile.emailAddress,next:page.nextPageToken?{historyId:cursor.historyId,pageToken:page.nextPageToken}:{historyId:page.historyId},done:!page.nextPageToken};
+   return {ids,mailbox:profile.emailAddress,next:page.nextPageToken?{historyId:cursor.historyId,pageToken:page.nextPageToken,questionMailVersion:1}:{historyId:page.historyId,questionMailVersion:1},done:!page.nextPageToken};
  }catch(error){if(error instanceof Error&&error.message.includes('HTTP 404'))return resync();throw error;}
 }
 
@@ -183,7 +186,7 @@ export async function listMercariNotificationMailIds(maxResults = 30): Promise<{
     );
   }
   const accessToken = await getAccessToken(creds);
-  const query = creds.query ?? "";
+  const query = creds.query?.trim() ? `{(${creds.query}) (${YAHOO_QUESTION_QUERY} newer_than:90d)}` : YAHOO_QUESTION_QUERY + " newer_than:90d";
   const list = await apiGet<{ messages?: { id: string }[] }>(
     `/messages?q=${encodeURIComponent(query)}&maxResults=${maxResults}`,
     accessToken,
@@ -275,7 +278,8 @@ export async function fetchMercariNotificationMailsByIds(ids: string[]): Promise
   for (const id of ids) {
     // 1通ずつ取る。format=full でMIME全体が返る。
     const msg = await apiGet<GmailMessage>(`/messages/${id}?format=full`, accessToken);
-    if(!trustedMercariNotification({from:header(msg,'From'),authenticationResults:header(msg,'Authentication-Results'),labels:msg.labelIds}))continue;
+    const delivered={from:header(msg,'From'),authenticationResults:header(msg,'Authentication-Results'),labels:msg.labelIds};
+    if(!trustedMercariNotification(delivered)&&!trustedYahooQuestionNotification(delivered))continue;
     const bodies = { text: [] as string[], html: [] as string[] };
     collectBodies(msg.payload, bodies);
 

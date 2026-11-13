@@ -69,12 +69,11 @@ export function MercariMailPanel({ status, isAdmin }: { status: GmailStatus; isA
   return (
     <div className="space-y-4 p-4 text-[13px] text-gray-800">
       <section className="border border-gray-300 bg-white p-4">
-        <h3 className="mb-1 text-[14px] font-bold text-gray-900">メルカリShops 問い合わせメール取り込み</h3>
+        <h3 className="mb-1 text-[14px] font-bold text-gray-900">問い合わせメール取り込み</h3>
         <p className="text-[12px] leading-relaxed text-gray-600">
-          メルカリShopsの問い合わせは、BELLOから直接APIで受信できません（API利用に必要な契約者向けの
-          開発者ポータルへ到達できないため）。そのため、
-          <strong>メルカリShopsから届く問い合わせ通知メールをGmailから読み取って</strong>
-          取り込みます。読み取り専用の権限のみを使い、メールの削除や送信は行いません。
+          <strong>メルカリShopsの問い合わせ・ヤフオクの商品質問</strong>をGmailから取り込みます。
+          ヤフオクへの回答は返信案をコピーし、質問画面から行えます。
+          メールの削除や送信は行いません。
         </p>
         <dl className="mt-3 grid grid-cols-[9rem_1fr] gap-y-1">
           <dt className="text-gray-500">接続状態</dt>
@@ -88,7 +87,7 @@ export function MercariMailPanel({ status, isAdmin }: { status: GmailStatus; isA
                   : "確認できません"}
           </dd>
           <dt className="text-gray-500">検索条件</dt>
-          <dd className="break-all font-mono text-[12px]">{status.query}</dd>
+          <dd className="break-all text-[12px]">{status.query} ＋ ヤフオクの質問通知（直近90日）</dd>
 
           {/* 取り込みを実行したら、**実際にGmailへ渡した条件**も出す。
               画面の表示だけを見ていると、保存値と実行値がずれていても

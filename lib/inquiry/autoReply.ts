@@ -71,6 +71,8 @@ export function processInquiryAndNotifyUnauthenticated(
 export async function processInquiryAndNotify(params: {
   /** Exact source link from the verified notification parser; never supplied by an LLM. */
   mercariInquiryUrl?: string | null;
+  /** Verified auction identifier from the Yahoo question notification. No customer contact details. */
+  yahooAuctionId?: string | null;
   /** Server-validated full transcript for mail notifications without a customer body. */
   verifiedRemote?: import('./runtime/readContract').ReadSnapshot;
   overrideInventoryId?:string|null;

@@ -10,6 +10,8 @@
  * やや広めに取り、確からしさの判断は照合側(スコアリング)へ委ねる。
  */
 
+import { yahooAuctionIdFromUrl } from "@/lib/messaging/yahoo/questionMailParser";
+
 /** BASEのショップURLに使われるホスト。BASE公式が案内している2形式。 */
 const BASE_HOSTS = [".base.shop", ".thebase.in", ".base.ec"];
 
@@ -72,6 +74,8 @@ export function extractBaseItemId(url: string): string | null {
  * なる。そのまま文字列比較すると同じページを別物として扱ってしまう。
  */
 export function normalizeUrl(url: string): string {
+  const auctionId = yahooAuctionIdFromUrl(url);
+  if (auctionId) return `https://auctions.yahoo.co.jp/jp/auction/${auctionId}`;
   try {
     const u = new URL(url);
     u.protocol = "https:";
