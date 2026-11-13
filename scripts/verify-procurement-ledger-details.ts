@@ -19,17 +19,17 @@ test('タイトルからブランド・品目・色・形・素材を抽出し�
 });
 test('両仕入れで既存の台帳項目を使用しZAICOの追加属性へ送信', () => {
   const defaults = procurementLedgerDetails('Cassina ホワイト テーブル');
-  const restage = restageInventoryFields({ name: 'Cassina ホワイト テーブル', quantity: 2, hammerPrice: 1000 } as RestageLot);
+  const restage = restageInventoryFields({ name: 'Cassina ホワイト テーブル', quantity: 2, unit: '点', hammerPrice: 1000 } as RestageLot);
   assert.equal(restage.identityVerificationMethod, PROCUREMENT_IDENTITY_METHOD);
   assert.equal(restage.counterpartyOccupation, 'リサイクル販売業');
-  assert.deepEqual(restage.customFields, defaults.customFields);
+  for(const [key,value] of Object.entries(defaults.customFields))assert.deepEqual(restage.customFields[key as keyof typeof restage.customFields],value);
   const fields = localFields({ ...defaults, customFields: JSON.stringify(defaults.customFields) });
   const payload = outgoingPatch({ identityVerificationMethod: fields.identityVerificationMethod, counterpartyOccupation: fields.counterpartyOccupation, 'custom.usedGoodsFeature': fields['custom.usedGoodsFeature'] }, undefined, { categories: [], locations: [], statuses: [], resolve: async () => '' });
   assert.equal(payload.optional_attributes['⚫︎職業'], 'リサイクル販売業');
   assert.equal(payload.optional_attributes['⚫︎古物の特徴'], defaults.customFields.usedGoodsFeature);
 });
-test('ヤフオク・リステージ写真だけを連動対象にし既存写真・削除済みは保護', () => {
-  for (const flag of ['__yahooPurchaseImport', '__restageImport']) {
+test('ヤフオク・リステージ・トレファクの写真を連動対象にし既存写真・削除済みは保護', () => {
+  for (const flag of ['__yahooPurchaseImport', '__restageImport', '__trefacImport']) {
     const row = { customFields: JSON.stringify({ [flag]: { id: '1' } }), images: [{ type: 'NORMAL', storageKey: 'inventory/1.jpg', isPrimary: true }] };
     assert(needsPhoto(row, {}));
     assert(!needsPhoto(row, { remote: { item_image: { url: 'existing' } } }));

@@ -6,7 +6,7 @@ import type {Row} from './mapping';
 export function procurementPhoto(row:Row|undefined){
  if(!row||row.deletedAt)return undefined;
  let fields:Row;try{fields=typeof row.customFields==='string'?JSON.parse(row.customFields):row.customFields;}catch{return undefined;}
- if(!fields?.__restageImport&&!fields?.__yahooPurchaseImport)return undefined;
+ if(!fields?.__restageImport&&!fields?.__yahooPurchaseImport&&!fields?.__trefacImport)return undefined;
  const images=(Array.isArray(row.images)?row.images:[]).filter((i:Row)=>!i.deletedAt&&i.type==='NORMAL'&&i.storageKey&&i.sourceSystem!=='ZAICO');
  const image=images.find((i:Row)=>i.isPrimary)||images[0];
  if(!image)return undefined;
