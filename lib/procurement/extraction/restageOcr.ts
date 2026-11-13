@@ -24,7 +24,7 @@ export function reconcileReadings(identity:SourceIdentity,url:string,hash:string
  const unit=ua===ub?ua:null;
  const measure=recognized&&a.form==='GENERAL'?'PRODUCT':a.measurement===b.measurement?a.measurement:'UNKNOWN';
  const blocks=(['dimensions','remarks','condition'] as const).map(kind=>{
-  const x=a[kind],y=b[kind],verified=x.complete&&y.complete&&comparable(x.text)===comparable(y.text);
+  const x=a[kind],y=b[kind],normalize=(s:string)=>kind==='remarks'?comparable(s).replace(/[、。]/g,''):comparable(s),verified=x.complete&&y.complete&&normalize(x.text)===normalize(y.text);
   if(!verified)issues.push(`${kind==='dimensions'?'寸法':kind==='remarks'?'備考・特記事項':'状態'}：再読取と一致しない、または判読不能な箇所があります`);
   return{id:kind,text:x.text,heading:kind==='dimensions'?(measure==='STACKED'?'積載寸法':measure==='UNKNOWN'?'対象未確定の寸法':'商品寸法')+(unit?`（${unit}）`:''):kind==='remarks'?'備考・特記事項':'状態',kind,region:x.region,imageId:hash,page:1,verified};
  });

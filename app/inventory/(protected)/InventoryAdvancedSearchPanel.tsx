@@ -81,8 +81,14 @@ export function InventoryAdvancedSearchPanel({ fieldDefs, initialQuery }: Invent
     setConditions((prev) => prev.filter((c) => c.id !== id));
   }
 
-  function updateCondition(id: string, patch: Partial<AdvancedSearchCondition>) {
-    setConditions((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+  function updateCondition(id: string, patch: Partial<AdvancedSearchCondition>, immediate = false) {
+    const next = conditions.map((c) => (c.id === id ? { ...c, ...patch } : c));
+    if (immediate) {
+      const href = listFilterHref(searchParams.toString(), { adv: JSON.stringify({ combinator, conditions: next }), advanced: '1' });
+      if (isDirty) { guardedNavigate(href); return; }
+      router.push(href, { scroll: false });
+    }
+    setConditions(next);
   }
 
   function handleFieldChange(id: string, fieldKey: string) {
@@ -162,8 +168,8 @@ export function InventoryAdvancedSearchPanel({ fieldDefs, initialQuery }: Invent
               ...(fieldsByKey.get(condition.field)?.valueType === "category"
                 ? { values: condition.values ?? (condition.value ? [condition.value] : []), value: condition.value ?? condition.values?.[0] }
                 : { value: undefined, value2: undefined }) })}
-            onChangeValue={(value) => updateCondition(condition.id, { value })}
-            onChangeValues={(values) => updateCondition(condition.id, { values })}
+            onChangeValue={(value) => updateCondition(condition.id, { value }, ['category','location','select'].includes(fieldsByKey.get(condition.field)?.valueType ?? ''))}
+            onChangeValues={(values) => updateCondition(condition.id, { values }, fieldsByKey.get(condition.field)?.valueType === 'category')}
             onChangeValue2={(value2) => updateCondition(condition.id, { value2 })}
             onRemove={() => removeCondition(condition.id)}
             removable={conditions.length > 1}

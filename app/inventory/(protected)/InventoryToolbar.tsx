@@ -319,6 +319,7 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
             <Link href="/inventory/procurement" prefetch={false} onClick={(e) => handleGuardedLinkClick(e, "/inventory/procurement")} className="whitespace-nowrap border border-gray-300 px-3 py-1.5 text-[13px] font-bold hover:bg-gray-50">定期仕入れ</Link>
             <Link href="/inventory/planned-price" prefetch={false} onClick={(e) => handleGuardedLinkClick(e, "/inventory/planned-price")} className="whitespace-nowrap border border-gray-300 px-3 py-1.5 text-[13px] font-bold hover:bg-gray-50">販売予定価格入力</Link>
             <DirectEditControls />
+            <button type="button" onClick={()=>window.dispatchEvent(new Event('bello:inventory-restore-open'))} className="whitespace-nowrap border border-gray-300 px-3 py-1.5 text-[13px] font-bold hover:bg-gray-50">復元</button>
           </>
         ) : null}
         {/* インポートはADMIN/EDITORのみ(spec §16: VIEWERは不可・ボタン

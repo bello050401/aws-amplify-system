@@ -8,12 +8,12 @@ import {deletedCandidateRecord,type DeletedSaleCandidate} from './deletion';
 export function createCandidateStore(db:DynamoDBDocumentClient,table:string){
  const get=async(id:string)=>(await db.send(new GetCommand({TableName:table,Key:{id},ConsistentRead:true}))).Item;
  return {
-  get:async(id:string):Promise<SaleCandidate|undefined>=>{const row=await get(id);return row?.state==='DELETED'?undefined:row as SaleCandidate|undefined;},
+  get:async(id:string):Promise<SaleCandidate|undefined>=>{const row=await get(id);return ['DELETED','ARCHIVED'].includes(row?.state)?undefined:row as SaleCandidate|undefined;},
   put:async(value:SaleCandidate)=>{try{await db.send(new PutCommand({TableName:table,Item:value,ConditionExpression:'attribute_not_exists(id)'}));return true;}catch(e){if((e as Error).name==='ConditionalCheckFailedException')return false;throw e;}},
   receiveYahoo:async(value:SaleCandidate):Promise<'created'|'updated'|'unchanged'>=>{
    for(let attempt=0;attempt<5;attempt++){
     const current=await get(value.id) as SaleCandidate|undefined;
-    if(current?.state==='DELETED')return 'unchanged';
+    if(current && ['DELETED','ARCHIVED'].includes(current.state))return 'unchanged';
     const next=current?mergeYahooNotification(current,value):value;
     if(next===current)return 'unchanged';
     try{

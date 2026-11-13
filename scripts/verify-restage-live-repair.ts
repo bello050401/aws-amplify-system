@@ -1,0 +1,4 @@
+import fs from 'node:fs';
+import {readRestageSheet} from '../lib/procurement/extraction/focusedOcr';
+const jobs=JSON.parse(fs.readFileSync('artifacts/extraction-jobs.json','utf8')).filter((r:any)=>r.sk==='CURRENT'&&r.identity.date==='2026-11-13');
+async function main(){for(const job of jobs){const id=job.identity.externalId,path=`artifacts/repaired-${id}.json`;if(fs.existsSync(path))continue;try{const r=await readRestageSheet(fs.readFileSync(`artifacts/sheet-${id}-0.png`),job.identity,'https://real.next-restage.co.jp/restage/goodsdetail.action');fs.writeFileSync(path,JSON.stringify(r,null,2));console.log(JSON.stringify({id,format:r.result.source.format,dimensions:r.result.dimensions.map(d=>({axis:d.axis,mm:d.mm,state:d.disposition,reason:d.reason})),remarks:r.result.remarks,usage:r.usage}));}catch(e){console.log(JSON.stringify({id,error:(e as Error).message}));process.exitCode=1;}}}main();

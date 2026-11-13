@@ -1,7 +1,7 @@
-export const EXTRACTION_VERSION = 'supplier-dimensions-2026-11-07.3';
+export const EXTRACTION_VERSION = 'supplier-dimensions-2026-11-13.1';
 // Keep prior evidence readable after an extractor update. Adoption still
 // requires the current version; historical results must never be re-applied.
-export const READABLE_EXTRACTION_VERSIONS: readonly string[] = ['supplier-dimensions-2026-11-07.1','supplier-dimensions-2026-11-07.2', EXTRACTION_VERSION];
+export const READABLE_EXTRACTION_VERSIONS: readonly string[] = ['supplier-dimensions-2026-11-07.1','supplier-dimensions-2026-11-07.2','supplier-dimensions-2026-11-07.3', EXTRACTION_VERSION];
 export type Provider = 'RESTAGE' | 'YAHOO';
 export type ExtractionState = 'QUEUED' | 'PROCESSING' | 'APPLIED' | 'PARTIAL' | 'REVIEW' | 'NO_DIMENSIONS' | 'NO_SOURCE' | 'FAILED' | 'EXCLUDED';
 export interface SourceIdentity { provider: Provider; account: string; externalId: string; date?: string; lotNumber?: string; row: string; inventoryId: string }

@@ -4,7 +4,7 @@ export type YahooSaleStatus='WON'|'ADDRESS_CONFIRMED'|'AWAITING_SHIPMENT';
 export const YAHOO_STATUS_LABELS:Record<YahooSaleStatus,string>={WON:'落札',ADDRESS_CONFIRMED:'住所確定',AWAITING_SHIPMENT:'発送待ち'};
 export const CHANNELS:Record<SaleChannel,{label:string;market:string}>={BASE:{label:'BASE',market:'ベイス'},MERCARI:{label:'メルカリShops',market:'メルカリSHOP'},YAHOO:{label:'Yahoo!オークション',market:'ヤフオク'},DIRECT:{label:'直接取引',market:'直接取引'}};
 export type SaleCandidate={
- id:string; state:'PENDING'|'DONE'|'DELETED'; channel:SaleChannel; source:'GMAIL'|'DIRECT'|'INVOICE'|'BASE_API';
+ id:string; state:'PENDING'|'DONE'|'DELETED'|'ARCHIVED'; channel:SaleChannel; source:'GMAIL'|'DIRECT'|'INVOICE'|'BASE_API';
  name:string; quantity:number|null; unitPrice:number|null; orderId:string; identifierType:'ORDER'|'AUCTION'|'INVOICE'|'MANUAL';
  saleDate:string; receivedAt:string; createdAt:string; updatedAt:string; suggestedInventoryId?:string;
  shipping:number|null; orderTotal:number|null; payment:string; warnings:string[]; orderLineCount:number;

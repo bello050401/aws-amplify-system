@@ -191,6 +191,7 @@ if(process.env.PHOTO_REGISTRATION_TABLE_NAME&&process.env.PHOTO_REGISTRATION_BUC
  saleAutomation.addToRolePolicy(new PolicyStatement({actions:['s3:GetObject'],resources:[`arn:aws:s3:::${process.env.PHOTO_REGISTRATION_BUCKET_NAME}/photo-batches/*/processed/*`,`arn:aws:s3:::${process.env.PHOTO_REGISTRATION_BUCKET_NAME}/photo-batches/*/thumbnail/*`]}));
 }
 new Rule(saleStack,'AutomaticSalesPoll',{schedule:Schedule.rate(Duration.minutes(1)),targets:[new LambdaFunction(saleAutomation,{retryAttempts:0})]});
+new Rule(saleStack,'CatalogMaintenance12Hours',{schedule:Schedule.rate(Duration.hours(12)),targets:[new LambdaFunction(saleAutomation,{retryAttempts:0,event:RuleTargetInput.fromObject({mode:'CATALOG_MAINTENANCE'})})]});
 if(process.env.AWS_APP_ID==='d4hkkg7dty2du'&&process.env.AWS_BRANCH==='claude/inventory-management-system-5vbvc7'){
  new ManagedPolicy(saleStack,'ConfirmedSaleQueueWebInvoke',{roles:[Role.fromRoleName(saleStack,'ConfirmedSaleWebRuntime','BelloAmplifyStagingComputeRole')],statements:[new PolicyStatement({actions:['lambda:InvokeFunction'],resources:[saleAutomation.functionArn]}),new PolicyStatement({actions:['dynamodb:BatchGetItem'],resources:[purchaseTable.tableArn]})]});
 }
@@ -405,12 +406,12 @@ if (process.env.AWS_APP_ID === "d4hkkg7dty2du" &&
   });
   new ManagedPolicy(procurementStack,"RuntimeAccess",{
     roles:[Role.fromRoleName(procurementStack,"RuntimeRole","BelloAmplifyStagingComputeRole")],
-    statements:[new PolicyStatement({actions:["secretsmanager:GetSecretValue"],resources:[`${restageSecret.secretArn}-??????`]}),
+    statements:[new PolicyStatement({actions:["secretsmanager:GetSecretValue"],resources:[`${restageSecret.secretArn}-??????`,`arn:aws:secretsmanager:${procurementStack.region}:${procurementStack.account}:secret:bello/trefac-readonly-credentials-??????`]}),
       new PolicyStatement({actions:["dynamodb:GetItem","dynamodb:PutItem","dynamodb:UpdateItem","dynamodb:DeleteItem","dynamodb:Query"],resources:[procurementTable.tableArn]})],
   });
   backend.addOutput({custom:{procurement:{region:procurementStack.region,secretArn:restageSecret.secretArn,tableName:procurementTable.tableName}}});
   // Source extraction is driven by completed imports / explicit requests. It
-  // never scans the inventory and cannot write stock during the dry-run release.
+  // applies verified supplier fields only; staff edits and stock quantities stay protected.
   const extractionFailures=new Queue(procurementStack,'ExtractionFailures',{retentionPeriod:Duration.days(14),enforceSSL:true});
   const extractionWorker=new NodejsFunction(procurementStack,'ExtractionWorker',{
     entry:path.resolve('amplify/functions/procurement-extraction/handler.ts'),handler:'handler',runtime:Runtime.NODEJS_22_X,
@@ -423,7 +424,10 @@ if (process.env.AWS_APP_ID === "d4hkkg7dty2du" &&
     environment:{IMPORT_TABLE:procurementTable.tableName,SOURCE_BUCKET:backend.storage.resources.bucket.bucketName,INVENTORY_TABLE:backend.data.resources.tables.Inventory.tableName,HISTORY_TABLE:backend.data.resources.tables.InventoryHistory.tableName,RESTAGE_SECRET:restageSecret.secretArn},
   });
   procurementTable.grantReadWriteData(extractionWorker);
-  backend.data.resources.tables.Inventory.grantReadData(extractionWorker);
+  backend.data.resources.tables.Inventory.grantReadWriteData(extractionWorker);
+  backend.data.resources.tables.InventoryHistory.grantReadWriteData(extractionWorker);
+  grantInventoryHistoryReferences(extractionWorker);
+  extractionWorker.addEnvironment('RESTAGE_AUTO_APPLY','1');
   backend.storage.resources.bucket.grantReadWrite(extractionWorker,'procurement-sources/*');
   extractionWorker.addToRolePolicy(new PolicyStatement({actions:['secretsmanager:GetSecretValue'],resources:[`${restageSecret.secretArn}-??????`]}));
   extractionWorker.addToRolePolicy(new PolicyStatement({actions:['textract:AnalyzeDocument'],resources:['*']}));
@@ -446,7 +450,7 @@ if (process.env.AWS_APP_ID === "d4hkkg7dty2du" &&
     new PolicyStatement({actions:['s3:GetObject','s3:PutObject'],resources:[backend.storage.resources.bucket.arnForObjects('procurement-sources/*')]}),
     new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:PutItem','dynamodb:UpdateItem','dynamodb:ConditionCheckItem'],resources:[procurementTable.tableArn,backend.data.resources.tables.Inventory.tableArn,backend.data.resources.tables.InventoryHistory.tableArn]}),
   ]});
-  backend.addOutput({custom:{supplierExtraction:{region:procurementStack.region,table:procurementTable.tableName,bucket:backend.storage.resources.bucket.bucketName,inventoryTable:backend.data.resources.tables.Inventory.tableName,historyTable:backend.data.resources.tables.InventoryHistory.tableName,mode:'REVIEW_ONLY'}}});
+  backend.addOutput({custom:{supplierExtraction:{region:procurementStack.region,table:procurementTable.tableName,bucket:backend.storage.resources.bucket.bucketName,inventoryTable:backend.data.resources.tables.Inventory.tableName,historyTable:backend.data.resources.tables.InventoryHistory.tableName,mode:'RESTAGE_VERIFIED_AUTO'}}});
 }
 
 // SKU counter table for amplify/functions/generate-sku. This is

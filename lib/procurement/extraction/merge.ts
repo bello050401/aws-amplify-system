@@ -29,9 +29,10 @@ export function planSupplierMerge(inventory:Record<string,unknown>,result:Extrac
   });
   const defects=result.defects.filter(d=>d.disposition==='ACCEPT').map(d=>d.text);
   const remarks=(result.remarks||[]).filter(r=>r.disposition==='ACCEPT').map(r=>r.text);
-  if(dim.length||defects.length||remarks.length){
+  const unresolved=result.source.blocks.filter(b=>b.kind==='dimensions'&&b.verified&&b.text&&result.dimensions.some(d=>d.blockId===b.id&&d.disposition==='REVIEW')).map(b=>'寸法記載（単位・対象など未確定／原文）：'+b.text);
+  if(dim.length||defects.length||remarks.length||unresolved.length){
    const marker='【仕入先記載／リステージ】',end='【仕入先記載ここまで】';
-   const body=[marker,...new Set(dim),...new Set(defects),...(remarks.length?['備考・特記事項（原文）',...remarks]:[]),end].join('\n'),note=String(inventory.note??'');
+   const body=[marker,...new Set(dim),...new Set(unresolved),...new Set(defects),...(remarks.length?['備考・特記事項（原文）',...remarks]:[]),end].join('\n'),note=String(inventory.note??'');
    const old=previous.note as {sourceKey:string;body:string;hash:string}|undefined;
    if(old&&human.has('note'))held.push('備考：スタッフが確認・確定した記載を保持しました');
    else if(old&&old.sourceKey===sourceKey&&digest(old.body)===old.hash&&note.split(old.body).length===2){patch.note=note.replace(old.body,body);}

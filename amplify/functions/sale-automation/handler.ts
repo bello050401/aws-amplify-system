@@ -21,6 +21,7 @@ import {runPostSaleJob,type PostSaleJob} from '../../../lib/saleCandidates/postS
 import type {PostSalePlan} from '../../../lib/saleCandidates/postSaleModel';
 import {ECONVENI_WORKFLOW_TABLE} from '../../../lib/listing/econveni/runtimeStore';
 import {processNativeQueue} from '../../../lib/listing/econveni/nativeQueue';
+import {runCatalogMaintenance} from './maintenance';
 
 const required=(name:string)=>{const v=process.env[name];if(!v)throw Error('SALE_CONFIGURATION_MISSING');return v;};
 const table=()=>required('SALE_CANDIDATES_TABLE');
@@ -42,6 +43,7 @@ async function freshBase(c:SaleCandidate):Promise<SaleCandidate>{
  return {...fresh,state:c.state,updatedAt:c.updatedAt,createdAt:c.createdAt,receivedAt:c.receivedAt};
 }
 export async function handler(event?:{mode?:string}){
+ if(event?.mode==='CATALOG_MAINTENANCE')return runCatalogMaintenance();
  const started=Date.now(),config=await get('AUTOMATION_CONFIG');
  if(event?.mode==='PREVIEW'){
   // Private IAM invocation for deployment checks; no sale, EC command, or journal writes.

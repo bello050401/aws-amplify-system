@@ -233,6 +233,15 @@ export function InventoryBulkControls({
     > | null>(null);
   const [targetIds, setTargetIds] = useState<string[]>([]),
     [targetOperationId, setTargetOperationId] = useState<string | undefined>();
+  const [restoreOpen,setRestoreOpen]=useState(false);
+  const restoreDialog=useRef<HTMLDialogElement>(null);
+  useEffect(()=>{if(restoreOpen)restoreDialog.current?.showModal();},[restoreOpen]);
+  const [lastEditAvailable,setLastEditAvailable]=useState(false);
+  const [lastDeleteAvailable,setLastDeleteAvailable]=useState(false);
+  useEffect(()=>{
+    const show=()=>{setRestoreOpen(true);try{setLastEditAvailable(!!localStorage.getItem('bello.inventory.lastEditJob'));setLastDeleteAvailable(!!localStorage.getItem('bello.inventory.lastDeleteJob'));}catch{setLastEditAvailable(false);setLastDeleteAvailable(false);}};
+    window.addEventListener('bello:inventory-restore-open',show);return()=>window.removeEventListener('bello:inventory-restore-open',show);
+  },[]);
   const [targetState, setTargetState] = useState<
     Awaited<ReturnType<typeof inventoryEditSelection>>
   >([]);
@@ -481,23 +490,22 @@ export function InventoryBulkControls({
   const disabled = !selectedCount || direct.dirtyCount > 0 || busy || running;
   return (
     <>
-      {selection.editable && !initialRequest && (
+      {selection.editable && !initialRequest && selectedCount>0 && (
         <div ref={toolbarRef} className={"flex shrink-0 flex-wrap items-center gap-2 bg-white px-4 "+(selectedCount?'fixed inset-x-0 bottom-14 z-40 border-t py-3 shadow-lg md:bottom-0 md:left-16':'border-b py-1')} role="toolbar" aria-label="選択商品の操作">
-          <span className="mr-2 text-sm text-gray-500">{selectedCount ? selectedCount+'件選択中' : '行のチェックで商品を選択'}</span>
+          <span className="mr-2 text-sm text-gray-500">{selectedCount}件選択中</span>
           {selectedCount>0&&<><button type="button" className={primaryButton} disabled={disabled} onClick={()=>launch('edit')}>選択商品を編集</button>
           <button type="button" className={button} disabled={disabled} onClick={()=>{launch("edit");setRules({...emptyRules(),location:{mode:"set",id:""}});}}>保管場所を変更</button>
           <button type="button" className={button} disabled={disabled} onClick={()=>{launch("edit");setRules({...emptyRules(),quantityIncrease:1});}}>入庫</button>
-          <button type="button" className={button} disabled={disabled} onClick={()=>launch('undo')}>戻る</button>
-          <button type="button" className={button} disabled={disabled} onClick={()=>launch('redo')}>進む</button>
-          <button type="button" className={button} disabled={disabled} onClick={()=>void recent()}>変更履歴</button></>}
-          {<SelectedInventoryActions ids={[...selection.selected]} disabled={disabled} onDeleted={ids=>{selection.remove(ids);router.refresh();}}/>}
+          </>}
+          {<SelectedInventoryActions showHistory={false} ids={[...selection.selected]} disabled={disabled} onDeleted={ids=>{selection.remove(ids);router.refresh();}}/>}
           {selectedCount>0&&<SelectedInventoryExport ids={[...selection.selected]} disabled={disabled}/>}
           {selectedCount>0&&<button type="button" className="min-h-11 px-3 text-sm text-gray-600 underline" disabled={busy} onClick={selection.clear}>選択解除</button>}
-          <button type="button" className={selectedCount?button+' ml-auto':'ml-auto min-h-8 rounded px-3 text-xs text-gray-600 underline hover:bg-gray-50'} disabled={busy} onClick={resume}>前回の操作結果</button>
           {direct.dirtyCount>0&&<span className="text-xs text-amber-800">編集中の内容を保存またはキャンセルしてください</span>}
           {error&&!open&&<span role="alert" className="text-sm text-red-700">{error}</span>}
         </div>
       )}
+      {restoreOpen&&selection.editable&&createPortal(<dialog ref={restoreDialog} aria-label="在庫の復元と操作結果" onCancel={()=>setRestoreOpen(false)} className="w-[min(95vw,540px)] max-h-[90dvh] overflow-y-auto rounded-xl border p-0 shadow-xl backdrop:bg-black/25"><section className="space-y-5 bg-white p-6"><header className="flex items-center justify-between"><h2 className="text-lg font-bold">復元・変更履歴</h2><button autoFocus className={button} onClick={()=>setRestoreOpen(false)}>閉じる</button></header><p className="text-sm text-gray-600">{selectedCount?`${selectedCount}件の選択商品が対象です。保存した編集を2回分まで戻せます。`:'復元する商品の行にチェックを入れてください。'}</p><div className="flex flex-wrap gap-2"><button className={button} disabled={disabled} onClick={()=>{setRestoreOpen(false);launch('undo');}}>前の編集に戻す</button><button className={button} disabled={disabled} onClick={()=>{setRestoreOpen(false);launch('redo');}}>戻した編集をやり直す</button><button className={button} disabled={disabled} onClick={()=>{setRestoreOpen(false);void recent();}}>変更履歴を見る</button></div>{direct.dirtyCount>0&&<p className="text-sm text-amber-800">編集中の内容を保存またはキャンセルしてください。</p>}{(lastEditAvailable||lastDeleteAvailable)&&<div className="space-y-3 border-t pt-4"><h3 className="text-sm font-semibold">前回の操作結果</h3>{lastEditAvailable&&<button className={button} disabled={busy} onClick={()=>{setRestoreOpen(false);void resume();}}>編集の処理結果</button>}{lastDeleteAvailable&&<SelectedInventoryActions ids={[]} disabled={false} onDeleted={ids=>{selection.remove(ids);router.refresh();}}/>}<p className="text-xs text-gray-500">削除結果は確認用です。削除した商品は編集の復元では戻せません。</p></div>}</section></dialog>,document.body)}
+      {error&&!open&&!selectedCount&&<p role="alert" className="m-4 rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
       {initialRequest&&!open&&<div className="space-y-4 p-4"><p className="text-sm">{targetIds.length}件の商品を選択しています。</p><button type="button" className={button} onClick={()=>setOpen(true)}>処理結果を確認</button>{error&&<p role="alert">{error}</p>}</div>}
       {open &&
         createPortal(

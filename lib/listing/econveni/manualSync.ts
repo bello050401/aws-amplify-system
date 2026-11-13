@@ -30,7 +30,7 @@ export async function readManualSync(inventoryId?:string,workflowProductIds:stri
  do{const result=await db.send(new ScanCommand({TableName:table,FilterExpression:'begins_with(pk,:prefix)',ExpressionAttributeValues:{':prefix':'ECONVENI#MANUAL_LINK#'},ExclusiveStartKey:cursor,ConsistentRead:true}));links.push(...(result.Items??[]) as ManualLink[]);cursor=result.LastEvaluatedKey;if(links.length>20000)throw Error('LINK_LIMIT');}while(cursor);
  return {snapshot:snapshot??null,links:links.filter(x=>!x.disabled)};
 }
-/** User-triggered only; at most once per minute per account, including failed attempts. */
+/** Explicit refresh or scheduled 12-hour maintenance; at most once per minute per account. */
 export async function refreshManualSync():Promise<ManualSyncData>{
  const now=Date.now();
  try{await db.send(new UpdateCommand({TableName:table,Key:{pk:'ECONVENI#MANUAL_READ_LIMIT'},UpdateExpression:'SET nextAt=:next',ConditionExpression:'attribute_not_exists(nextAt) OR nextAt<=:now',ExpressionAttributeValues:{':now':now,':next':now+60000}}));}

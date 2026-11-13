@@ -49,7 +49,7 @@ export class ExtractionRepository {
   {Put:{TableName:this.config.table,Item:{pk:'SOURCE#'+identityKey(job.identity),sk:EXTRACTION_VERSION+'#'+hash,resultKey,revision:job.revision}}}
  ]}));}
  async result(job:ExtractionJob){if(!job.resultKey)throw Error('読取結果がまだありません');const r=JSON.parse((await this.object(job.resultKey)).toString()) as ExtractionResult;if(identityKey(r.source.identity)!==identityKey(job.identity)||!READABLE_EXTRACTION_VERSIONS.includes(r.version))throw Error('資料版が一致しません');return r;}
- async apply(job:ExtractionJob,result:ExtractionResult,expectedUpdatedAt:string,by:string){
+ async apply(job:ExtractionJob,result:ExtractionResult,expectedUpdatedAt:string,by:string,automatic=false){
   if(result.version!==EXTRACTION_VERSION)throw Error('資料の読取方式が更新されています。「抽出のみ再試行」で読み直してください。');
   const row=await this.inventory(job.identity.inventoryId);
   if(!row||row.updatedAt!==expectedUpdatedAt||!sourceIdentity(row)||identityKey(sourceIdentity(row)!)!==identityKey(job.identity))throw Error('商品情報が変更されています。読み直して確認してください。');
@@ -57,7 +57,7 @@ export class ExtractionRepository {
   const plan=planSupplierMerge(row,result,identityKey(job.identity));
   if(!plan.applied.length)throw Error(plan.held.join('\n')||'反映できる項目がありません。原資料を確認してください。');
   const at=new Date().toISOString();
-  plan.custom.__belloEditedFields=[...new Set([...(Array.isArray(plan.custom.__belloEditedFields)?plan.custom.__belloEditedFields:[]),...plan.applied])];
+  if(!automatic)plan.custom.__belloEditedFields=[...new Set([...(Array.isArray(plan.custom.__belloEditedFields)?plan.custom.__belloEditedFields:[]),...plan.applied])];
   const changes={...plan.patch,customFields:JSON.stringify(plan.custom),updatedAt:at,listUpdatedAt:at,updatedBy:by},entries=Object.entries(changes);
   const hasReview=plan.held.length>0||result.dimensions.some(d=>d.disposition==='REVIEW')||(result.remarks||[]).some(d=>d.disposition==='REVIEW')||result.defects.some(d=>d.disposition==='REVIEW');
   // Stock, job revision and the audit trail commit atomically. A delayed worker

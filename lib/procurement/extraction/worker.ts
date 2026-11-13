@@ -8,6 +8,7 @@ import {ExtractionRepository,sourceIdentity,identityKey,type ExtractionJob} from
 import {EXTRACTION_VERSION,type ExtractionResult} from './types';
 import {customObject} from './merge';
 import {combineSelectedResults} from './bundle';
+import {applyVerifiedRestage} from './automaticApply';
 
 export async function createExtractionAfterImport(repo:ExtractionRepository,row:Record<string,unknown>){
  if(row.status!=='REGISTERED'||typeof row.inventoryId!=='string')return;
@@ -62,10 +63,14 @@ export async function processExtraction(repo:ExtractionRepository,job:Extraction
   }
   const resultKey=prefix+result.source.hash+'/'+job.revision+'-result.json';await repo.putObject(resultKey,Buffer.from(JSON.stringify(result)),'application/json');
   await repo.cache(job,result.source.hash,resultKey);
-  // Release gate: ALWAYS dry-run until held-out real-source evaluation is passed.
-  // The worker has no Inventory write permission. Only explicit review can apply.
   const noDimensions=result.source.identity.provider==='YAHOO'&&result.state==='NO_DIMENSIONS';
   await repo.finish(job,{state:noDimensions?'NO_DIMENSIONS':'REVIEW',sources,resultKey,error:undefined});
+  if(process.env.RESTAGE_AUTO_APPLY==='1'&&!noDimensions){
+   // The durable REVIEW result remains available if a concurrent staff edit
+   // wins or the apply transaction fails. It is never reported as APPLIED.
+   try{await applyVerifiedRestage(repo,{...job,state:'REVIEW',sources,resultKey},result);}
+   catch{console.warn('RESTAGE_APPLY_REVIEW_REQUIRED',{inventoryId:job.identity.inventoryId,revision:job.revision});}
+  }
  }catch(e){
   // Never log source text, credentials, cookies or the external error body.
   try{await repo.finish(job,{state:'FAILED',sources,error:errorText(e)});}catch(finishError){if((finishError as Error).name!=='ConditionalCheckFailedException')throw finishError;}

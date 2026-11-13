@@ -18,5 +18,31 @@ export function SaleWorkspaceStyles(){return <style>{`
 .sale-candidates .yahoo-progress{margin-top:12px;font-size:12px}.sale-candidates .source-notice{flex-wrap:wrap}.sale-candidates .source-notice .yahoo-progress{flex-basis:100%;order:2;margin-top:0}
 .sale-candidates .link-comparison{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;margin-bottom:20px}.sale-candidates .link-comparison .product-photo{width:100%;height:auto;aspect-ratio:1;max-height:260px;border:1px solid #dce4de}.sale-candidates .link-comparison p{font-size:13px}.sale-candidates .ec-link-panel .search-result>strong{min-width:0;overflow-wrap:anywhere}.sale-candidates .ec-link-panel input[type=checkbox]{accent-color:#29473f;flex-shrink:0}
 @media(min-width:900px){.sale-candidates .candidate-card{display:grid;grid-template-columns:1fr auto;column-gap:32px}.sale-candidates .candidate-card>*{grid-column:1}.sale-candidates .candidate-card .sale-numbers{grid-column:2;grid-row:2/4;align-self:center;justify-content:flex-end}.sale-candidates .candidate-card .card-actions{grid-column:1/-1}}
+.sale-candidates .candidate-table-heading{display:none}
+.sale-candidates.desktop-sales{max-width:none;margin:0;background:#fff;padding:24px 28px;font-size:14px}
+.desktop-sales .workspace-heading h1{font-size:22px}.desktop-sales .workspace-heading{margin-bottom:18px}
+.desktop-sales button{border-radius:6px;min-height:36px;padding:7px 13px;font-size:13px}
+.desktop-sales .primary{background:#1e6487;border-color:#1e6487}.desktop-sales .tabs-row{border-bottom:1px solid #dce4de;padding-bottom:12px}
+@media(min-width:1000px){
+.desktop-sales .candidate-table-heading{display:grid;grid-template-columns:minmax(0,1fr) 220px 180px;gap:24px;background:#f5f7f8;padding:11px 16px;color:#64717a;font-size:12px;border:1px solid #e1e6e9}
+.desktop-sales .candidate-card{display:grid;grid-template-columns:minmax(0,1fr) 220px 180px;column-gap:24px;row-gap:3px;margin:0;border:0;border-bottom:1px solid #e1e6e9;border-radius:0;padding:16px;background:white}
+.desktop-sales .candidate-card .candidate-head{grid-column:1;grid-row:1;justify-content:flex-start;gap:12px}
+.desktop-sales .candidate-card>.title{grid-column:1;grid-row:2;font-size:15px;line-height:1.65;margin:0;padding:6px 0;min-height:0}
+.desktop-sales .candidate-card>.meta{grid-column:1;grid-row:3;margin:0;font-size:11px}
+.desktop-sales .candidate-card>.sale-numbers,.desktop-sales .candidate-card>.completed-amounts{grid-column:2;grid-row:1/4;align-self:center;display:block;margin:0;font-size:12px}
+.desktop-sales .sale-numbers>div{justify-content:space-between;margin:4px 0}.desktop-sales .sale-numbers strong{font-size:17px}
+.desktop-sales .candidate-card>.card-actions{grid-column:3;grid-row:1/4;align-self:center;display:flex;flex-direction:column;gap:7px;border:0;padding:0;margin:0}
+.desktop-sales .candidate-card>.yahoo-progress{grid-column:1;grid-row:4;margin:4px 0 0}
+.desktop-sales .candidate-card>div:not(.candidate-head):not(.sale-numbers):not(.card-actions){grid-column:1/-1}
+.desktop-sales .candidate-card:hover{background:#fbfcfd}.desktop-sales .connections{margin-bottom:14px}
+.sale-candidates.desktop-sales .sale-form{display:grid;grid-template-columns:minmax(260px,330px) minmax(0,1fr);gap:22px;align-items:start}
+.sale-candidates.desktop-sales .sale-form>.summary{grid-column:1;position:sticky;top:18px;border-radius:8px;padding:18px}
+.sale-candidates.desktop-sales .sale-form>fieldset,.sale-candidates.desktop-sales .sale-form>.review-panel{grid-column:2;margin:0;border-radius:8px}
+.sale-candidates.desktop-sales .sale-form>.error,.sale-candidates.desktop-sales .sale-form>.actions{grid-column:1/-1}
+.sale-candidates.desktop-sales .sale-form .stock-flow{display:block}.sale-candidates.desktop-sales .sale-form .stock-flow>div{display:flex;align-items:center;justify-content:space-between;text-align:left;border:0;padding:8px 0}
+.sale-candidates.desktop-sales .sale-form input:not([type=checkbox]),.sale-candidates.desktop-sales .sale-form select,.sale-candidates.desktop-sales .sale-form textarea{min-height:38px;padding:8px 10px;font-size:14px;border-radius:6px}
+.sale-candidates.desktop-sales .sale-form .actions{justify-content:flex-end;padding:12px 0}.sale-candidates.desktop-sales .sale-form .actions .primary{flex:0 0 auto;min-width:180px;background:#1e6487;border-color:#1e6487}
+.sale-candidates.desktop-sales .sale-form button{min-height:38px;padding:8px 14px;font-size:14px;border-radius:6px}
+}
 @media(max-width:600px){.sale-candidates{padding:20px 16px max(28px,env(safe-area-inset-bottom));min-width:0}.sale-candidates h1{font-size:24px}.sale-candidates .workspace-heading{margin-bottom:20px}.sale-candidates .main-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.sale-candidates .main-actions button{font-size:14px;padding:12px 7px;min-width:0!important;min-height:48px}.sale-candidates .segments{flex:1}.sale-candidates .segments button{min-width:0;flex:1;padding:8px 14px}.sale-candidates .tabs-row{gap:8px}.sale-candidates .card{padding:18px;border-radius:14px}.sale-candidates .title{font-size:16px}.sale-candidates .card-actions{gap:8px}.sale-candidates .card-actions .primary{flex:1}.sale-candidates .card-actions button{padding:11px 12px}.sale-candidates .tools button{white-space:normal}.sale-candidates .sale-numbers{gap:20px}.sale-candidates .fee-row{grid-template-columns:repeat(3,minmax(0,1fr));padding:12px;gap:8px}.sale-candidates .fee-row strong{grid-column:1/-1}.sale-candidates .fee-row input{padding:8px}.sale-candidates .product-photo{width:76px;height:76px;flex-basis:76px}.sale-candidates .search-result{gap:12px;padding:12px}.sale-candidates .workflow-steps{font-size:11px;gap:6px}}
 `}</style>}
