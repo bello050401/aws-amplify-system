@@ -6,7 +6,8 @@ import {reconstructMonthEnd,monthEndBoundary,type InventoryWindow} from './inven
 export async function ensureInventoryMonth(db:DynamoDBDocumentClient,month:string,links:Map<string,{id:string;sku?:string|null}>):Promise<string>{
   const table=process.env.SALES_AGGREGATE_SNAPSHOT_TABLE_NAME,bucket=process.env.INVENTORY_ARCHIVE_BUCKET,transition=process.env.ZAICO_TRANSITION_TABLE_NAME;
   if(!table||!bucket||!transition)return 'not-configured';
-  const id=`inventory:${month}`;
+  // User-approved grouping revision: retain v1; recalculate the same historical records into v2.
+  const id=`inventory:${month}:v2`;
   if((await db.send(new GetCommand({TableName:table,Key:{id},ConsistentRead:true}))).Item?.inventoryValueJson)return 'already-saved';
   const control=(await db.send(new GetCommand({TableName:transition,Key:{id:'transition#control'},ConsistentRead:true}))).Item;
   if(!control?.initialRunId)throw Error('在庫の保存記録を確認できません');
@@ -35,7 +36,7 @@ export async function ensureInventoryMonth(db:DynamoDBDocumentClient,month:strin
   const windows=[full];let cursor=0;
   await Promise.all(Array.from({length:6},async()=>{while(cursor<following.length){const f=following[cursor++];windows.push(await load(f.key));}}));
   const result=reconstructMonthEnd(windows,month,links);const now=new Date().toISOString();
-  try{await db.send(new PutCommand({TableName:table,Item:{id,__typename:'SalesAggregateSnapshot',generation:now,monthsJson:'[]',inventoryValueJson:JSON.stringify(result.value),sourceRecordCount:result.recordCount,rebuiltAt:now,rebuiltBy:'inventory-month-archive-v1',createdAt:now,updatedAt:now},ConditionExpression:'attribute_not_exists(id)'}));}
+  try{await db.send(new PutCommand({TableName:table,Item:{id,__typename:'SalesAggregateSnapshot',generation:now,monthsJson:'[]',inventoryValueJson:JSON.stringify(result.value),sourceRecordCount:result.recordCount,rebuiltAt:now,rebuiltBy:'inventory-month-archive-v2',createdAt:now,updatedAt:now},ConditionExpression:'attribute_not_exists(id)'}));}
   catch(error){if((error as {name?:string}).name==='ConditionalCheckFailedException')return 'already-saved';throw error;}
   return 'saved';
 }

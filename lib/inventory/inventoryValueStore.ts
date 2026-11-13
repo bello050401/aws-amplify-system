@@ -8,7 +8,7 @@ export async function loadInventoryValue(month?:string): Promise<InventoryValueV
   try {
     if(month){monthEndBoundary(month);if(month>lastClosedInventoryMonth())return {status:'missing'};}
     const {data,errors}=await serverDataClient.models.SalesAggregateSnapshot.get(
-      {id:month?`inventory:${month}`:'current'}, {...inventoryAuthMode,selectionSet:['inventoryValueJson']},
+      {id:month?`inventory:${month}:v2`:'current'}, {...inventoryAuthMode,selectionSet:['inventoryValueJson']},
     );
     if(errors?.length) return {status:'error'};
     if(!data?.inventoryValueJson) return {status:'missing'};
