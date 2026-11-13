@@ -15,4 +15,3 @@ export function inventoryMonthOptions(now=new Date()):string[] {
   }
   return out;
 }
-

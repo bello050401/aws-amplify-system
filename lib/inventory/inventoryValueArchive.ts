@@ -26,8 +26,8 @@ export async function ensureInventoryMonth(db:DynamoDBDocumentClient,month:strin
   };
   // Size only orders candidates; full/end in the actual payload must verify the baseline.
   let full:InventoryWindow|undefined;
-  for(const f of files.filter(f=>f.at<boundary).sort((a,b)=>b.size-a.size).slice(0,10)){
-    const w=await load(f.key);if(w.full&&Date.parse(w.end)<boundary&&(!full||w.end>full.end))full=w;
+  for(const f of files.filter(f=>f.at<boundary).sort((a,b)=>b.size-a.size).slice(0,10).sort((a,b)=>b.at-a.at)){
+    const w=await load(f.key);if(w.full&&Date.parse(w.end)<boundary){full=w;break;}
   }
   if(!full)throw Error('月末以前の全件記録がありません');
   const following=files.filter(f=>f.at>=Date.parse(full!.end)&&f.key!==full!.key).sort((a,b)=>a.at-b.at);
