@@ -1,0 +1,204 @@
+import {VALUE_GROUPS,type InventoryValue} from '../inventoryValue';
+import type {AnalysisResponse,Summary,Totals} from '../analysis/types';
+import type {
+  AnalysisPorts,AnalysisRequest,Bucket,DetailItem,DetailResult,Dimension,DrilldownRequest,ProductFact,Target,
+} from './model';
+
+export const previewToday = '2026-11-14';
+const asOf = '2026-11-14T03:00:00.000Z';
+export const generation = 'synthetic-2026-11-14';
+const nextGeneration = 'synthetic-published-later';
+const previewClockEnd = '2026-11-14';
+
+const categories = [
+  ['bench','ベンチ・オットマン','#9b805e'],
+  ['chair','ダイニングチェア','#57978a'],
+  ['sofa','ソファ','#254f42'],
+  ['work','ワークチェア','#596e9b'],
+  ['table','テーブル・デスク','#789c60'],
+  ['storage','収納家具','#b77857'],
+  ['lighting','照明','#b5974c'],
+  ['art','インテリア・アート','#937cab'],
+  ['__unknown__','未分類','#84908a'],
+] as const;
+
+const counts = (fields:Partial<Totals['unknown']>={}):Totals['unknown'] => ({cost:0,amount:0,quantity:0,category:0,kind:0,lot:0,channel:0,origin:0,date:0,...fields});
+const amountFor = (fact:ProductFact) => fact.amount ?? 0;
+
+function fact(id:string, title:string, category:string, amount:number|null, quantity:number|null, extra:Partial<ProductFact>={}):ProductFact {
+  return {
+    id,inventoryId:id,title,category,amount,quantity,
+    categoryLabel:categories.find(([key])=>key===category)?.[1] ?? '未分類',
+    imageRef:null,date:'2026-11-07',kindId:'kind-'+id,
+    holding:'single',holdingBand:'1',lot:'single',lotBand:'1',lotId:'lot-'+id,kindCount:1,lotCount:1,
+    unknown:counts({cost:amount===null?1:0,amount:amount===null?1:0,quantity:quantity===null?1:0,category:category==='__unknown__'?1:0}),
+    ...extra,
+  };
+}
+
+const bench = 'オーク無垢材 ベンチ 木座 ナチュラル 幅120cm 国内家具メーカー仕様';
+const stock = [
+  fact('bench-a',bench,'bench',60_000,6,{kindId:'kind-bench',holding:'multiple',holdingBand:'4-8',imageRef:'fixture/bench',imageUrl:'/bench.jpg'}),
+  fact('bench-b',bench,'bench',20_000,2,{kindId:'kind-bench',holding:'multiple',holdingBand:'4-8',kindCount:0,date:'2026-10-24'}),
+  fact('chair','成形合板のダイニングチェア ウォルナット色','chair',20_000,1),
+];
+const recent = [
+  fact('recent-bench',bench,'bench',200_000,20,{holding:'multiple',holdingBand:'9+',lot:'multiple',lotBand:'9+',imageRef:'fixture/bench',imageUrl:'/bench.jpg'}),
+  fact('recent-chair','ダイニングチェア ブナ材 ブラック','chair',40_000,2,{lot:'multiple',lotBand:'2-3'}),
+  fact('recent-storage','収納家具 オーク材','storage',30_000,1),
+];
+const sales = [
+  fact('sales-bench',bench,'bench',100_000,8,{lot:'multiple',lotBand:'4-8',imageRef:'fixture/bench',imageUrl:'/bench.jpg'}),
+  fact('sales-chair','ダイニングチェア 本革座面','chair',60_000,1),
+  fact('sales-sofa','二人掛けソファ グレー','sofa',50_000,1),
+  fact('sales-work','ワークチェア ブラック','work',37_000,1),
+  fact('sales-table','天板が伸長するダイニングテーブル','table',30_000,1),
+  fact('sales-storage','壁面収納 キャビネット','storage',25_000,1),
+  fact('sales-light','フロアスタンド 布シェード','lighting',18_000,1),
+  fact('sales-art','額装ポスター','art',14_000,1,{date:'2026-10-29'}),
+  fact('sales-u','商品コードのみ登録された品','__unknown__',12_000,null,{kindId:null,kindCount:0,lotId:null,lotBand:'unknown',lot:'unknown',lotCount:0}),
+];
+
+function rowsFor(request:AnalysisRequest, mode:string|null) {
+  if (mode==='empty') return [];
+  if (mode==='unknown' && request.target==='inventory') return [
+    fact('unpriced','原価未登録の商品','__unknown__',null,1,{kindId:null,kindCount:0,holding:'unknown',holdingBand:'unknown'}),
+  ];
+  if (request.target==='inventory') return stock;
+  if (request.target==='acquisitions') return recent;
+  if (request.target==='retailReference') return [
+    fact('retail-bench',bench,'bench',75_000,3,{imageRef:'fixture/bench',imageUrl:'/bench.jpg'}),
+    fact('retail-sofa','ファブリックソファ 2人掛け','sofa',25_000,1),
+  ];
+  if (mode==='known-sale' || mode==='zero-sale' || mode==='unknown-sale') {
+    const amount = mode==='known-sale' ? 100_000 : mode==='zero-sale' ? 0 : null;
+    return [fact('sales-coverage',bench,'bench',amount,1,{unknown:counts({cost:1,amount:amount===null?1:0})})];
+  }
+  if (mode==='published-sale') return [fact('published-sale',bench,'bench',888_000,1)];
+  if(mode==='negative') return [...sales,fact('return','売上返品・取消','bench',-450_000,null,{lot:'multiple',lotBand:'4-8'})]
+    .filter(row=>!row.date || (row.date >= (request.start??'') && row.date <= (request.end??previewToday)));
+  return sales.filter(row=>!row.date || (row.date >= (request.start??'') && row.date <= (request.end??previewToday)));
+}
+
+const bucketName:Record<string,string> = {
+  '1':'1点','2-3':'2〜3点','4-8':'4〜8点','9+':'9点以上',unknown:'判定不明',
+};
+const singleColor = '#386456', multiColor = '#76a59a', unknownColor = '#9aa49f';
+function identify(dimension:Dimension,key:string):{label:string;color:string} {
+  if (dimension==='category') {
+    const category = categories.find(([id])=>id===key);
+    return {label:category?.[1]??'未分類',color:category?.[2]??unknownColor};
+  }
+  if (dimension==='holdingBand'||dimension==='lotBand') {
+    const color = ({'1':singleColor,'2-3':multiColor,'4-8':'#708ab4','9+':'#c28959'})[key] ?? unknownColor;
+    return {label:bucketName[key]??key,color};
+  }
+  const holding = dimension==='holding';
+  if (key==='single') return {color:singleColor,label:holding?'1点だけ保有':'単品仕入れ'};
+  if (key==='multiple') return {color:multiColor,label:holding?'2点以上保有':'複数仕入れ'};
+  return {color:unknownColor,label:holding?'数量判定不明':'判定不明'};
+}
+function totals(rows:ProductFact[]):Totals {
+  return {
+    amount:rows.reduce((sum,row)=>sum+amountFor(row),0),
+    gross:rows.reduce((sum,row)=>sum+Math.max(0,amountFor(row)),0),
+    returns:rows.reduce((sum,row)=>sum+Math.min(0,amountFor(row)),0),
+    quantity:rows.reduce((sum,row)=>sum+(row.quantity??0),0),
+    grossQuantity:rows.reduce((sum,row)=>sum+Math.max(0,row.quantity??0),0),
+    returnedQuantity:rows.reduce((sum,row)=>sum+Math.max(0,-(row.quantity??0)),0),
+    kinds:rows.reduce((sum,row)=>sum+row.kindCount,0),
+    lots:rows.reduce((sum,row)=>sum+row.lotCount,0),
+    records:rows.length,
+    unknown:counts({
+      amount:rows.filter(row=>row.amount===null).length,
+      cost:rows.reduce((sum,row)=>sum+row.unknown.cost,0),
+      quantity:rows.filter(row=>row.quantity===null).length,
+      category:rows.filter(row=>row.category==='__unknown__').length,
+      kind:rows.filter(row=>!row.kindId).length,
+      lot:rows.filter(row=>!row.lotId).length,
+    }),
+  };
+}
+function summarize(rows:ProductFact[]):Summary {
+  const dimensions:Dimension[] = ['category','holding','holdingBand','lot','lotBand'];
+  const buckets = Object.fromEntries(dimensions.map(dimension=>{
+    const byKey = new Map<string,ProductFact[]>();
+    for (const row of rows) {
+      const key = row[dimension];
+      byKey.set(key,[...byKey.get(key)??[],row]);
+    }
+    const data:Bucket[] = [...byKey].map(([key,items])=>({key,...identify(dimension,key),...totals(items)}));
+    return [dimension,data];
+  }));
+  return {...totals(rows),dimensions:buckets};
+}
+
+export function stockView(rows:ProductFact[]=stock, month?:string):InventoryValue {
+  const summary = totals(rows);
+  const groups = VALUE_GROUPS.map(group=>{
+    const items = rows.filter(row=>group.key==='selling' ? row.id!=='bench-b' : group.key==='photo' && row.id==='bench-b');
+    const subtotal = totals(items);
+    return {...group,amount:subtotal.amount,quantity:subtotal.quantity,count:subtotal.records};
+  });
+  return {version:2,asOf,total:summary.amount,quantity:summary.quantity,count:summary.records,groups,other:[],issues:[],issueCount:0,
+    excluded:[],unpricedCount:summary.unknown.cost,month};
+}
+function periodFor(target:Target,request:AnalysisRequest):AnalysisResponse['period'] {
+  if (target==='inventory') return null;
+  const start = target==='retailReference'?'2026-08-17':target==='acquisitions'||request.rollingDays===30?'2026-10-16':request.start??'2026-11-01';
+  const end = request.end && request.end < previewClockEnd ? request.end : previewClockEnd;
+  return {start,end,cutoff:asOf,timezone:'Asia/Tokyo',partial:!request.end||request.end>=previewClockEnd};
+}
+
+export function createFixtures(mode:string|null = null):{ports:AnalysisPorts} {
+  let failureCount = 0;
+  const ports:AnalysisPorts = {
+    async load(request) {
+      if (mode==='error' && failureCount++===0) return {status:'error'};
+      if (mode==='wrong-generation' && request.generation===generation) {
+        const wrong = await createFixtures('published-sale').ports.load({target:'sales'});
+        return wrong.status==='ok' ? {...wrong,metadata:{...wrong.metadata,generation:nextGeneration}} : wrong;
+      }
+      if (mode==='generation-race' && request.target==='sales' && !request.generation) {
+        const latest = await createFixtures('published-sale').ports.load(request);
+        return latest.status==='ok' ? {...latest,metadata:{...latest.metadata,generation:nextGeneration}} : latest;
+      }
+      if (request.generation && request.generation!==generation) return {status:'expired'};
+      if (mode==='missing' || request.daily || (request.target==='sales' && request.start && request.start<'2026-10-01')) return {status:'missing'};
+      return {
+        status:'ok',target:request.target,period:periodFor(request.target,request),
+        summary:summarize(rowsFor(request,mode)),
+        inventoryValue:stockView(rowsFor({target:'inventory'},mode)),
+        metadata:{version:1,generation,asOf,timezone:'Asia/Tokyo',scopeId:'synthetic-fixture',
+          amountBasis:'集計基準：検証用データ',metadataVersions:{},coverageStart:'2026-10-01',coverageEnd:previewToday,
+          accuracy:'captured-current-source',sourceRecordCount:12,unlocatedAcquisitionRecords:1},
+        referenceExclusions:{unknownChannel:1,unknownCost:1,unverifiedOrigin:0,excluded:1,salesAmount:17_500},
+      };
+    },
+    async drill(request:DrilldownRequest):Promise<DetailResult> {
+      if (request.generation!==generation) return {status:'expired'};
+      let rows = rowsFor(request,mode);
+      const {dimension,key,groupKindId} = request;
+      if (dimension && key) rows = rows.filter(row=>row[dimension]===key);
+      const groups = new Map<string,ProductFact[]>();
+      for (const row of rows) {
+        if (row.kindId) groups.set(row.kindId,[...groups.get(row.kindId)??[],row]);
+      }
+      const items:DetailItem[] = [];
+      const seen = new Set<string>();
+      for (const row of rows) {
+        if (groupKindId && row.kindId!==groupKindId) continue;
+        const group = row.kindId ? groups.get(row.kindId) : undefined;
+        if (!groupKindId && row.kindId && group && group.length>1) {
+          if (seen.has(row.kindId)) continue;
+          seen.add(row.kindId);
+          items.push({type:'group',group:{kindId:row.kindId,representative:row,count:group.length,amount:totals(group).amount,quantity:totals(group).quantity}});
+        } else items.push({type:'record',record:row});
+      }
+      const start = request.cursor ? Number(request.cursor) : 0;
+      const end = start + (request.limit ?? 24);
+      return {status:'ok',items:items.slice(start,end),nextCursor:end<items.length ? String(end) : null};
+    },
+  };
+  return {ports};
+}

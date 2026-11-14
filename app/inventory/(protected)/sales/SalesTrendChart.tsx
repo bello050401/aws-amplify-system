@@ -1,122 +1,45 @@
 "use client";
 
-import { useState } from "react";
-import type { SalesTrendPoint } from "@/lib/inventory/salesView";
-import { salesChart } from "@/lib/inventory/salesChart";
+import {useState} from "react";
+import type {SalesTrendPoint} from "../../../../lib/inventory/salesViewTypes";
+import {salesChart,salesTrendLabel} from "../../../../lib/inventory/salesChart";
 
-const WIDTH = 640;
-const HEIGHT = 220;
-const PADDING = { top: 16, right: 16, bottom: 24, left: 8 };
-
-/**
- * BELLO統合改修 master指示書(2026-08-29統合改修版) §20/§21: 売上画面の
- * 12ヶ月推移グラフ(売上高・粗利益、レスポンシブ、ツールチップ)。
- *
- * チャート専用ライブラリ(recharts等)を新規導入せず、素のSVGで実装
- * している — package.jsonにチャートライブラリが一つも入っておらず、
- * このアプリ全体がここまで一貫して「小さな要件にはライブラリを足さず
- * 自前で書く」判断をしてきている(サムネイル表示・ページング・日付欄
- * 等、すべて自前実装)ことに合わせた。データ点は12点のみ・折れ線2本
- * だけなので、専用ライブラリが要るほどの複雑さではない。
- *
- * ── 2026-09-11 追加修正: 未集計/取得エラーの月を0円と混同しない ────
- *
- * 各点は`status`("ok"/"missing"/"error")を持つ(lib/inventory/salesView.ts
- * のloadSalesSummary参照、Inventoryを読まずに集計テーブルだけから
- * 作った推移データ)。"ok"でない月は折れ線をそこで途切れさせ(0円の
- * 位置に線をつながない)、塗りつぶさない輪(missingは灰色、errorは赤)
- * で「値を持たない」ことを示す——0円の実績と区別できないまま線を
- * つなぐと、未集計の月がグラフ上だけ「売上ゼロだった月」に見えて
- * しまうため。
- */
-export function SalesTrendChart({ points }: { points: SalesTrendPoint[] }) {
-  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
-
-  const { plotWidth, plotHeight, xFor, yFor, salesPath, profitPath } = salesChart(points, WIDTH, HEIGHT);
-
-  const hovered = hoverIndex != null ? points[hoverIndex] : null;
-  const yen = (n: number) => `¥${n.toLocaleString("ja-JP")}`;
-  const statusLabel = (status: SalesTrendPoint["status"]) => (status === "missing" ? "未集計" : status === "error" ? "取得エラー" : null);
-
-  return (
-    <div>
-      <div className="mb-1.5 flex items-center gap-4 text-[11px] text-gray-500">
-        <span className="flex items-center gap-1">
-          <span className="inline-block h-0.5 w-3 bg-gray-900" aria-hidden />
-          売上高
-        </span>
-        <span className="flex items-center gap-1">
-          <span className="inline-block h-0.5 w-3 bg-emerald-500" aria-hidden />
-          粗利益
-        </span>
-        {hovered && (
-          <span className="ml-auto font-bold text-gray-700">
-            {hovered.year}年{hovered.month}月:{" "}
-            {hovered.status === "ok"
-              ? `売上高 ${yen(hovered.totalSales)} / 粗利益 ${yen(hovered.totalGrossProfit)}`
-              : statusLabel(hovered.status)}
-          </span>
-        )}
-      </div>
-      <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} className="w-full" role="img" aria-label="直近12ヶ月の売上高・粗利益推移">
-        {/* 横軸ラベル(年またぎが分かるよう、1月は「2026/1」、それ以外は「3」のように表示) */}
-        {points.map((p, i) => (
-          <text key={`x-${i}`} x={xFor(i)} y={HEIGHT - 6} textAnchor="middle" className="fill-gray-400" style={{ fontSize: 9 }}>
-            {p.month === 1 ? `${p.year}/${p.month}` : p.month}
-          </text>
-        ))}
-
-        <path d={salesPath} fill="none" stroke="#111827" strokeWidth={2} />
-        <path d={profitPath} fill="none" stroke="#10b981" strokeWidth={2} />
-
-        {points.map((p, i) => {
-          const label = statusLabel(p.status);
-          const ringColor = p.status === "error" ? "#dc2626" : "#9ca3af";
-          return (
-            <g key={`pt-${i}`}>
-              {p.status === "ok" ? (
-                <>
-                  <circle cx={xFor(i)} cy={yFor(p.totalSales)} r={3} fill="#111827" />
-                  <circle cx={xFor(i)} cy={yFor(p.totalGrossProfit)} r={3} fill="#10b981" />
-                </>
-              ) : (
-                // 値を持たない月は塗りつぶさない輪1つだけ(0円の位置に点を打たない)。
-                <circle cx={xFor(i)} cy={yFor(0)} r={3} fill="white" stroke={ringColor} strokeWidth={1.5} />
-              )}
-              {/* ホバー/フォーカス用の透明な当たり判定列 — 点そのものは小さいため、月ごとに縦に細長い矩形を敷いて操作しやすくする。 */}
-              <rect
-                x={xFor(i) - plotWidth / Math.max(points.length, 1) / 2}
-                y={PADDING.top}
-                width={plotWidth / Math.max(points.length, 1)}
-                height={plotHeight}
-                fill="transparent"
-                tabIndex={0}
-                role="button"
-                aria-label={
-                  p.status === "ok"
-                    ? `${p.year}年${p.month}月: 売上高 ${yen(p.totalSales)}, 粗利益 ${yen(p.totalGrossProfit)}`
-                    : `${p.year}年${p.month}月: ${label}`
-                }
-                onMouseEnter={() => setHoverIndex(i)}
-                onMouseLeave={() => setHoverIndex(null)}
-                onFocus={() => setHoverIndex(i)}
-                onBlur={() => setHoverIndex(null)}
-              >
-                {/* 中身は必ず「式ひとつ」にする。複数の式を並べるとReactは
-                    サーバー側で text ノードの間に `<!-- -->` を挟むが、
-                    `<title>`はHTMLのRCDATA要素でコメントが解釈されず生の
-                    文字列になるため、hydrationがテキストノードを見つけられず
-                    「Hydration failed」で落ちる(実際に売上画面で発生していた)。 */}
-                <title>{`${p.year}年${p.month}月: ${p.status === "ok" ? `売上高 ${yen(p.totalSales)} / 粗利益 ${yen(p.totalGrossProfit)}` : label}`}</title>
-              </rect>
-            </g>
-          );
-        })}
-
-        {hoverIndex != null && (
-          <line x1={xFor(hoverIndex)} x2={xFor(hoverIndex)} y1={PADDING.top} y2={PADDING.top + plotHeight} stroke="#d1d5db" strokeWidth={1} />
-        )}
-      </svg>
+const width=640;
+const height=220;
+export function SalesTrendChart({points}:{points:SalesTrendPoint[]}) {
+  const [active,setActive] = useState<number|null>(null);
+  const chart = salesChart(points,width,height);
+  const selected = active===null ? null : points[active];
+  return <div>
+    <div className="mb-2 flex gap-4 text-xs text-gray-600">
+      <span><span aria-hidden className="mr-1 inline-block size-2 bg-gray-900"/>売上高</span>
+      <span><span aria-hidden className="mr-1 inline-block size-2 bg-emerald-500"/>粗利益</span>
     </div>
-  );
+    <svg viewBox={`0 0 ${width} ${height}`} className="w-full" role="group" aria-label="直近12ヶ月の売上高・粗利益の棒グラフ">
+      <line x1={chart.padding.left} x2={width-chart.padding.right} y1={chart.zero} y2={chart.zero} stroke="#d1d5db"/>
+      {points.map((point,index)=><g key={`${point.year}-${point.month}`}>
+        <text x={chart.xFor(index)} y={height-6} textAnchor="middle" fill="#526359" fontSize="16">
+          {point.month===1 ? `${String(point.year).slice(-2)}/1` : point.month}
+        </text>
+        {point.status==='ok' ? <>
+          <rect {...chart.bar(index,point.totalSales,'sales')} fill="#111827"/>
+          <rect {...chart.bar(index,point.totalGrossProfit,'profit')} fill="#10b981"/>
+        </> : <circle cx={chart.xFor(index)} cy={chart.zero} r={4} fill="white" stroke={point.status==='error' ? '#dc2626' : '#9ca3af'} strokeWidth={2}/>}
+        <rect x={chart.xFor(index)-chart.slot/2} y={chart.padding.top} width={chart.slot} height={chart.plotHeight}
+          fill={active===index ? '#263c3517' : 'transparent'} role="button" tabIndex={0} aria-label={salesTrendLabel(point)}
+          onFocus={()=>setActive(index)} onMouseEnter={()=>setActive(index)} onClick={()=>setActive(index)}
+          onKeyDown={event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();setActive(index);}}}>
+          <title>{salesTrendLabel(point)}</title>
+        </rect>
+      </g>)}
+    </svg>
+    <p className="mt-2 min-h-9 text-xs text-gray-600" aria-live="polite">{selected ? salesTrendLabel(selected) : 'グラフの月を選ぶと金額を表示します'}</p>
+  </div>;
+}
+
+export function SalesTrendDisclosure({points}:{points:SalesTrendPoint[]}) {
+  return <details className="mb-6 max-w-3xl rounded-xl border border-gray-200 px-3 py-1">
+    <summary className="min-h-11 cursor-pointer py-3 text-sm font-bold text-gray-600">直近12ヶ月の推移</summary>
+    <SalesTrendChart points={points}/>
+  </details>;
 }

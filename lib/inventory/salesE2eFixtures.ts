@@ -190,6 +190,7 @@ export async function e2eLoadSalesSummary(year: number, month: number): Promise<
       month,
       status: "ok",
       totals: currentMonthTotals(year, month),
+      aggregateGeneration: null,
       aggregateRebuiltAt: currentMonthRebuiltAt(scenario, now),
       trend,
     };
@@ -200,6 +201,7 @@ export async function e2eLoadSalesSummary(year: number, month: number): Promise<
     month,
     status: "ok",
     totals: baselineTotals(year, month),
+    aggregateGeneration: null,
     aggregateRebuiltAt: baselineRebuiltAt(year, month),
     trend,
   };

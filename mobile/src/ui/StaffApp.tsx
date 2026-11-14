@@ -33,6 +33,7 @@ import { InventoryPhotos } from "./InventoryPhotos";
 import {InventoryPhotoPreview} from './InventoryPhotoPreview';
 import {BarcodeScanner} from "./BarcodeScanner";
 import {SalesScreen, type SalesResponse} from "./SalesScreen";
+import {initialAnalysisState,jstDay,firstMonth,type AnalysisPorts,type AnalysisState} from "../../../lib/inventory/analysisUi/model";
 import { InventoryReadError } from "../domain/readError";
 import { HomeScreen } from "./HomeScreen";
 import {PriceEntry} from "./PriceEntry";
@@ -61,6 +62,9 @@ export interface StaffAppPorts extends EditorPorts {
   loadThumbnails?: (ids: string[]) => Promise<InventoryThumbnail[]>;
   loadOptions?: () => Promise<InventoryOptions>;
   loadCategories?: () => Promise<CategoryChoice[]>;
+  analysis?: AnalysisPorts;
+  analysisToday?:string;
+  renderSaleOperation?:(operation:"purchases"|"invoice",close:()=>void)=>React.ReactNode;
   loadSales?: (year:number,month:number,items?:boolean)=>Promise<SalesResponse>;
   loadInventoryValue?:(month?:string)=>Promise<import('../../../lib/inventory/inventoryValue').InventoryValueView>;
   loadDetail?: (id: string, expectedVersion?: string) => Promise<InventoryItem>;
@@ -89,6 +93,19 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
   const toggleEditId=(id:string)=>setEditIds(current=>{const next=new Set(current);if(next.has(id))next.delete(id);else if(next.size<MAX_EDIT_SELECTION)next.add(id);return next;});
   const openSelection=(mode:SelectionAction)=>{if(inventoryEditOpen){setInventoryEditHidden(false);return;}if(editIds.size){setInventoryEditHidden(false);setInventoryEditFinished(false);setInventoryEditOpen({ids:[...editIds],mode,requestId:ports.newMutationId()});}};
   const [creating,setCreating]=useState(false);
+  const [salesState,setSalesState] = useState(()=>initialAnalysisState(ports.analysisToday ?? jstDay()));
+  const [legacyMonth,setLegacyMonth] = useState(()=>{
+    const [year,month] = (ports.analysisToday ?? jstDay()).split('-').map(Number);
+    return {year,month};
+  });
+  const changeAnalysis = (change:Partial<AnalysisState>) => setSalesState(current=>({...current,...change}));
+  const changeLegacyMonth = (month:{year:number;month:number}) => {
+    setLegacyMonth(month);
+    const saleMonth = month.year+'-'+String(month.month).padStart(2,'0');
+    const today = (ports.analysisToday ?? jstDay()).slice(0,7);
+    if (saleMonth >= firstMonth && saleMonth <= today) changeAnalysis({saleMonth,preset:saleMonth===today?'current':'month',slice:null});
+  };
+  const salesDetail = useRef(false);
   const [requestedTab, setTab] = useState<Tab>("home");
   // Filter the screen as well as navigation, including when access changes on an open screen.
   const tab = permittedTab(requestedTab, features);
@@ -427,7 +444,9 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
   };
   const leaveEditor = () => { setEditor(null); setError(null); setTab("inventory"); };
   const returnFromDetail = () => {
-    detailGeneration.current++; setDetailLoading(false); setSelected(null); setFeature(null); setError(null); setTab("inventory");
+    detailGeneration.current++; setDetailLoading(false); setSelected(null); setFeature(null); setError(null);
+    setTab(salesDetail.current ? "sales" : "inventory");
+    salesDetail.current = false;
   };
   const startCopy = () => {
     if (!selected || !writesEnabled || detailLoading) return;
@@ -586,7 +605,18 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
             <View style={[s.rowRight,selecting&&{width:46}]}><View style={s.quantityBox}><Text style={s.quantity}>{item.quantityUnset?"—":item.quantity}</Text></View><Text numberOfLines={1} style={s.rowLocation}>● {item.location || "未設定"}</Text></View>
             </Pressable>
           </View>} />
-      </View> : tab === "outbound" ? <OutboundEntry offline={offline}/> : tab === "sales" && ports.loadSales ? <SalesScreen loadInventoryValue={ports.loadInventoryValue} canIssueDocuments={canIssueDocuments} load={ports.loadSales} offline={offline} onOpen={id=>{if(ports.loadDetail)void ports.loadDetail(id).then(item=>{setTab("inventory");void openItem(item,true);}).catch(()=>setError("商品を取得できませんでした。"));}}/> : <View style={s.pending}><Text style={s.pendingText}>売上を取得できませんでした。</Text></View>}
+      </View> : tab === "outbound" ? <OutboundEntry offline={offline}/> : tab === "sales" && ports.loadSales ? <SalesScreen loadInventoryValue={ports.loadInventoryValue} analysis={ports.analysis} today={ports.analysisToday} analysisState={salesState} onAnalysisChange={changeAnalysis}
+        renderSaleOperation={ports.renderSaleOperation} legacyMonth={legacyMonth} onLegacyMonthChange={changeLegacyMonth} canIssueDocuments={canIssueDocuments} load={ports.loadSales} offline={offline}
+        onOpen={id=>{
+          if (!ports.loadDetail) return;
+          const attempt = ++detailGeneration.current;
+          void ports.loadDetail(id).then(item=>{
+            if (attempt !== detailGeneration.current) return;
+            salesDetail.current = true;
+            setTab("inventory");
+            void openItem(item,true);
+          }).catch(()=>{if(attempt === detailGeneration.current)setError("商品を取得できませんでした。");});
+        }}/> : <View style={s.pending}><Text style={s.pendingText}>売上を取得できませんでした。</Text></View>}
       {tab==='inventory'&&!selected&&selecting&&<View style={s.selectionActions}>
         <View style={s.selectionHeading}><Text style={s.selectText}>{editIds.size}件選択中</Text><Pressable accessibilityRole="button" accessibilityLabel="選択解除" onPress={()=>setEditIds(new Set())}><Text style={s.selectText}>解除</Text></Pressable></View>
         <View style={{flexDirection:'row',gap:8}}>{([{mode:'edit',label:'編集',icon:'create-outline'},{mode:'undo',label:'戻る',icon:'arrow-undo-outline'},{mode:'redo',label:'進む',icon:'arrow-redo-outline'},{mode:'history',label:'履歴',icon:'time-outline'}] as const).map(action=><Pressable key={action.mode} accessibilityRole="button" accessibilityLabel={'選択商品の'+action.label} disabled={!editIds.size||offline} onPress={()=>openSelection(action.mode)} style={[action.mode==='edit'?s.primaryAction:s.secondaryAction,(!editIds.size||offline)&&{opacity:.4}]}><Ionicons name={action.icon} size={18} color={action.mode==='edit'?'white':colors.text}/><Text style={action.mode==='edit'?s.editLabel:s.selectText}>{action.label}</Text></Pressable>)}</View>
@@ -596,7 +626,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
       {selected && !selected.mergedIntoInventoryId && writesEnabled && canSellInventory && ports.sell && features.sales && features.ecListing && <Pressable accessibilityRole="button" accessibilityLabel="売却" disabled={offline || detailLoading || !selected.detailLoadedAt || selected.quantity<1 || splitCategoryNames(selected.category).includes('売り切れ')} onPress={()=>setSelling(selected)} style={[s.secondaryAction,(offline||detailLoading||!selected.detailLoadedAt||selected.quantity<1||splitCategoryNames(selected.category).includes('売り切れ'))&&{opacity:.4}]}><Text style={s.selectText}>売却</Text></Pressable>}
       {selected && !selected.mergedIntoInventoryId && writesEnabled && <Pressable accessibilityRole="button" accessibilityLabel="編集" disabled={detailLoading || (!!ports.loadDetail && !selected.detailLoadedAt)} onPress={() => setEditor(new InventoryEditor(selected, ports))} style={[s.primaryAction, (detailLoading || (!!ports.loadDetail && !selected.detailLoadedAt)) && { opacity: .4 }]}><Ionicons name="create-outline" size={21} color="white" /><Text style={s.editLabel}>編集</Text></Pressable>}
       </View>}
-      <View style={s.tabBar}>{visibleTabs.map((item) => <Pressable accessibilityRole="tab" accessibilityLabel={item.label} accessibilityState={{ selected: tab === item.key }} key={item.key} onPress={() => { detailGeneration.current++; setDetailLoading(false); setSelected(null); setFeature(null); setTab(item.key); }} style={[s.tab, tab === item.key && s.activeTab]}><Ionicons name={item.icon} size={22} color={tab === item.key ? colors.turquoise : colors.orange} /><Text style={[s.tabLabel, tab === item.key && s.activeLabel]}>{item.label}</Text></Pressable>)}</View>
+      <View style={s.tabBar}>{visibleTabs.map((item) => <Pressable accessibilityRole="tab" accessibilityLabel={item.label} accessibilityState={{ selected: tab === item.key }} key={item.key} onPress={() => { detailGeneration.current++; salesDetail.current=false; setDetailLoading(false); setSelected(null); setFeature(null); setTab(item.key); }} style={[s.tab, tab === item.key && s.activeTab]}><Ionicons name={item.icon} size={22} color={tab === item.key ? colors.turquoise : colors.orange} /><Text style={[s.tabLabel, tab === item.key && s.activeLabel]}>{item.label}</Text></Pressable>)}</View>
     </DetailSwipeBack>}
     {photoPreview&&<InventoryPhotoPreview key={photoPreview.id} item={photoPreview} offline={offline} cache={ports.listPhotoCache} loadPhotos={ports.loadPhotos} loadDetail={ports.loadDetail} onClose={()=>setPhotoPreview(null)}/>}
     <Modal visible={!!deleteTarget} transparent animationType="fade" onRequestClose={()=>{if(!deleteBusy.current)setDeleteTarget(null);}}>

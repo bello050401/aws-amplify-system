@@ -106,6 +106,7 @@ export async function loadSalesSummary(year: number, month: number): Promise<Sal
     status,
     totals: currentAggregate ? totalsFromAggregate(currentAggregate, year, month) : emptyTotals(year, month),
     aggregateRebuiltAt: currentAggregate?.rebuiltAt ?? null,
+    aggregateGeneration: currentAggregate?.generation ?? null,
     trend,
   };
 }

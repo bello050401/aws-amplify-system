@@ -1,13 +1,16 @@
 import { ConditionalCheckFailedException, DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, ScanCommand, GetCommand, PutCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { buildMonthlyAggregates } from "@/lib/inventory/salesAggregate";
-import { buildInventoryValue, type ValueSource } from "@/lib/inventory/inventoryValue";
+import { buildAnalysis } from '@/lib/inventory/analysis/aggregate';
+import { createAnalysisMetadataStore } from '@/lib/inventory/analysis/metadata';
+import { cleanAnalysisRetention, publishAnalysis } from '@/lib/inventory/analysis/publication';
+import { ANALYSIS_INVENTORY_PROJECTION } from '@/lib/inventory/analysis/publicationFormat';
+import type { AnalysisSource } from '@/lib/inventory/analysis/types';
 import {ensureInventoryMonth} from '@/lib/inventory/inventoryValueArchive';
 import {lastClosedInventoryMonth} from '@/lib/inventory/inventoryValueCalendar';
-import type { SalesSourceRecord } from "@/lib/inventory/sales";
+import { normalizedCapturedSalesRecords } from "@/lib/inventory/analysis/salesProjection";
 import { planScheduledZaicoDelta } from "@/lib/inventory/scheduledZaicoDelta";
 import { ZAICO_SYNC_JOB_ID } from "@/lib/inventory/zaicoSyncJobId";
-import { serializeSnapshotMonths, SALES_AGGREGATE_SNAPSHOT_ID } from "@/lib/inventory/salesAggregateSnapshot";
 import {
   SALES_AGGREGATE_RUN_STATUS_ID,
   buildSuccessRunStatusFields,
@@ -74,7 +77,7 @@ export async function queueZaicoDelta(client: Pick<typeof ddb, "send"> = ddb, ta
   }
 }
 
-interface InvRow extends ValueSource {
+interface InvRow extends AnalysisSource {
   sourceInventoryId?:string|null;
   id: string;
   sku: string;
@@ -93,7 +96,7 @@ async function scanInventory(): Promise<InvRow[]> {
     const res = await ddb.send(
       new ScanCommand({
         TableName: INVENTORY_TABLE,
-        ProjectionExpression: "id, sku, #n, saleEndDate, salePrice, purchasePrice, shippingCost, deletedAt, quantity, categoryId, categoryIds, sourceInventoryId",
+        ProjectionExpression: ANALYSIS_INVENTORY_PROJECTION,
         ExpressionAttributeNames: { "#n": "name" },
         ExclusiveStartKey: key,
       }),
@@ -176,62 +179,19 @@ export const handler = async () => {
       categories.push(...(page.Items??[]) as {id:string;name:string}[]);
       categoryKey=page.LastEvaluatedKey;
     } while(categoryKey);
-    const inventoryValue = buildInventoryValue(rows,categories,startedAt);
-    const records: SalesSourceRecord[] = rows.map((r) => ({
-      id: r.id,
-      displayId: r.sku,
-      sku: r.sku,
-      name: r.name,
-      saleEndDate: r.saleEndDate ?? null,
-      salePrice: r.salePrice ?? null,
-      purchasePrice: r.purchasePrice ?? null,
-      shippingCost: r.shippingCost ?? null,
-    }));
+    const metadataTable = process.env.INVENTORY_ANALYSIS_METADATA_TABLE_NAME;
+    if (!metadataTable) throw new Error('Inventory analysis metadata table is not configured');
+    const metadata = await createAnalysisMetadataStore(ddb, metadataTable).forRebuild();
+    const analysis = buildAnalysis(rows, categories, metadata.rows, startedAt, generation);
+    analysis.metadata.metadataEpoch = metadata.epoch;
+    const records = normalizedCapturedSalesRecords(rows, startedAt);
 
     const recomputed = buildMonthlyAggregates(records);
 
-    // 全月ぶんを1アイテムへ、1回のPutItemで書く。DynamoDBの単一アイテム
-    // 書き込みはall-or-nothingなので、「一部の月だけ新しい世代」という
-    // 状態はここで構造的に発生し得ない——このPutItemが成功した瞬間、
-    // 読み手は必ず「全月が同じ世代」のスナップショットだけを見る。
-    //
-    // ConditionExpression: 既存アイテムが無い(初回)か、既存の世代が
-    // 今回の世代より古い場合のみ書き込む。同時に2つの実行が走り、開始が
-    // 遅い方(=世代が新しい方)が先に完了してpublishした後、開始が早い
-    // 方(=世代が古い方、既に古いデータを計算済み)が後から完了しても、
-    // このConditionExpressionが拒否するので古いデータが新しいものを
-    // 上書きしない。
-    let published = true;
-    try {
-      await ddb.send(
-        new PutCommand({
-          TableName: SNAPSHOT_TABLE,
-          Item: {
-            id: SALES_AGGREGATE_SNAPSHOT_ID,
-            __typename: "SalesAggregateSnapshot",
-            generation,
-            monthsJson: serializeSnapshotMonths(recomputed),
-            inventoryValueJson: JSON.stringify(inventoryValue),
-            sourceRecordCount: records.length,
-            rebuiltAt: generation,
-            rebuiltBy: "sales-aggregate-scheduler",
-            createdAt: generation,
-            updatedAt: generation,
-          },
-          ConditionExpression: "attribute_not_exists(id) OR generation < :new",
-          ExpressionAttributeValues: { ":new": generation },
-        }),
-      );
-    } catch (err) {
-      if (err instanceof ConditionalCheckFailedException) {
-        // 自分より新しい世代が既に公開済み(同時実行で自分が負けた)。
-        // 自分のデータが誤っているわけではないので失敗として扱わない
-        // ——現在公開されているのは、より新しい正しいスナップショット。
-        published = false;
-      } else {
-        throw err;
-      }
-    }
+    const published = await publishAnalysis(ddb, SNAPSHOT_TABLE, analysis, recomputed, 'sales-aggregate-scheduler');
+    await cleanAnalysisRetention(ddb, SNAPSHOT_TABLE).catch(error => {
+      console.error('[sales-aggregate-scheduler] analysis retention cleanup failed', error instanceof Error ? error.name : 'unknown');
+    });
 
     const completedAt = new Date().toISOString();
     // A month-end failure must not replace a valid current total or fabricate a past zero balance.

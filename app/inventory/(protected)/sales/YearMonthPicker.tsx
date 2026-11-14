@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter,useSearchParams } from "next/navigation";
+import { setLegacyMonth } from "@/lib/inventory/analysisUi/model";
 
 /**
  * 追加仕様「売上画面の年月移動UIを改善する」— 現在の年月表示自体を
@@ -23,6 +24,7 @@ import { useRouter } from "next/navigation";
  */
 export function YearMonthPicker({ year, month, currentYear }: { year: number; month: number; currentYear: number }) {
   const router = useRouter();
+  const query = useSearchParams();
   const [open, setOpen] = useState(false);
   const [pickerYear, setPickerYear] = useState(year);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -41,7 +43,9 @@ export function YearMonthPicker({ year, month, currentYear }: { year: number; mo
 
   function selectMonth(m: number) {
     setOpen(false);
-    router.push(`/inventory/sales?y=${pickerYear}&m=${m}`);
+    const next = new URLSearchParams(query);
+    setLegacyMonth(next,pickerYear,m);
+    router.push("/inventory/sales?"+next);
   }
 
   // 現在年から過去10年・未来2年を候補にする — 「2023年など数年前へ

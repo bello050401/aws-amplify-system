@@ -1,118 +1,85 @@
-/**
- * scripts/verify-sales-aggregate-scheduler-handler.ts 専用fixture。
- *
- * amplify/functions/sales-aggregate-scheduler/handler.ts が呼ぶ
- * "@aws-sdk/client-dynamodb" / "@aws-sdk/lib-dynamodb" をこのmodule一本へ
- * 差し替える——実AWSへは一切接続しない。ScanCommand(Inventory走査)/
- * GetCommand(RunStatus読み取り)/PutCommand(Snapshot・RunStatus書き込み)を
- * それぞれ個別のクラスとして提供し、handler.tsの`instanceof`チェック
- * (ConditionalCheckFailedException)もそのまま動く形にしてある。
- *
- * `snapshotStorage`が「現在DynamoDBに保存されている(つもりの)
- * SalesAggregateSnapshot」を表す唯一の状態——PutCommandが成功した
- * ときだけ更新し、ConditionalCheckFailedException/その他の例外を
- * 投げるよう設定した回では一切更新しない。これにより「失敗時に前回の
- * 値がそのまま残る」ことをテスト側がsnapshotStorageの中身を読んで
- * 直接確認できる。
- *
- * .mjs ではなく .cjs にしているのは意図的(2026-09-11 task_e509 引継ぎ
- * 完了対応): amplify/functions/sales-aggregate-scheduler/handler.ts
- * (トップレベルawaitを持たない.ts)はpackage.jsonに"type":"module"が
- * 無いためtsxによってCJS出力に変換される。CJS化されたモジュールから
- * この fixture を .mjs(=常にESM)としてrequireすると、Nodeの
- * require(esm)相互運用が"await import()"で直接読み込んだ別インスタンス
- * とは別のモジュールレコードを作ってしまい、テスト側の__configure()が
- * 実際にhandlerが参照するインスタンスへ反映されない(状態が分裂する)。
- * .cjs であれば require() 経由でも import() 経由でも同じ
- * Module._cache を共有するため、この分裂が起きない。
- */
-
-class ConditionalCheckFailedException extends Error {
-  constructor(message) {
-    super(message);
-    this.name = "ConditionalCheckFailedException";
-  }
+const Base = class {
+  constructor(input) { this.input = input; }
+};
+class ConditionalCheckFailedException extends Error {}
+class TransactionCanceledException extends Error {
+  constructor(CancellationReasons) { super('mock: transaction canceled'); this.CancellationReasons = CancellationReasons; }
 }
-
-class ScanCommand {
-  constructor(input) {
-    this.input = input;
-  }
-}
-class GetCommand {
-  constructor(input) {
-    this.input = input;
-  }
-}
-class PutCommand {
-  constructor(input) {
-    this.input = input;
-  }
-}
-
-class DynamoDBClient {
-  constructor() {}
-}
+class ScanCommand extends Base {}
+class GetCommand extends Base {}
+class PutCommand extends Base {}
+class QueryCommand extends Base {}
+class BatchWriteCommand extends Base {}
+class TransactWriteCommand extends Base {}
+class UpdateCommand extends Base {}
+class DeleteCommand extends Base {}
+class DynamoDBClient {}
 
 let inventoryItems = [];
-let runStatusItem; // 既存のSalesAggregateRunStatus行(無ければundefined)
-let snapshotStorage; // 既存のSalesAggregateSnapshot行(無ければundefined)
-/** "success" | "conditionalFail" | "otherFail" — 次回のSnapshot PutCommandの挙動。 */
-let putBehavior = "success";
-
+let runStatusItem;
+let snapshotStorage;
+let putBehavior = 'success';
+const shards = new Map();
 const calls = { snapshotPuts: [], runStatusPuts: [] };
 
-function __configure({ items = [], existingRunStatus, existingSnapshot, snapshotPutBehavior = "success" } = {}) {
+function __configure({ items = [], existingRunStatus, existingSnapshot, snapshotPutBehavior = 'success' } = {}) {
   inventoryItems = items;
   runStatusItem = existingRunStatus;
   snapshotStorage = existingSnapshot;
   putBehavior = snapshotPutBehavior;
   calls.snapshotPuts = [];
   calls.runStatusPuts = [];
+  shards.clear();
 }
 
-function __getSnapshotStorage() {
-  return snapshotStorage;
-}
-
-const DynamoDBDocumentClient = {
-  from() {
-    return {
-      async send(command) {
-        if (command instanceof ScanCommand) {
-          return { Items: inventoryItems, LastEvaluatedKey: undefined };
-        }
-        if (command instanceof GetCommand) {
-          return { Item: runStatusItem };
-        }
-        if (command instanceof PutCommand) {
-          const item = command.input.Item;
-          // Snapshot書き込みは monthsJson を持つ。RunStatus書き込みは state を持つ。
-          if (item && typeof item.monthsJson === "string") {
-            calls.snapshotPuts.push(item);
-            if (putBehavior === "conditionalFail") throw new ConditionalCheckFailedException("mock: 既存の世代の方が新しい");
-            if (putBehavior === "otherFail") throw new Error("mock: DynamoDBへの書き込みに失敗しました");
-            snapshotStorage = item; // 成功時のみ「保存済み」を更新——失敗時は前回のまま。
-            return {};
-          }
-          calls.runStatusPuts.push(item);
-          runStatusItem = item;
-          return {};
-        }
-        throw new Error("mock: 未対応のコマンドです");
-      },
-    };
+const DynamoDBDocumentClient = { from: () => ({
+  async send(command) {
+    const { TableName, Key, Item, RequestItems, TransactItems } = command.input;
+    if (command instanceof ScanCommand) {
+      return { Items: TableName === process.env.INVENTORY_TABLE_NAME ? inventoryItems : [] };
+    }
+    if (command instanceof QueryCommand) return { Items: [] };
+    if (command instanceof GetCommand) {
+      if (TableName === process.env.SALES_AGGREGATE_RUN_STATUS_TABLE_NAME) return { Item: runStatusItem };
+      if (TableName === process.env.SALES_AGGREGATE_SNAPSHOT_TABLE_NAME && Key.id === 'current') return { Item: snapshotStorage };
+      return {};
+    }
+    if (command instanceof BatchWriteCommand) {
+      for (const { PutRequest } of Object.values(RequestItems).flat()) shards.set(PutRequest.Item.id, PutRequest.Item);
+      return {};
+    }
+    if (command instanceof TransactWriteCommand) {
+      const current = TransactItems[0].Put.Item;
+      calls.snapshotPuts.push(current);
+      if (putBehavior === 'conditionalFail') throw new TransactionCanceledException([{ Code: 'ConditionalCheckFailed' }]);
+      if (putBehavior === 'otherFail') throw new Error('mock: DynamoDBへの書き込みに失敗しました');
+      for (const target of Object.values(JSON.parse(current.analysisManifestJson).targets)) {
+        for (const entry of target) if (!entry.hash) throw new Error('mock: shard hash missing');
+      }
+      snapshotStorage = current;
+      return {};
+    }
+    if (command instanceof PutCommand) {
+      if (TableName !== process.env.SALES_AGGREGATE_RUN_STATUS_TABLE_NAME) return {};
+      calls.runStatusPuts.push(Item);
+      runStatusItem = Item;
+      return {};
+    }
+    throw new Error('mock: 未対応のコマンドです');
   },
-};
-
-module.exports = {
-  ConditionalCheckFailedException,
-  ScanCommand,
-  GetCommand,
-  PutCommand,
-  DynamoDBClient,
-  calls,
-  __configure,
-  __getSnapshotStorage,
-  DynamoDBDocumentClient,
-};
+}) };
+exports.ConditionalCheckFailedException = ConditionalCheckFailedException;
+exports.TransactionCanceledException = TransactionCanceledException;
+exports.ScanCommand = ScanCommand;
+exports.GetCommand = GetCommand;
+exports.PutCommand = PutCommand;
+exports.QueryCommand = QueryCommand;
+exports.BatchWriteCommand = BatchWriteCommand;
+exports.TransactWriteCommand = TransactWriteCommand;
+exports.UpdateCommand = UpdateCommand;
+exports.DeleteCommand = DeleteCommand;
+exports.DynamoDBClient = DynamoDBClient;
+exports.calls = calls;
+exports.__configure = __configure;
+exports.DynamoDBDocumentClient = DynamoDBDocumentClient;
+exports.__getSnapshotStorage = () => snapshotStorage;

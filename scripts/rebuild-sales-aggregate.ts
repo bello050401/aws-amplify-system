@@ -1,4 +1,8 @@
-import {buildInventoryValue,type ValueSource} from '../lib/inventory/inventoryValue';
+import { buildAnalysis } from '@/lib/inventory/analysis/aggregate';
+import { createAnalysisMetadataStore } from '@/lib/inventory/analysis/metadata';
+import { cleanAnalysisRetention, publishAnalysis } from '@/lib/inventory/analysis/publication';
+import { ANALYSIS_INVENTORY_PROJECTION, makeAnalysisManifest } from '@/lib/inventory/analysis/publicationFormat';
+import type { AnalysisSource } from '@/lib/inventory/analysis/types';
 /**
  * 売上月次集計の再構築(2026-09-02 指示書§19、2026-09-11 世代整合性
  * 修正)。
@@ -27,11 +31,11 @@ import {buildInventoryValue,type ValueSource} from '../lib/inventory/inventoryVa
  * を --apply付きで手動実行するか、最初の定期実行(最大12時間待ち)を
  * 待てば解消する。
  */
-import { DynamoDBClient, ListTablesCommand, ConditionalCheckFailedException } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, ScanCommand, GetCommand, PutCommand } from "@aws-sdk/lib-dynamodb";
+import { DynamoDBClient, ListTablesCommand } from "@aws-sdk/client-dynamodb";
+import { DynamoDBDocumentClient, ScanCommand, GetCommand } from "@aws-sdk/lib-dynamodb";
 import { buildMonthlyAggregates, compareAggregates, type SalesMonthlyAggregateRow } from "@/lib/inventory/salesAggregate";
-import { serializeSnapshotMonths, deserializeSnapshotMonths, SALES_AGGREGATE_SNAPSHOT_ID } from "@/lib/inventory/salesAggregateSnapshot";
-import type { SalesSourceRecord } from "@/lib/inventory/sales";
+import { deserializeSnapshotMonths, SALES_AGGREGATE_SNAPSHOT_ID } from "@/lib/inventory/salesAggregateSnapshot";
+import { normalizedCapturedSalesRecords } from "@/lib/inventory/analysis/salesProjection";
 
 const APPLY = process.argv.includes("--apply");
 const REGION = process.env.AWS_REGION || "us-west-2";
@@ -51,7 +55,7 @@ async function listAllTableNames(): Promise<string[]> {
   return (cachedNames = names);
 }
 
-const REQUIRED_MODELS = ["Inventory", "ZaicoSourceLink", "SalesAggregateSnapshot"];
+const REQUIRED_MODELS = ["Inventory", "ZaicoSourceLink", "SalesAggregateSnapshot", "InventoryAnalysisMetadata"];
 async function resolveApiId(): Promise<string> {
   const names = await listAllTableNames();
   const byApiId = new Map<string, Set<string>>();
@@ -78,7 +82,7 @@ async function table(model: string): Promise<string> {
   return hits[0];
 }
 
-interface InvRow extends ValueSource {
+interface InvRow extends AnalysisSource {
   id: string;
   sku: string;
   name: string;
@@ -96,7 +100,7 @@ async function scanInventory(t: string): Promise<InvRow[]> {
     const res = await ddb.send(
       new ScanCommand({
         TableName: t,
-        ProjectionExpression: "id, sku, #n, saleEndDate, salePrice, purchasePrice, shippingCost, deletedAt, quantity, categoryId, categoryIds",
+        ProjectionExpression: ANALYSIS_INVENTORY_PROJECTION,
         ExpressionAttributeNames: { "#n": "name" },
         ExclusiveStartKey: key,
       }),
@@ -129,16 +133,7 @@ async function main() {
   console.log(APPLY ? "モード: --apply(実際に書き込みます)\n" : "モード: dry-run(書き込みません)\n");
 
   const rows = (await scanInventory(inventoryTable)).filter((r) => !r.deletedAt);
-  const records: SalesSourceRecord[] = rows.map((r) => ({
-    id: r.id,
-    displayId: r.sku,
-    sku: r.sku,
-    name: r.name,
-    saleEndDate: r.saleEndDate ?? null,
-    salePrice: r.salePrice ?? null,
-    purchasePrice: r.purchasePrice ?? null,
-    shippingCost: r.shippingCost ?? null,
-  }));
+  const records = normalizedCapturedSalesRecords(rows, generation);
 
   const categories: {id:string;name:string}[]=[];
   const categoryTable=await table('Category');
@@ -147,12 +142,17 @@ async function main() {
     const page=await ddb.send(new ScanCommand({TableName:categoryTable,ProjectionExpression:'id, #n',ExpressionAttributeNames:{'#n':'name'},ExclusiveStartKey:categoryKey}));
     categories.push(...(page.Items??[]) as {id:string;name:string}[]);categoryKey=page.LastEvaluatedKey;
   } while(categoryKey);
-  const inventoryValue=buildInventoryValue(rows,categories,generation);
+  const metadata = await createAnalysisMetadataStore(ddb, await table('InventoryAnalysisMetadata')).forRebuild();
+  const analysis = buildAnalysis(rows, categories, metadata.rows, generation, generation);
+  analysis.metadata.metadataEpoch = metadata.epoch;
+  const inventoryValue = analysis.inventoryValue;
+  const { shards } = makeAnalysisManifest(analysis);
+  console.log('Analysis: ', shards.length, 'shards / metadata revision', metadata.epoch);
   console.log('Inventory valuation:',inventoryValue.total,'JPY,',inventoryValue.quantity,'units,',inventoryValue.issues.length,'issues');
   const recomputed = buildMonthlyAggregates(records);
   const { generation: storedGeneration, months: stored } = await getSnapshot(snapshotTable);
 
-  console.log(`在庫 ${records.length}件 → 集計 ${recomputed.length}ヶ月(現在公開中の世代: ${storedGeneration ?? "(未構築)"}、${stored.length}ヶ月)\n`);
+  console.log(`在庫 ${rows.length}件 → 集計 ${recomputed.length}ヶ月(現在公開中の世代: ${storedGeneration ?? "(未構築)"}、${stored.length}ヶ月)\n`);
 
   const drift = compareAggregates(stored, recomputed);
   if (drift.length === 0 && stored.length > 0) {
@@ -173,39 +173,10 @@ async function main() {
     return;
   }
 
-  // 2026-09-11 世代整合性修正: 全月ぶんを1つのアイテムへ1回のPutItemで
-  // 書く。DynamoDBの単一アイテム書き込みは原子的——このPutItemが失敗
-  // しても、直前まで公開されていた世代のスナップショットは1バイトも
-  // 変わらず残る(新旧世代が混在した状態は構造的に発生しない、
-  // lib/inventory/salesAggregateSnapshot.ts冒頭コメント参照)。
-  let published = true;
-  try {
-    await ddb.send(
-      new PutCommand({
-        TableName: snapshotTable,
-        Item: {
-          id: SALES_AGGREGATE_SNAPSHOT_ID,
-          __typename: "SalesAggregateSnapshot",
-          generation,
-          monthsJson: serializeSnapshotMonths(recomputed),
-          inventoryValueJson: JSON.stringify(inventoryValue),
-          sourceRecordCount: records.length,
-          rebuiltAt: generation,
-          rebuiltBy: "rebuild-sales-aggregate script",
-          createdAt: generation,
-          updatedAt: generation,
-        },
-        ConditionExpression: "attribute_not_exists(id) OR generation < :new",
-        ExpressionAttributeValues: { ":new": generation },
-      }),
-    );
-  } catch (err) {
-    if (err instanceof ConditionalCheckFailedException) {
-      published = false;
-    } else {
-      throw err;
-    }
-  }
+  const published = await publishAnalysis(ddb, snapshotTable, analysis, recomputed, 'rebuild-sales-aggregate script');
+  await cleanAnalysisRetention(ddb, snapshotTable).catch(error => {
+    console.error('Analysis retention cleanup failed', error instanceof Error ? error.name : 'unknown');
+  });
 
   if (published) {
     console.log(`✓ 公開成功: 世代 ${generation} / ${recomputed.length}ヶ月。`);

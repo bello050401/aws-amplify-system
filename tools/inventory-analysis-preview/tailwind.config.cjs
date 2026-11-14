@@ -1,0 +1,1 @@
+module.exports={content:{relative:true,files:['./app/**/*.{ts,tsx}','../../app/inventory/(protected)/sales/InventoryValuePanel.tsx','../../app/inventory/(protected)/sales/SalesTrendChart.tsx']},theme:{extend:{}},plugins:[]};

@@ -1,5 +1,5 @@
 import {ListPreferences} from '../domain/listPreferences';
-import {readInventoryValue} from '../runtime/service';
+import {readInventoryValue,readInventoryAnalysis} from '../runtime/service';
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { signIn, signOut, confirmSignIn, getCurrentUser } from "aws-amplify/auth";
@@ -156,6 +156,7 @@ export function LiveApp() {
     uploadPhoto: uploadInventoryPhoto,
     loadSales: readSales,
     loadInventoryValue: readInventoryValue,
+    analysis: readInventoryAnalysis,
     save: (...args) => {detailAhead.clear();return saveInventory(...args);},
     sell: (...args) => {detailAhead.clear();return sellInventory(...args);},
     split: (...args) => {detailAhead.clear();return splitInventory(...args);},

@@ -35,6 +35,23 @@ const groupAliases:Record<string,string>={
 };
 const keyForLabel=(name:string)=>groupAliases[name.replace(/\s/g,'')];
 
+/** The only workflow eligibility/cost selector; analysis must use this exact contract. */
+export function selectInventoryValueRow(row: ValueSource, masters: ReadonlyMap<string,string>) {
+  const labels = inventoryCategoryIds(row).map(id=>masters.get(id)??'不明なカテゴリ');
+  const mappedKeys=[...new Set(labels.map(keyForLabel).filter(Boolean))];
+  const groupKey=mappedKeys.includes('wholesale')?'wholesale':VALUE_GROUPS.find(g=>mappedKeys.includes(g.key))?.key;
+  const excludedLabel = labels.find(l=>nonStockCategories.has(l)) ??
+    (labels.some(l=>pendingCategories.has(l))?'入金待ち':row.saleEndDate ? '販売終了日あり' : labels.find(l=>soldCategories.has(l))) ??
+    (!groupKey?'集計区分なし':undefined);
+  const quantity=row.quantity??0;
+  const validQuantity=Number.isSafeInteger(quantity)&&quantity>=0;
+  const validPrice=Number.isSafeInteger(row.purchasePrice)&&row.purchasePrice!>=0;
+  const amount=validPrice&&validQuantity?row.purchasePrice!*quantity:0;
+  if(!Number.isSafeInteger(amount))throw new Error('在庫金額が計算上限を超えています');
+  return {labels,mappedKeys,groupKey,excludedLabel,quantity,validQuantity,validPrice,amount,
+    eligible:!row.deletedAt&&!excludedLabel&&validQuantity&&quantity>0};
+}
+
 export function buildInventoryValue(rows: readonly ValueSource[], categories: readonly {id:string;name:string}[], asOf: string): InventoryValue {
   const masters = new Map(categories.map(c => [c.id,c.name]));
   const groups: ValueGroup[] = VALUE_GROUPS.map(g => ({...g, amount:0,quantity:0,count:0}));
@@ -47,17 +64,7 @@ export function buildInventoryValue(rows: readonly ValueSource[], categories: re
     if (seen.has(row.id)) throw new Error('在庫IDが重複しています');
     seen.add(row.id);
     if (row.deletedAt) continue;
-    const labels = inventoryCategoryIds(row).map(id=>masters.get(id)??'不明なカテゴリ');
-    const mappedKeys=[...new Set(labels.map(keyForLabel).filter(Boolean))];
-    // Wholesale is its own channel, even if the item also has a workflow category.
-    const groupKey=mappedKeys.includes('wholesale')?'wholesale':groups.find(g=>mappedKeys.includes(g.key))?.key;
-    const excludedLabel = labels.find(l=>nonStockCategories.has(l)) ??
-      (labels.some(l=>pendingCategories.has(l))?'入金待ち':row.saleEndDate ? '販売終了日あり' : labels.find(l=>soldCategories.has(l))) ??
-      (!groupKey?'集計区分なし':undefined);
-    const quantity = row.quantity ?? 0;
-    const validPrice = Number.isSafeInteger(row.purchasePrice) && row.purchasePrice! >= 0;
-    const amount = validPrice && Number.isSafeInteger(quantity) && quantity>=0 ? row.purchasePrice!*quantity : 0;
-    if (!Number.isSafeInteger(amount)) throw new Error('在庫金額が計算上限を超えています');
+    const {mappedKeys,groupKey,excludedLabel,quantity,validPrice,amount} = selectInventoryValueRow(row,masters);
     if (excludedLabel) {
       const entry = excluded.get(excludedLabel)??{label:excludedLabel,amount:0,count:0};
       entry.amount+=amount; entry.count++; excluded.set(excludedLabel,entry);

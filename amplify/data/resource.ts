@@ -2417,6 +2417,7 @@ const schema = a.schema({
       monthsJson: a.string().required(),
       /** Same scan/generation as sales; no per-page inventory scan. */
       inventoryValueJson: a.string(),
+      analysisManifestJson: a.string(),
       /** 何件の在庫レコードから作ったか(母集団の大きさ)。 */
       sourceRecordCount: a.integer().required(),
       /** いつ作り直したか(= generation と同じ値)。画面に「○○時点の集計」と出すため。 */
@@ -2425,10 +2426,25 @@ const schema = a.schema({
     })
     .identifier(["id"])
     .authorization((allow) => [
-      allow.group("ADMIN"),
-      allow.group("EDITOR"),
+      allow.group("ADMIN").to(["read"]),
+      allow.group("EDITOR").to(["read"]),
       allow.group("VIEWER").to(["read"]),
     ]),
+
+  // Current settings and immutable revisions share a table. Access goes through
+  // the server so a conditional transaction is required for every edit.
+  InventoryAnalysisMetadata: a
+    .model({
+      scope: a.string().required(),
+      id: a.string().required(),
+      revision: a.integer().required(),
+      metadataEpoch: a.integer(),
+      valueJson: a.string(),
+      changedBy: a.string(),
+      changedAt: a.datetime(),
+    })
+    .identifier(["scope", "id"])
+    .authorization(allow => [allow.group("ADMIN").to(["read"])]),
 
   /**
    * 売上月次集計の定期再構築(amplify/functions/sales-aggregate-scheduler)

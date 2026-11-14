@@ -11,59 +11,48 @@ import {
 } from "@/lib/inventory/sales";
 import { InventoryHeader } from "../../InventoryHeader";
 import { YearMonthPicker } from "./YearMonthPicker";
-import { SalesTrendChart } from "./SalesTrendChart";
+import { jstDay,setLegacyMonth } from "@/lib/inventory/analysisUi/model";
+import { SalesTrendDisclosure } from "./SalesTrendChart";
 import { SalesItemsSection } from "./SalesItemsSection";
-import {InventoryValuePanel,SalesViewTabs} from './InventoryValuePanel';
+import {InventoryValuePicker} from './InventoryValuePanel';
+import {SalesAnalysisTabs} from './analysis/SalesAnalysis';
+import {ProductionSalesAnalysis} from './analysis/ProductionSalesAnalysis';
+import './analysis/analysis.css';
 import {loadInventoryValue} from '@/lib/inventory/inventoryValueStore';
 
 interface SalesPageProps {
-  searchParams: Promise<{ y?: string; m?: string; view?: string; month?:string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }
 
-/**
- * 売上画面 (夜間開発指示書 §12)。左サイドバーの「売上」から遷移。
- *
- * 集計基準は販売終了日(saleEndDate) — 指定年月に販売終了したInventory
- * を対象にする(空欄は対象外)。詳細検索とは別機能 — フィルタ条件を
- * 組み立てる詳細検索と違い、ここは「月を選ぶ」だけの固定フォーマット
- * の集計画面。
- *
- * 権限: ADMIN/EDITOR/VIEWERいずれも閲覧可能 — 個々のInventoryレコード
- * が持つ購入価格/送料はすでに商品詳細でVIEWERも読める値であり(既存の
- * 権限モデル)、それを月単位で合計して見せるだけなので新しい権限区分
- * は設けていない(エクスポート機能と同じ考え方)。
- *
- * ── 2026-09-11 追加修正(初回アクセスで在庫走査を起動しない) ────────
- *
- * この関数(ページ本体)が呼ぶのは lib/inventory/salesView.ts の
- * loadSalesSummary のみ——集計テーブル(SalesAggregateSnapshot)への
- * GetItem 1回だけで、Inventoryへは一切アクセスしない。以前はここで
- * 「集計が欠損している月はその場でInventory全件/月フィルタ付き走査」
- * というフォールバックをしていたため、集計が1ヶ月でも欠けていれば
- * 画面を開くだけで実質全件Scanが走っていた(通常運用でも普通に起きる
- * 状態)。いまは集計が無い/読めない月は「未集計」「取得エラー」と
- * 明示するだけで、Inventoryへは読みに行かない。
- *
- * 対象商品一覧(明細)はこのページの初期描画には含めない——下の
- * SalesItemsSection(クライアントコンポーネント)がユーザーの明示的な
- * 操作("明細を表示")を受けてServer Action経由でloadSalesItemsを呼ぶ。
- *
- * ── 2026-09-11 世代整合性修正(集計テーブルの再構築) ────────────
- *
- * loadSalesSummaryの内部実装が「月ごとの複数行(旧SalesMonthlyAggregate)」
- * から「全月ぶんをまとめた単一スナップショット(SalesAggregateSnapshot)」
- * へ置き換わった——12時間ごとの定期実行が複数月を横断する訂正の反映中に
- * 一部だけ失敗しても、この画面が新旧世代の混在した値を表示することは
- * 構造的に起きない(docs/sales-aggregate-snapshot-consistency-
- * 20260911.md参照)。このページ自体のコードは変わっていない。
- */
 export default async function SalesPage(props: SalesPageProps) {
-  const searchParams = await props.searchParams;
+  const raw = await props.searchParams;
+  const searchParams = Object.fromEntries(Object.entries(raw).filter((entry):entry is [string,string]=>typeof entry[1] === "string"));
   const role = await getInventoryRole();
   if (!role) return null;
-  if(searchParams.view==='inventory') {
-    const inventory=await loadInventoryValue(searchParams.month||undefined);
-    return <div className="flex h-full flex-col"><InventoryHeader role={role} center={<h1 className="text-base font-bold">売上</h1>}/><div className="min-h-0 flex-1 overflow-y-auto px-6 py-5"><SalesViewTabs inventory/><InventoryValuePanel view={inventory} month={searchParams.month}/></div></div>;
+  const now = new Date();
+  const today = jstDay(now);
+  const canManage = role === "ADMIN";
+  if (searchParams.view === 'breakdown') {
+    return <div className="flex h-full flex-col">
+      <InventoryHeader role={role} center={<h1 className="text-base font-bold">売上</h1>}/>
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-6">
+        <SalesAnalysisTabs today={today}/>
+        <ProductionSalesAnalysis today={today} canManage={canManage}/>
+      </div>
+    </div>;
+  }
+  if (searchParams.view === 'inventory') {
+    const inventory = await loadInventoryValue(searchParams.month || undefined);
+    return <div className="flex h-full flex-col">
+      <InventoryHeader role={role} center={<h1 className="text-base font-bold">売上</h1>}/>
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-6">
+        <SalesAnalysisTabs today={today}/>
+        <div className="space-y-5">
+          <InventoryValuePicker key={searchParams.month} month={searchParams.month} query={searchParams}/>
+          <ProductionSalesAnalysis today={today} canManage={canManage} inventory={inventory}/>
+        </div>
+      </div>
+    </div>;
   }
 
   // 追加修正指示 §5: 「今日」「今月」の判定はすべてJST(Asia/Tokyo)基準
@@ -76,7 +65,6 @@ export default async function SalesPage(props: SalesPageProps) {
   // を基準にする——isCurrentJstYearMonthとforecastReferenceDayが別々に
   // new Date()を呼ぶと、理論上はミリ秒単位でズレた「今」を基準に判定して
   // しまう(実害はほぼ無いが、根拠を1点に揃えるという方針そのものに反する)。
-  const now = new Date();
   const jstNow = nowInJst(now);
   // 月と同じように年も検証する。以前は年だけ素通りで、URLを直接
   // 書き換えると「-5年8月」「99999年1月」「10000000000年3月」といった
@@ -92,7 +80,9 @@ export default async function SalesPage(props: SalesPageProps) {
   const summary = view.totals;
 
   function monthHref(y: number, m: number): string {
-    return `/inventory/sales?y=${y}&m=${m}`;
+    const next=new URLSearchParams(searchParams);
+    setLegacyMonth(next,y,m);
+    return "/inventory/sales?"+next;
   }
 
   const prev = shiftYearMonth(year, month, -1);
@@ -134,8 +124,10 @@ export default async function SalesPage(props: SalesPageProps) {
   return (
     <div className="flex h-full flex-col">
       <InventoryHeader role={role} center={<h1 className="text-base font-bold text-gray-900">売上</h1>} />
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-        <SalesViewTabs/>
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-6">
+        <SalesAnalysisTabs today={today}/>
+        <ProductionSalesAnalysis today={today} canManage={canManage} salesGeneration={view.aggregateGeneration} syncLegacyMonths/>
+        <h2 className="mb-2 text-base font-semibold text-gray-900">月次売上・予測</h2>
         {/* 集計をいつ作り直したか、そもそも集計が無い/読めないのかを
             隠さずに出す —— §8「初期未集計と実0件を区別」の要件その
             もの。0円と「まだ集計されていない」を絶対に混同させない。
@@ -218,13 +210,7 @@ export default async function SalesPage(props: SalesPageProps) {
           <SummaryTile label="平均販売単価" value={view.status === "ok" ? yen(Math.round(summary.averageSalePrice)) : "—"} />
         </div>
 
-        {/* BELLO統合改修 master指示書(2026-08-29統合改修版) §20: 12ヶ月
-            推移グラフ(売上高・粗利益)。集計が無い/取得エラーの月は
-            折れ線を途切れさせて表示する(SalesTrendChart側)。 */}
-        <div className="mb-6 max-w-3xl border border-gray-200 p-3">
-          <p className="mb-2 text-[11px] font-bold text-gray-400">直近12ヶ月の推移</p>
-          <SalesTrendChart points={view.trend} />
-        </div>
+        <SalesTrendDisclosure points={view.trend}/>
 
         {/* 対象商品一覧(明細)。ユーザーが明示的に開くまでInventoryへは
             アクセスしない(SalesItemsSection参照)。 */}

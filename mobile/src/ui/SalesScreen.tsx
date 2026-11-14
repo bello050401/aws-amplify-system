@@ -5,20 +5,66 @@ import {ActivityIndicator,Modal,Pressable,ScrollView,StyleSheet,Text,View} from 
 import Ionicons from "@expo/vector-icons/Ionicons";
 import type {SalesSummaryView} from "../../../lib/inventory/salesViewTypes";
 import {calculateItemGrossProfit,nowInJst,shiftYearMonth,formatJstDateTime,type SalesTargetItem} from "../../../lib/inventory/sales";
-import {SalesTrendChart} from "./SalesTrendChart";
+import {SalesTrendDisclosure} from "./SalesTrendChart";
 import {colors} from "./theme";
 import {InventoryValueScreen} from './InventoryValueScreen';
+import {NativeAnalysis,type NativeAnalysisProps} from './NativeAnalysis';
+import {analysisRequest,jstDay,selectedSalesMonth,TABS,type AnalysisState} from '../../../lib/inventory/analysisUi/model';
+import {useAnalysis} from '../../../lib/inventory/analysisUi/useAnalysis';
 import type {InventoryValueView} from '../../../lib/inventory/inventoryValue';
 export interface SalesResponse {view:SalesSummaryView;forecast:null|{averageDailySales:number;projectedMonthEndSales:number;month:number;today:number;totalDaysInMonth:number};forecastUnavailable:boolean;items?:SalesTargetItem[]}
-type SalesProps={load:(year:number,month:number,items?:boolean)=>Promise<SalesResponse>;loadInventoryValue?:(month?:string)=>Promise<InventoryValueView>;offline:boolean;onOpen:(id:string)=>void;canIssueDocuments?:boolean};
-export function SalesScreen(props:SalesProps){
-  const [tab,setTab]=useState<'sales'|'inventory'>('sales');
-  const [visited,setVisited]=useState(false);
-  return <View style={{flex:1,backgroundColor:'white'}}><View style={{flexDirection:'row',marginHorizontal:18,marginVertical:10,padding:4,borderRadius:12,backgroundColor:'#eef2ef'}}>{(['sales','inventory'] as const).map(key=><Pressable key={key} accessibilityRole="tab" accessibilityState={{selected:tab===key}} onPress={()=>{setTab(key);if(key==='inventory')setVisited(true);}} style={{flex:1,minHeight:44,alignItems:'center',justifyContent:'center',borderRadius:9,backgroundColor:tab===key?'white':'transparent'}}><Text style={{fontSize:16,fontWeight:'700',color:tab===key?'#264e47':'#77817b'}}>{key==='sales'?'売上':'在庫金額'}</Text></Pressable>)}</View><View style={{flex:1,display:tab==='sales'?'flex':'none'}}><SalesSummaryScreen {...props}/></View>{visited&&<View style={{flex:1,display:tab==='inventory'?'flex':'none'}}>{props.loadInventoryValue?<InventoryValueScreen load={props.loadInventoryValue} offline={props.offline} onOpen={props.onOpen}/>:<Text style={{padding:20}}>在庫金額を取得できませんでした。</Text>}</View>}</View>;
+interface SalesProps {
+  load:(year:number,month:number,items?:boolean)=>Promise<SalesResponse>;
+  loadInventoryValue?:(month?:string)=>Promise<InventoryValueView>;
+  analysis?:NativeAnalysisProps['ports'];
+  analysisState:AnalysisState;
+  today?:string;
+  onAnalysisChange:(change:Partial<AnalysisState>)=>void;
+  offline:boolean;
+  onOpen:(id:string)=>void;
+  canIssueDocuments?:boolean;
+  renderSaleOperation?:(operation:"purchases"|"invoice",close:()=>void)=>React.ReactNode;
+  legacyMonth:{year:number;month:number};
+  onLegacyMonthChange:(month:{year:number;month:number})=>void;
 }
-function SalesSummaryScreen({load,offline,onOpen,canIssueDocuments=false}:SalesProps){
+export function SalesScreen(props:SalesProps) {
+  const {analysisState:state,onAnalysisChange} = props;
+  const today = props.today ?? jstDay();
+  function change(selection:Partial<AnalysisState>) {
+    if (state.tab === 'sales' && (selection.preset || selection.saleMonth)) {
+      const chosen = selectedSalesMonth({...state,...selection},today);
+      if (chosen) {
+        const [year,month] = chosen.split('-').map(Number);
+        props.onLegacyMonthChange({year,month});
+      }
+    }
+    onAnalysisChange(selection);
+  }
+  const read = useAnalysis(props.analysis?.load,state.tab === 'inventory' && !state.slice ? analysisRequest(state,today) : null,!props.offline);
+  const inventoryView = read.data?.status === 'ok'
+    ? {status:'ok' as const,value:{...read.data.inventoryValue,month:state.inventoryMonth || undefined}}
+    : undefined;
+  const renderAnalysis = (salesGeneration?:string|null,onExpired?:()=>void) => <NativeAnalysis
+    state={state} change={change} ports={props.analysis} offline={props.offline}
+    onOpen={props.onOpen} today={today} inventoryRead={state.tab === 'inventory' ? read : undefined}
+    salesGeneration={salesGeneration} onExpired={onExpired}/>;
+  return <View style={{flex:1,backgroundColor:'white'}}>
+    <View style={s.tabs} accessibilityLabel="売上・在庫の切り替え">
+      {TABS.map(({key,label})=><Pressable key={key} accessibilityRole="tab" accessibilityLabel={label} aria-selected={state.tab===key} accessibilityState={{selected:state.tab===key}}
+        onPress={()=>change(key===state.tab ? {} : {tab:key,slice:null})} style={[s.tab,state.tab===key&&s.tabActive]}>
+        <Text style={[s.tabText,state.tab===key&&s.tabTextActive]}>{label}</Text>
+      </Pressable>)}
+    </View>
+    {state.tab === 'sales' ? <SalesSummaryScreen {...props} renderAnalysis={renderAnalysis}/>
+      : state.tab === 'inventory' && props.loadInventoryValue && !state.slice
+        ? <InventoryValueScreen load={props.loadInventoryValue} offline={props.offline} month={state.inventoryMonth || undefined}
+            setMonth={inventoryMonth=>change({inventoryMonth:inventoryMonth??'',slice:null})} analysis={renderAnalysis()} analysisView={inventoryView}/>
+        : <ScrollView contentContainerStyle={s.body}>{renderAnalysis()}</ScrollView>}
+  </View>;
+}
+function SalesSummaryScreen({load,offline,onOpen,canIssueDocuments=false,legacyMonth:month,onLegacyMonthChange:setMonth,renderAnalysis,analysisState,renderSaleOperation}:SalesProps & {renderAnalysis:(generation:string|null,onExpired:()=>void)=>React.ReactNode}){
   const [document,setDocument]=useState<"invoice"|"purchases"|null>(null);
-  const today=nowInJst(new Date());const [month,setMonth]=useState({year:today.year,month:today.month});
+  const today=nowInJst(new Date());
   const [data,setData]=useState<SalesResponse|null>(null);const [error,setError]=useState("");const [busy,setBusy]=useState(false);
   const version=useRef(0);
   const [picker,setPicker]=useState(false);const [pickYear,setPickYear]=useState(today.year);
@@ -26,13 +72,19 @@ function SalesSummaryScreen({load,offline,onOpen,canIssueDocuments=false}:SalesP
     try{const value=await load(month.year,month.month);if(attempt===version.current)setData(value);}catch{if(attempt===version.current)setError("売上を取得できませんでした。再読み込みしてください。");}finally{if(attempt===version.current)setBusy(false);}};
   useEffect(()=>{void refresh();return()=>{version.current++;};},[month.year,month.month,offline,load]);
   const yen=(n:number)=>"¥"+Math.round(n).toLocaleString("ja-JP");
-  const view=data?.view;const totals=view?.totals;const change=(delta:number)=>setMonth(value=>shiftYearMonth(value.year,value.month,delta));
+  const loaded = !offline && data?.view.year===month.year && data.view.month===month.month ? data : null;
+  const view=loaded?.view;
+  const analysisElement = analysisState.slice || view || error ? renderAnalysis(view?.aggregateGeneration ?? null,()=>void refresh()) : null;
+  const totals=view?.totals;const change=(delta:number)=>setMonth(shiftYearMonth(month.year,month.month,delta));
   const button=(label:string,action:()=>void,disabled=false)=><Pressable accessibilityRole="button" disabled={disabled} onPress={action} style={[s.button,disabled&&{opacity:.4}]}><Text style={s.link}>{label}</Text></Pressable>;
   const tile=(label:string,value:string)=><View style={s.tile} key={label}><Text style={s.tileLabel}>{label}</Text><Text style={s.amount}>{value}</Text></View>;
+  if(document && canIssueDocuments && renderSaleOperation) return <>{renderSaleOperation(document,()=>setDocument(null))}</>;
   if(document==='purchases'&&canIssueDocuments)return <PurchaseEntry onClose={()=>setDocument(null)} onOpen={onOpen}/>;
   if(document==='invoice'&&canIssueDocuments)return <DocumentEntry onClose={()=>setDocument(null)}/>;
+  if(analysisState.slice)return <ScrollView contentContainerStyle={s.body}>{analysisElement}</ScrollView>;
   return <View style={s.screen}>
     <View style={s.controls}>
+      <Text style={s.heading}>月次売上・予測</Text>
       <View style={s.row}>
         <Pressable accessibilityRole="button" accessibilityLabel="前月" disabled={month.year===2000&&month.month===1} onPress={()=>change(-1)} style={s.arrow}><Ionicons name="chevron-back" size={22} color="#374151"/></Pressable>
         <Pressable accessibilityRole="button" accessibilityLabel={month.year+"年"+month.month+"月を選択"} accessibilityState={{expanded:picker}} onPress={()=>{setPickYear(month.year);setPicker(true);}} style={s.monthButton}><Text style={s.monthTitle}>{month.year}年{month.month}月</Text><Ionicons name="chevron-down" size={17} color="#6b7280"/></Pressable>
@@ -42,14 +94,15 @@ function SalesSummaryScreen({load,offline,onOpen,canIssueDocuments=false}:SalesP
 
     </View>
     <ScrollView contentContainerStyle={s.body}>
+      {analysisElement}
       {busy?<ActivityIndicator accessibilityLabel="売上を読み込み中"/>:null}{error?<Text accessibilityRole="alert" style={s.error}>{error}</Text>:null}
       {view&&<>
         <Text style={s.hint}>{view.status==="ok"&&view.aggregateRebuiltAt?"集計："+formatJstDateTime(view.aggregateRebuiltAt)+" JST":view.status==="missing"?"この月は未集計です。売上が0円という意味ではありません。":"集計を取得できませんでした。"}</Text>
-        {data.forecast&&<View style={s.section}><Text style={s.heading}>今月の売上着地予測</Text><View style={s.tiles}>{tile("1日平均売上",yen(data.forecast.averageDailySales))}{tile("月末の売上予測",yen(data.forecast.projectedMonthEndSales))}</View><Text style={s.hint}>{data.forecast.month}月{data.forecast.today}日時点 / {data.forecast.totalDaysInMonth}日間</Text></View>}
-        {data.forecastUnavailable?<Text style={s.hint}>集計日時を確認できないため、着地予測は算出できません。</Text>:null}
+        {loaded.forecast&&<View style={s.section}><Text style={s.heading}>今月の売上着地予測</Text><View style={s.tiles}>{tile("1日平均売上",yen(loaded.forecast.averageDailySales))}{tile("月末の売上予測",yen(loaded.forecast.projectedMonthEndSales))}</View><Text style={s.hint}>{loaded.forecast.month}月{loaded.forecast.today}日時点 / {loaded.forecast.totalDaysInMonth}日間</Text></View>}
+        {loaded.forecastUnavailable?<Text style={s.hint}>集計日時を確認できないため、着地予測は算出できません。</Text>:null}
         <View style={s.tiles}>{totals&&[["売上高",yen(totals.totalSales)],["原価",yen(totals.totalCost)],["粗利益",yen(totals.totalProfit)],["原価率",totals.costRate.toFixed(1)+"%"],["送料（参考）",yen(totals.totalShipping)],["販売件数",totals.count+"件"],["平均販売単価",yen(totals.averageSalePrice)]].map(([label,value])=>tile(label,view.status==="ok"?value:"—"))}</View>
         <Text style={s.note}>送料は原価に含みません。</Text>
-        <View style={s.chart}><Text style={s.heading}>直近12ヶ月の推移</Text><SalesTrendChart key={month.year+"-"+month.month} points={view.trend}/></View>
+        <SalesTrendDisclosure key={month.year+"-"+month.month} points={view.trend}/>
       </>}
       {canIssueDocuments&&<View style={s.section}><Text style={s.heading}>販売後の処理</Text>{button("売却管理",()=>setDocument("purchases"),offline)}{button("請求書発行",()=>setDocument("invoice"),offline)}</View>}
     </ScrollView>
@@ -66,6 +119,7 @@ function SalesSummaryScreen({load,offline,onOpen,canIssueDocuments=false}:SalesP
   </View>;
 }
 const s=StyleSheet.create({
+  tabs:{flexDirection:'row',marginHorizontal:14,marginVertical:8,padding:4,borderRadius:12,backgroundColor:'#eef2ef'},tab:{flex:1,minHeight:44,alignItems:'center',justifyContent:'center',borderRadius:9},tabActive:{backgroundColor:'white'},tabText:{fontSize:15,fontWeight:'700',color:'#526359'},tabTextActive:{color:'#264e47'},
   screen:{flex:1,backgroundColor:"white"},controls:{paddingHorizontal:16,paddingTop:4,paddingBottom:8,borderBottomWidth:1,borderColor:"#e5e7eb",backgroundColor:"white"},
   row:{flexDirection:"row",alignItems:"center",justifyContent:"space-between"},arrow:{width:44,height:44,alignItems:"center",justifyContent:"center"},monthButton:{minHeight:44,flex:1,flexDirection:"row",gap:8,alignItems:"center",justifyContent:"center"},monthTitle:{fontSize:20,fontWeight:"700",color:"#111827"},
   selected:{backgroundColor:"#111827"},white:{color:"white"},reload:{height:44,width:44,alignItems:"center",justifyContent:"center"},

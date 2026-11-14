@@ -10,6 +10,7 @@ import { isInventoryItem } from "../domain/snapshot";
 import { isInventoryGallery, type InventoryGallery, type InventoryItem, type InventoryOptions, type InventoryThumbnail, type PendingPhoto, type UploadedPhoto } from "../domain/inventory";
 import { isMobileFeatures, type MobileFeatures } from "../domain/access";
 import type {SalesResponse} from "../ui/SalesScreen";
+import type {AnalysisPorts,AnalysisResult,AnalysisTransport,DetailResult} from '../../../lib/inventory/analysisUi/model';
 import { InventoryWriteError, type SaveRequest } from "../domain/editor";
 import { InventoryReadError } from "../domain/readError";
 import type { DeleteRequest } from "../domain/inventoryActions";
@@ -280,6 +281,29 @@ export async function readSales(year:number,month:number,items=false):Promise<Sa
   if(value.owner!==session.owner)throw new Error("売上を取得できませんでした。");
   return value;
 }
+async function readAnalysis<T>(input:AnalysisTransport):Promise<T> {
+  const session = await authenticatedSession();
+  const controller = new AbortController();
+  const timeout = setTimeout(()=>controller.abort(),20_000);
+  try {
+    const response = await fetch(API_ORIGIN+'/api/mobile/sales/analysis',{
+      method:'POST',credentials:'same-origin',redirect:'error',cache:'no-store',signal:controller.signal,
+      headers:{Accept:'application/json','Content-Type':'application/json','X-Bello-Mobile':'1',...(session.cookie?{Cookie:session.cookie}:{})},
+      body:JSON.stringify(input),
+    });
+    if (!response.ok) throw new Error('集計情報を取得できませんでした。');
+    const envelope = await response.json() as {owner?:string;result?:T};
+    if (envelope.owner!==session.owner || !envelope.result) throw new Error('集計情報を確認できませんでした。');
+    return envelope.result;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+export const readInventoryAnalysis:AnalysisPorts = {
+  load:request=>readAnalysis<AnalysisResult>({operation:'summary',request}),
+  drill:request=>readAnalysis<DetailResult>({operation:'detail',request}),
+};
+
 export async function readInventoryValue(month?:string):Promise<import('../../../lib/inventory/inventoryValue').InventoryValueView> {
   const session=await authenticatedSession();
   const value=await jsonRequest('/api/mobile/sales?view=inventory'+(month?'&month='+encodeURIComponent(month):''),session.cookie) as {owner:string;inventory:import('../../../lib/inventory/inventoryValue').InventoryValueView};

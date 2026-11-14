@@ -18,5 +18,7 @@ export interface SalesSummaryView {
   totals: SalesTotals;
   /** 集計をいつ作り直したか。status === "ok" のときだけ入る。 */
   aggregateRebuiltAt: string | null;
+  /** The published snapshot used for this month's totals and trend. */
+  aggregateGeneration: string | null;
   trend: SalesTrendPoint[];
 }

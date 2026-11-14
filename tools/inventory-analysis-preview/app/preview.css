@@ -1,0 +1,13 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body{margin:0;background:#fcfdfc;color:#263c35;font-family:system-ui,"Yu Gothic UI","Hiragino Kaku Gothic ProN",sans-serif}
+.preview-header{display:grid;grid-template-columns:1fr 1fr 1fr;align-items:center;padding:12px max(12px,calc((100vw - 1152px) / 2));background:white;border-bottom:1px solid #e4eae5;white-space:nowrap}
+.preview-header strong{letter-spacing:.08em}
+.preview-header span{text-align:center;font-weight:700}
+.preview-header small{text-align:right;color:#4f645a;font-size:.75rem}
+.preview-main{width:min(100%,1176px);min-height:calc(100vh - 110px);margin:0 auto;padding:18px 12px 76px}
+.preview-navigation{background:white;position:fixed;bottom:0;left:0;right:0;display:flex;justify-content:center;border-top:1px solid #e4eae5;padding:12px 0;z-index:5;font-size:.82rem;color:#526359}
+.preview-navigation>*{width:min(25%,145px);text-align:center}
+.preview-navigation strong{color:#256556}

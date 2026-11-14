@@ -1061,6 +1061,45 @@ new Alarm(integrityAlarmStack, "IntegrityAlertAlarm", {
 const salesAggregateSnapshotTable = backend.data.resources.tables["SalesAggregateSnapshot"];
 const salesAggregateRunStatusTable = backend.data.resources.tables["SalesAggregateRunStatus"];
 
+const inventoryAnalysisMetadataTable = backend.data.resources.tables["InventoryAnalysisMetadata"];
+inventoryAnalysisMetadataTable.grantReadData(backend.salesAggregateScheduler.resources.lambda);
+backend.salesAggregateScheduler.addEnvironment('INVENTORY_ANALYSIS_METADATA_TABLE_NAME', inventoryAnalysisMetadataTable.tableName);
+const analysisSnapshotResources = salesAggregateSnapshotTable.node.scope!.node.findAll().filter((node): node is CfnResource =>
+  node instanceof CfnResource && node.cfnResourceType === 'Custom::AmplifyDynamoDBTable');
+if (analysisSnapshotResources.length !== 1) throw new Error('Sales snapshot table resource must be unambiguous');
+analysisSnapshotResources[0].addPropertyOverride('attributeDefinitions', [
+  { attributeName: 'id', attributeType: 'S' },
+  { attributeName: 'analysisRetentionGroup', attributeType: 'S' },
+  { attributeName: 'analysisRetainUntil', attributeType: 'N' },
+]);
+analysisSnapshotResources[0].addPropertyOverride('globalSecondaryIndexes', [{
+  indexName: 'AnalysisRetention',
+  keySchema: [
+    { attributeName: 'analysisRetentionGroup', keyType: 'HASH' },
+    { attributeName: 'analysisRetainUntil', keyType: 'RANGE' },
+  ],
+  projection: { projectionType: 'KEYS_ONLY' },
+}]);
+backend.salesAggregateScheduler.resources.lambda.addToRolePolicy(new PolicyStatement({
+  actions: ['dynamodb:Query'], resources: [salesAggregateSnapshotTable.tableArn + '/index/AnalysisRetention'],
+}));
+if (process.env.AWS_APP_ID === 'd4hkkg7dty2du' && process.env.AWS_BRANCH === 'claude/inventory-management-system-5vbvc7') {
+  new ManagedPolicy(salesAggregateSnapshotTable, 'AnalysisRuntime', {
+    roles: [Role.fromRoleName(salesAggregateSnapshotTable, 'AnalysisWebRuntime', 'BelloAmplifyStagingComputeRole')],
+    statements: [
+      new PolicyStatement({
+        actions: ['dynamodb:GetItem', 'dynamodb:BatchGetItem'], resources: [salesAggregateSnapshotTable.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['current', 'analysis:g:*', 'analysis:d:*', 'analysis:s:*'] } },
+      }),
+      new PolicyStatement({ actions: ['dynamodb:ConditionCheckItem'], resources: [inventoryTable.tableArn] }),
+      new PolicyStatement({
+        actions: ['dynamodb:GetItem', 'dynamodb:Query', 'dynamodb:PutItem'], resources: [inventoryAnalysisMetadataTable.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['current', 'control', 'audit:*'] } },
+      }),
+    ],
+  });
+}
+
 inventoryTable.grantReadData(backend.salesAggregateScheduler.resources.lambda);
 categoryTable.grantReadData(backend.salesAggregateScheduler.resources.lambda);
 backend.salesAggregateScheduler.addEnvironment("CATEGORY_TABLE_NAME", categoryTable.tableName);

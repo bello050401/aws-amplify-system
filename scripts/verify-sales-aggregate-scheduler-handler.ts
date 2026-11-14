@@ -26,6 +26,8 @@ declare module "node:module" {
 }
 
 process.env.INVENTORY_TABLE_NAME = "mock-inventory-table";
+process.env.CATEGORY_TABLE_NAME = "mock-category-table";
+process.env.INVENTORY_ANALYSIS_METADATA_TABLE_NAME = "mock-analysis-metadata-table";
 process.env.SALES_AGGREGATE_SNAPSHOT_TABLE_NAME = "mock-snapshot-table";
 process.env.SALES_AGGREGATE_RUN_STATUS_TABLE_NAME = "mock-run-status-table";
 
@@ -35,7 +37,7 @@ const DYNAMO_MOCK_URL = mocksDir + "salesAggregateScheduler.dynamo.mock.cjs";
 
 registerHooks({
   resolve(specifier: string, context: { parentURL?: string }, nextResolve: (s: string, c: unknown) => unknown) {
-    const fromHandler = context.parentURL?.endsWith("/functions/sales-aggregate-scheduler/handler.ts");
+    const fromHandler = context.parentURL?.endsWith("/functions/sales-aggregate-scheduler/handler.ts") || context.parentURL?.includes("/lib/inventory/analysis/");
     if (fromHandler && (specifier === "@aws-sdk/client-dynamodb" || specifier === "@aws-sdk/lib-dynamodb")) {
       return { url: DYNAMO_MOCK_URL, shortCircuit: true };
     }
