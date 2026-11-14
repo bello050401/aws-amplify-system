@@ -1,5 +1,5 @@
 import { defineBackend } from "@aws-amplify/backend";
-import { CfnResource, Duration, RemovalPolicy, SecretValue, Stack } from "aws-cdk-lib";
+import { AspectPriority, Aspects, CfnResource, Duration, RemovalPolicy, SecretValue, Stack } from "aws-cdk-lib";
 import { Alarm, ComparisonOperator, Metric, TreatMissingData } from "aws-cdk-lib/aws-cloudwatch";
 import { SnsAction } from "aws-cdk-lib/aws-cloudwatch-actions";
 import { Topic } from "aws-cdk-lib/aws-sns";
@@ -1062,6 +1062,23 @@ const salesAggregateSnapshotTable = backend.data.resources.tables["SalesAggregat
 const salesAggregateRunStatusTable = backend.data.resources.tables["SalesAggregateRunStatus"];
 
 const inventoryAnalysisMetadataTable = backend.data.resources.tables["InventoryAnalysisMetadata"];
+// Analysis classifications and saved quantity plans are user-managed data.
+// Keep both analysis tables when rolling back UI/functions, and never let an
+// index/schema update silently replace either table. Other models are unchanged.
+for (const table of [inventoryAnalysisMetadataTable, salesAggregateSnapshotTable]) {
+  const resources = table.node.scope!.node.findAll().filter((node): node is CfnResource =>
+    node instanceof CfnResource && node.cfnResourceType === 'Custom::AmplifyDynamoDBTable');
+  if (resources.length !== 1) throw new Error('Analysis table resource must be unambiguous');
+  const resource = resources[0];
+  // Amplify's inherited DEFAULT-priority sandbox aspects enable GSI replacement
+  // and set DESTROY. Apply this only to these two resources, after both aspects.
+  Aspects.of(resource).add({ visit(node) {
+    if (node !== resource) return;
+    resource.applyRemovalPolicy(RemovalPolicy.RETAIN);
+    resource.addPropertyOverride('allowDestructiveGraphqlSchemaUpdates', false);
+    resource.addPropertyOverride('replaceTableUponGsiUpdate', false);
+  } }, { priority: AspectPriority.DEFAULT + 1 });
+}
 inventoryAnalysisMetadataTable.grantReadData(backend.salesAggregateScheduler.resources.lambda);
 backend.salesAggregateScheduler.addEnvironment('INVENTORY_ANALYSIS_METADATA_TABLE_NAME', inventoryAnalysisMetadataTable.tableName);
 const analysisSnapshotResources = salesAggregateSnapshotTable.node.scope!.node.findAll().filter((node): node is CfnResource =>

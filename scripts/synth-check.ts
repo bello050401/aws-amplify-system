@@ -194,6 +194,23 @@ async function main() {
   // backend cannot deploy at all, whatever the individual models look like.
   assertNoNestedStackCycles(assembly.directory);
 
+  // These contain classifications, latest saved quantity plans, and published
+  // analysis. A rollback or GSI addition must retain them, including in branch
+  // builds where Amplify's defaults differ from a sandbox.
+  for (const model of ['InventoryAnalysisMetadata', 'SalesAggregateSnapshot']) {
+    const tables = fs.readdirSync(assembly.directory).filter(file => file.endsWith('.template.json'))
+      .flatMap(file => Object.entries(JSON.parse(fs.readFileSync(path.join(assembly.directory, file), 'utf8')).Resources ?? {}))
+      .filter(([id, resource]) => id === model + 'Table' && (resource as any).Type === 'Custom::AmplifyDynamoDBTable') as [string, any][];
+    if (tables.length !== 1) throw new Error('Analysis preservation target is ambiguous: ' + model);
+    const table = tables[0][1];
+    if (table.DeletionPolicy !== 'Retain' || table.UpdateReplacePolicy !== 'Retain' ||
+        table.Properties.allowDestructiveGraphqlSchemaUpdates !== false ||
+        table.Properties.replaceTableUponGsiUpdate !== false) {
+      throw new Error('Analysis data could be removed/replaced: ' + model);
+    }
+  }
+  console.log('✓ Analysis data: both tables retained on removal/replacement; destructive schema/GSI replacement disabled.');
+
   const compactTables = findFilesContaining(assembly.directory, 'inventorySearchCompactV1')
     .filter(file => file.endsWith('.template.json'))
     .flatMap(file => Object.values(JSON.parse(fs.readFileSync(file, 'utf8')).Resources ?? {}) as any[])
