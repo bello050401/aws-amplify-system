@@ -223,7 +223,7 @@ export function buildAnalysis(
   const result: AnalysisBuild = {
     metadata: {
       version: ANALYSIS_VERSION, generation, asOf, timezone: 'Asia/Tokyo', scopeId: 'bello-stock-and-closed-sales',
-      amountBasis: 'JPY; stock unit acquisition cost; closed-sale total; verified acquisition and retail cost',
+      amountBasis: '金額は円表示。在庫は登録購入単価、売上は確定販売総額、仕入れ・小売原価は確認済み金額で集計。',
       metadataVersions: Object.fromEntries(metadata.versions),
       coverageStart, coverageEnd: today, accuracy: 'captured-current-source',
       sourceRecordCount: rows.length, unlocatedAcquisitionRecords: 0, unlocatedSalesRecords: 0,
