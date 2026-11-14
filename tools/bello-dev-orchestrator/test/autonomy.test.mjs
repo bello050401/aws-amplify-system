@@ -7,6 +7,8 @@ import { makeReport } from '../src/runner/fakeRunner.mjs';
 import { runProcess, localEnvironment } from '../src/pipeline/process.mjs';
 import { IndependentVerifier } from '../src/pipeline/verification.mjs';
 import { CodexRunner, ImplementationRouter, codexReportSchema } from '../src/runner/codexRunner.mjs';
+import { CodexReviewEngine } from '../src/review/codexReview.mjs';
+import { makeReview } from '../src/review/fakeReview.mjs';
 import { StagingDelivery, AmplifyStaging, stagingPolicy } from '../src/pipeline/staging.mjs';
 import { Notifications } from '../src/pipeline/notifications.mjs';
 import { STATES } from '../src/core/states.mjs';
@@ -68,12 +70,15 @@ test('Codex runner passes stdin/schema/worktree sandbox, validates report and ta
   const h=await harness();
   try {
     let seen;
+    let reportTaskId = h.task.id;
     const task={...h.task,work_dir:h.config.repoPath,isolation:'worktree'};
     const execute=async options=>{
+      if (options.args[0] === 'login') return { ok: true, stdout: 'Logged in using ChatGPT' };
       seen=options;
-      const report=makeReport(task.id);
-      fs.writeFileSync(options.args[options.args.indexOf('--output-last-message')+1],JSON.stringify(report));
-      return {ok:true,exitCode:0,stdout:'',stderr:''};
+      const outputIndex = options.args.indexOf('--output-last-message');
+      assert.ok(outputIndex >= 0);
+      fs.writeFileSync(options.args[outputIndex + 1], JSON.stringify(makeReport(reportTaskId)));
+      return {ok:true,exitCode:0,stdout:'{"type":"turn.completed"}',stderr:''};
     };
     const runner=new CodexRunner({config:{codex:{}},paths:h.paths,logger:h.logger,execute,resolveExecutable:()=> 'fixture-codex.exe'});
     assert.equal((await runner.run({task,instruction:'do task'})).ok,true);
@@ -88,7 +93,7 @@ test('Codex runner passes stdin/schema/worktree sandbox, validates report and ta
     const schema=codexReportSchema();
     assert.equal(schema.required.length,Object.keys(schema.properties).length);
     assert.equal(schema.properties.commandsRun.anyOf[1].type,'null');
-    runner.execute=async opts=>{await execute(opts); const file=opts.args[opts.args.indexOf('--output-last-message')+1]; const report=JSON.parse(fs.readFileSync(file));report.taskId='wrong';fs.writeFileSync(file,JSON.stringify(report));return {ok:true,exitCode:0};};
+    reportTaskId = 'wrong';
     assert.equal((await runner.run({task,instruction:'x'})).ok,false);
   } finally {h.cleanup();}
 });
@@ -101,6 +106,43 @@ test('implementation provider selection persists and routes only the next run',a
     h.repo.store.setMeta('implementationProvider','codex');
     assert.equal(await router.run({task:h.task}),'codex');
   } finally {h.cleanup();}
+});
+
+test('Codex independent review records explicit effort and refuses acceptance with incomplete Git evidence', async t => {
+  const h = await harness();
+  t.after(() => h.cleanup());
+  let request;
+  const engine = new CodexReviewEngine({
+    config: {
+      codex: { executable: 'codex' },
+      review: { codex: { model: 'gpt-6.1-sol', reasoningEffort: 'high' }, maxDiffChars: 1000, requestTimeoutSeconds: 30 },
+    },
+    paths: h.paths,
+    resolveExecutable: () => 'codex',
+    execute: async options => {
+      if (options.args[0] === 'login') return { ok: true, stdout: 'Logged in using ChatGPT' };
+      request = options;
+      const answer = options.args[options.args.indexOf('--output-last-message') + 1];
+      fs.writeFileSync(answer, JSON.stringify(makeReview('accept_and_continue')));
+      return { ok: true, stdout: JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 20, output_tokens: 5 } }) };
+    },
+  });
+  const task = { ...h.task, isolation: 'worktree', work_dir: h.config.repoPath };
+  const args = { task, report: makeReport(task.id), independentVerification: { passed: true, receipt: { results: [{ name: 'host test', passed: true, exitCode: 0 }] } } };
+  const accepted = await engine.review(args);
+  assert.equal(accepted.review.decision, 'accept_and_continue');
+  assert.equal(accepted.meta.reasoningEffort, 'high');
+  assert.equal(accepted.meta.usage.input_tokens, 20);
+  assert.ok(request.args.includes('model_reasoning_effort="high"'));
+  assert.ok(request.args.includes('read-only'));
+  assert.ok(request.input.includes('host test'));
+
+  fs.writeFileSync(path.join(task.work_dir, 'README.md'), 'X'.repeat(1200));
+  assert.equal((await engine.review(args)).review.decision, 'pause_for_user_review');
+  fs.writeFileSync(path.join(task.work_dir, 'README.md'), '# test\n');
+  fs.writeFileSync(path.join(task.work_dir, 'untracked.txt'), 'an unreviewed file');
+  assert.equal((await engine.review(args)).review.decision, 'pause_for_user_review');
+  assert.equal((await engine.review({ ...args, task: { ...task, base_commit: 'missing-base' } })).review.decision, 'pause_for_user_review');
 });
 
 test('staging policy denies production, unknown data boundary and infrastructure changes',()=>{

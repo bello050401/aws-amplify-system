@@ -6,6 +6,7 @@ import { redactValue } from "../log/redact.mjs";
 import { routeModel, hash } from "./policy.mjs";
 import {
   planWork,
+  modelKey,
   selectForWork,
   verifyEvaluationEvidence,
 } from "./taskRouting.mjs";
@@ -23,30 +24,30 @@ export function implementationFailure(result) {
     result.providerError || result.error || result.stderrTail || "",
   );
   if (
-    result.apiErrorStatus === 429 ||
+    result.providerStatus === "capacity" || result.apiErrorStatus === 429 ||
     /weekly limit|usage limit|rate.limit|quota.exceeded/i.test(text)
   )
     return {
       status: "capacity",
       effectCompleted: true,
-      reason: "Implementation provider usage limit; no model escalation",
+      reason: text || "Implementation provider usage limit; no model escalation",
     };
   if (
-    result.apiErrorStatus === 401 ||
+    result.providerStatus === "auth" || result.apiErrorStatus === 401 ||
     /not logged in|authentication.required|login.required/i.test(text)
   )
     return {
       status: "auth",
       effectCompleted: true,
-      reason: "Implementation provider authentication required",
+      reason: text || "Implementation provider authentication required",
     };
-  if (result.terminationReason === "spawn_failed")
+  if (result.providerStatus === "blocked" || ["spawn_failed", "timeout", "output_limit", "stopped"].includes(result.terminationReason))
     return {
       status: "blocked",
       effectCompleted: true,
-      reason: "Implementation executable could not start",
+      reason: text || "Implementation executable stopped: " + result.terminationReason,
     };
-  return { status: "failed" };
+  return { status: "failed", reason: text || result.reportErrors?.join("; ") || undefined };
 }
 
 /** Adapter for the existing Runner, IndependentVerifier and staging delivery.
@@ -157,7 +158,7 @@ export function existingAdapters({
         candidate.provider === baseline.provider &&
         (await modelAvailable(candidate))
       )
-        availability.add(candidate.provider + ":" + candidate.model);
+        availability.add(modelKey(candidate));
     }
     const selection = selectForWork({
       policy: run.configSnapshot.taskRouting,
@@ -167,7 +168,7 @@ export function existingAdapters({
       logicalFailures: run.logicalFailures,
       roleProvider: baseline.provider,
       available: (candidate) =>
-        availability.has(candidate.provider + ":" + candidate.model),
+        availability.has(modelKey(candidate)),
       evidenceVerified: (model, category, ev) =>
         verifyEvaluationEvidence(repo.store, model, category, ev),
     });
@@ -209,52 +210,57 @@ export function existingAdapters({
         limitation: boundedContext.limitation,
         unread: boundedContext.unread,
       });
+    const specText = JSON.stringify(spec.body);
+    if (Buffer.byteLength(specText) > 12000)
+      return { status: "blocked", effectCompleted: true, reason: "Accepted specification exceeds the implementation prompt budget" };
     const instruction = [
       "Implement only this accepted specification in the isolated worktree.",
+      "Only these host-approved paths may be changed: " + JSON.stringify(allowedPaths),
       "Do not deploy, access external services, read credentials, change infra, commit, or push.",
       "Report results in the existing completion report format. The host runs independent tests.",
       "Completion refers only to your implementation phase: if the requested code is implemented, report status completed and honestly mark host-only tests skipped. Do not report partial merely because host testing/build/deployment is pending. Report genuine unfinished code as partial with specific remaining work. Never claim an unexecuted test passed.",
-      JSON.stringify(spec.body),
+      specText,
       run.finalQaId
         ? "Latest QA findings: " +
-          JSON.stringify(artifact(run.finalQaId).body.findings)
+          JSON.stringify(artifact(run.finalQaId).body.findings).slice(0, 2200)
         : "",
       boundedContext?.summaryText
         ? "Cached context summary (unchanged files already summarized, do not restate as new reads): " +
           boundedContext.summaryText
         : "",
     ].join("\n");
+    if (Buffer.byteLength(instruction) > 32000)
+      return { status: "blocked", effectCompleted: true, reason: "Implementation prompt exceeds the bounded host input size" };
     const result = await runnerForModel(selection).run({
       task: value,
       instruction,
       shouldStop: signal,
     });
-    const proof = evidence(run, operationKey, { model: selection, result });
+    const promptBytes = result.promptBytes ?? Buffer.byteLength(instruction);
+    const proof = evidence(run, operationKey, { model: selection, promptBytes, result });
+    const measuredTokens = result.totalTokens ?? (result.usage ? [
+      "input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens",
+    ].reduce((sum, key) => sum + (Number(result.usage[key]) || 0), 0) : null);
+    const usage = {
+      measuredTokens: measuredTokens ?? 0,
+      estimatedTokens: measuredTokens === null && result.terminationReason !== "spawn_failed"
+        ? Math.ceil((promptBytes + Buffer.byteLength(JSON.stringify(result.report ?? ""))) / 3)
+        : 0,
+      costUsd: Number.isFinite(result.costUsd) ? result.costUsd : 0,
+      costKnown: Number.isFinite(result.costUsd),
+    };
+    const recorded = { model: selection, usage, evidenceRefs: [proof] };
+    try {
+      await assertIsolated(value, run);
+    } catch (error) {
+      return { ...recorded, status: "blocked", effectCompleted: true, reason: error.message };
+    }
     if (!result.ok || result.report?.status !== "completed")
-      return { ...implementationFailure(result), evidenceRefs: [proof] };
+      return { ...recorded, ...implementationFailure(result) };
     const currentSHA = head(value);
     return {
       status: "succeeded",
-      model: selection,
-      usage: {
-        ...zeroUsage,
-        costUsd: Number.isFinite(result.costUsd) ? result.costUsd : 0,
-        costKnown: Number.isFinite(result.costUsd),
-        measuredTokens: result.usage
-          ? [
-              "input_tokens",
-              "output_tokens",
-              "cache_creation_input_tokens",
-              "cache_read_input_tokens",
-            ].reduce((sum, key) => sum + (Number(result.usage[key]) || 0), 0)
-          : 0,
-        estimatedTokens: result.usage
-          ? 0
-          : Math.ceil(
-              Buffer.byteLength(instruction + JSON.stringify(result.report)) /
-                3,
-            ),
-      },
+      ...recorded,
       artifact: {
         schemaVersion: 1,
         runId: run.id,

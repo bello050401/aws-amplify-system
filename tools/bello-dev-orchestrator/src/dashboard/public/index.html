@@ -159,16 +159,29 @@
             <div id="eco-capabilities" class="row"></div>
             <form id="eco-form">
               <label for="eco-mode">開発モード</label>
-              <select id="eco-mode"><option value="claude_only">Claudeのみ</option><option value="codex_only">Codexのみ</option><option value="cooperative_eco">GPT + Claude 協調エコ</option><option value="fully_automatic">全自動</option></select>
+              <select id="eco-mode"><option value="codex_only">Codexのみ</option><option value="claude_only">Claudeのみ</option><option value="cooperative_eco">プロファイル管理の協調エコ</option><option value="fully_automatic">全自動</option></select>
               <div id="eco-fields"></div>
               <label for="eco-repairs">自動修正の上限（初回実装を除く）</label>
               <input id="eco-repairs" type="number" min="0" max="10" value="3" required>
               <label for="eco-maxElapsedSeconds">1 runの最大経過時間（秒）</label>
               <input id="eco-maxElapsedSeconds" type="number" min="1" max="86400" required>
+
+              <div id="eco-subscription-callout" class="notice">
+                <label for="eco-subscriptionCapacityMode">
+                  <input id="eco-subscriptionCapacityMode" type="checkbox">
+                  サブスクリプション枠モード（トークン/費用のしきい値を無視）
+                </label>
+                <p class="muted">
+                  ONにすると「最大トークン数」「最大費用（USD）」による自動停止を無効にします。プロバイダ利用枠・最大経過時間・自動修正回数の上限・停止操作は引き続き適用されます。
+                </p>
+              </div>
+
               <label for="eco-maxTokens">1 runの最大トークン数</label>
               <input id="eco-maxTokens" type="number" min="1" max="10000000" required>
+              <p id="eco-maxTokens-note" class="muted hidden">サブスクリプション枠モードが有効なため、この上限はrunの停止条件には使われません（値は保存され、モードをOFFにすると再び有効になります）。</p>
               <label for="eco-maxCostUsd">1 runの最大費用（USD、API換算）</label>
               <input id="eco-maxCostUsd" type="number" min="0" step="0.01" required>
+              <p id="eco-maxCostUsd-note" class="muted hidden">サブスクリプション枠モードが有効なため、この上限はrunの停止条件には使われません（値は保存され、モードをOFFにすると再び有効になります）。</p>
               <label for="eco-communicationRetries">通信エラーの再試行回数</label>
               <input id="eco-communicationRetries" type="number" min="0" max="10" required>
               <label for="eco-artifactRetries">成果物不正の再試行回数</label>
@@ -218,7 +231,7 @@
           <section class="panel">
             <h2 class="panel-title">実装担当</h2>
             <label for="implementation-provider">次の作業を担当するエージェント</label>
-            <select id="implementation-provider"><option value="claude">Claude</option><option value="codex">Codex</option></select>
+            <select id="implementation-provider"><option value="codex">Codex</option><option value="claude">Claude</option></select>
             <p id="implementation-status" class="muted"></p>
             <p id="automation-status" class="muted"></p>
             <button type="button" id="retry-notifications" class="btn btn-quiet">失敗した通知を再送</button>

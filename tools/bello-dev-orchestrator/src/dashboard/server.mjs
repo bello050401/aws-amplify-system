@@ -154,7 +154,7 @@ export class Dashboard {
             config: publicConfig(this.config),
             paths: this.paths,
             reviewProvider: this.#reviewProviderState(),
-            implementationProvider: this.repo.store.getMeta("implementationProvider") || this.config.execution?.provider || "claude",
+            implementationProvider: this.repo.store.getMeta("implementationProvider") || this.config.execution?.provider || "codex",
             automation: { verification: Boolean(this.config.verification?.required), staging: Boolean(this.config.staging?.enabled), notifications: Boolean(this.config.notifications?.enabled), outbox: this.repo.store.all("SELECT status, COUNT(*) AS count FROM notification_outbox GROUP BY status") },
           });
         default:
@@ -460,8 +460,14 @@ export class Dashboard {
       configuredDefault: this.config.review.provider,
       options: [
         {
+          value: "codex",
+          label: "Codex審査（ChatGPT）",
+          description: "別の読み取り専用CodexセッションがGit差分と独立テストの証跡を確認します。",
+          available: true,
+        },
+        {
           value: "claude",
-          label: "Claude審査（追加課金なし・推奨）",
+          label: "Claude審査（追加課金なし）",
           description:
             "別の Claude Code セッションが、実装担当とは独立に完了報告・Git差分・テスト結果・証拠を確認します。お使いの Claude Code の枠内で動くため、追加の API 課金は発生しません。",
           available: true,

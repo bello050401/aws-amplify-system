@@ -21,5 +21,13 @@
 <li>相談を検出したメッセージが履歴のwindowから外れても、ConversationContext.reviewReasonsへの符号化により引き継ぎ状態を失わない。</li>
 <li>取り置き・配送目安は通常購入後約2週間、1か月超の長期取り置きは個別確認とする。</li>
 </ul>
+<h2>対象アプリ別承認プロファイル（task_3b0d70a35afb15e898）</h2>
+<p>eco runtime設定は常に対象アプリを1つだけ明示し、未設定または不一致は開始時点で失敗する。</p>
+<ul>
+<li>Photo Station（WPF/Node）はローカルbuild・test・UI証拠のみで判定し、ブラウザQAとstaging反映は行わない。</li>
+<li>在庫管理Web、EC、ZAICOはそれぞれ自身の実staging識別子でのみ確認し、static smokeの成功を証拠として扱わない。</li>
+<li>対象不一致・profile未接続は待機または明確な失敗とし、QAからstagingへ進めない。</li>
+<li>npm run test tools/bello-dev-orchestrator/test/eco-service-runtime.test.mjs を実行して確認する。</li>
+</ul>
 </body>
 </html>

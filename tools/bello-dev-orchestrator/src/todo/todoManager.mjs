@@ -148,6 +148,11 @@ export class TodoManager {
 
         for (const taskId of fresh.waitingTaskIds) {
           const task = this.repo.getTask(taskId);
+          if (fresh.kind === "codex_review_hold" && task?.state === STATES.AWAITING_AI_REVIEW) {
+            this.repo.updateTask(taskId, { retry_after: null, blocked_reason: null });
+            resumed.push(taskId);
+            continue;
+          }
           if (!task || task.state !== STATES.AWAITING_USER) continue;
           if (this.#allBlockingTodosClosed(taskId)) {
             this.repo.setState(taskId, STATES.QUEUED, `TODO 完了により再開 (${todoId})`, actor, {

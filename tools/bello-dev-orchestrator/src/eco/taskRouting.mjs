@@ -1,3 +1,8 @@
+import { DEFAULT_CODEX_EFFORT, validReasoningEffort } from "../runner/codexOptions.mjs";
+
+export const modelKey = (model) =>
+  model.provider + ":" + model.model + (model.provider === "codex" ? ":" + (model.reasoningEffort ?? DEFAULT_CODEX_EFFORT) : "");
+
 // Deterministic planning consumes no model tokens. Classifications are routing
 // hints, never authorization to perform a protected operation.
 export const WORK_TYPES = {
@@ -27,31 +32,31 @@ export const WORK_TYPES = {
   },
   mechanical_edit: {
     label: "限定された文言・定型修正",
-    role: "claude",
+    role: "implementation",
     tier: "economy",
     capability: "code",
   },
   local_ui: {
     label: "局所的な画面修正",
-    role: "claude",
+    role: "implementation",
     tier: "standard",
     capability: "code",
   },
   unit_test: {
     label: "単体テスト作成",
-    role: "claude",
+    role: "implementation",
     tier: "standard",
     capability: "code",
   },
   implementation: {
     label: "通常の機能実装",
-    role: "claude",
+    role: "implementation",
     tier: "standard",
     capability: "code",
   },
   integration: {
     label: "複数機能・共有処理の修正",
-    role: "claude",
+    role: "implementation",
     tier: "standard",
     capability: "code",
   },
@@ -200,7 +205,7 @@ export function planWork({
   const role =
     phase === "implementation" &&
     !["extraction", "log_triage"].includes(category)
-      ? "claude"
+      ? "implementation"
       : work.role;
   return {
     category,
@@ -233,11 +238,13 @@ export function validateRouting(input = {}) {
     throw Error("Invalid task routing policy");
   const ids = new Set();
   for (const model of value.catalog) {
-    const id = model.provider + ":" + model.model;
+    const id = modelKey(model);
     if (
       !["claude", "codex"].includes(model.provider) ||
       typeof model.model !== "string" ||
       !model.model.trim() ||
+      (model.reasoningEffort !== undefined &&
+        (model.provider !== "codex" || !validReasoningEffort(model.reasoningEffort, model.model))) ||
       ids.has(id) ||
       !["economy", "standard", "advanced"].includes(model.tier) ||
       !Array.isArray(model.capabilities) ||
@@ -271,6 +278,7 @@ export function verifyEvaluationEvidence(store, model, category, evaluation) {
       record.origin === "host-independent-evaluation" &&
       record.provider === model.provider &&
       record.model === model.model &&
+      (record.reasoningEffort ?? undefined) === model.reasoningEffort &&
       record.category === category &&
       normalized(record.evaluation) === normalized(evaluation)
     );
@@ -334,7 +342,7 @@ export function selectForWork({
     work.risk !== "low"
   )
     return fallback("安全性・複雑性・再試行を優先：既存の階層方針を維持");
-  const provider = roleProvider || (work.role === "gpt" ? "codex" : "claude");
+  const provider = roleProvider || baseline?.provider || "codex";
   const candidates = [];
   for (const model of config.catalog) {
     if (
@@ -410,8 +418,7 @@ export function selectForWork({
   }
   const base = candidates.find(
     (c) =>
-      c.model.provider === baseline?.provider &&
-      c.model.model === baseline?.model,
+      baseline && modelKey(c.model) === modelKey(baseline),
   );
   if (!base)
     return fallback("基準モデルと同じ仕事で比較できる実測データが不足");
@@ -432,6 +439,7 @@ export function selectForWork({
   return {
     provider: winner.model.provider,
     model: winner.model.model,
+    ...(winner.model.provider === "codex" && { reasoningEffort: winner.model.reasoningEffort ?? DEFAULT_CODEX_EFFORT }),
     tier: winner.model.tier,
     capabilities: winner.model.capabilities,
     reason:

@@ -38,7 +38,8 @@ export function createEcoRuntime({
 }) {
   const connected = bindingsConnected(bindings);
   const capabilities = connected ? bindings.capabilities : disconnected;
-  const ecoStore = new EcoStore({ store, capabilities });
+  const implementationProvider = config.execution?.provider;
+  const ecoStore = new EcoStore({ store, capabilities, implementationProvider });
 
   let stopRequested = false;
   let tickInFlight = null;
@@ -222,7 +223,7 @@ export function createEcoRuntime({
     if (tickInFlight) await tickInFlight;
   }
 
-  const api = new EcoApi({ store, operatorToken, capabilities, engine, startRun, getRun, onControl: reflectFinishedRun });
+  const api = new EcoApi({ store, operatorToken, capabilities, implementationProvider, engine, startRun, getRun, onControl: reflectFinishedRun });
 
   return {
     connected,

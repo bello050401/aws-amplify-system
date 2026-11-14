@@ -219,7 +219,7 @@ async function cmdStop(loaded) {
   fs.writeFileSync(loaded.paths.stopFlag, new Date().toISOString(), "utf8");
   if (pid && isLiveNodeProcess(pid)) {
     say(`停止フラグを書きました。Orchestrator (pid ${pid}) は数秒以内に安全停止します。`);
-    say("実行中の Claude タスクがある場合は、その終了を待ってから停止します。");
+    say("実行中の実装タスクがある場合は、その終了を待ってから停止します。");
     return EXIT.OK;
   }
   say("Orchestrator は起動していません。停止フラグだけ書きました（次回の自動起動を抑止します）。");

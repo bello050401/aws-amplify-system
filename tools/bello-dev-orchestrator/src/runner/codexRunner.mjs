@@ -6,6 +6,8 @@ import { COMPLETION_REPORT_SCHEMA, buildExecutionContract } from './reportSchema
 import { validate } from '../core/validate.mjs';
 import { redactText } from '../log/redact.mjs';
 import { runProcess, localEnvironment, writeEvidence } from '../pipeline/process.mjs';
+import { DEFAULT_CODEX_MODEL, DEFAULT_CODEX_EFFORT, reasoningEffortArg, restrictedCodexArgs } from './codexOptions.mjs';
+import { classifyFailureText, REVIEW_FAILURE } from '../review/errors.mjs';
 
 export function resolveCodexExecutable(configured = 'codex', { env = process.env, platform = process.platform, lookup = spawnSync } = {}) {
   const requested = configured || 'codex';
@@ -24,6 +26,45 @@ export function resolveCodexExecutable(configured = 'codex', { env = process.env
     } catch {}
   }
   return null;
+}
+
+export async function probeCodexLogin({ executable = 'codex', resolveExecutable = resolveCodexExecutable, execute = runProcess } = {}) {
+  const file = resolveExecutable(executable);
+  if (!file) return { ok: false, reason: 'Codex executable not found' };
+  const result = await execute({ file, args: ['login', 'status'], env: localEnvironment(), timeoutMs: 15000 });
+  const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
+  if (result.ok && /^Logged in using ChatGPT\s*$/im.test(output)) return { ok: true, reason: null };
+  return { ok: false, reason: redactText(output || result.error || result.reason || 'ChatGPT subscription authentication required').slice(-2000) };
+}
+
+export function parseCodexEvents(result) {
+  const events = [];
+  for (const line of String(result.stdout || '').split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try { events.push(JSON.parse(line)); } catch { /* Keep preceding complete events. */ }
+  }
+  const lastTurn = events.findLast(event => ['turn.completed', 'turn.failed'].includes(event?.type));
+  const usage = lastTurn?.usage ?? events.findLast(event => event?.type === 'turn.completed')?.usage;
+  const totalTokens = [usage?.input_tokens, usage?.output_tokens].every(n => Number.isFinite(n) && n >= 0)
+    ? usage.input_tokens + usage.output_tokens
+    : null;
+  const completed = result.ok && lastTurn?.type === 'turn.completed';
+  const errorEvent = events.findLast(event => event?.type === 'error');
+  const detail = lastTurn?.error?.message || errorEvent?.message || errorEvent?.error?.message
+    || result.stderr || result.stdout || result.error || result.reason || 'No completed Codex turn';
+  const providerError = completed ? null : redactText(String(detail)).slice(-2000);
+  const errorCode = lastTurn?.error?.code || lastTurn?.error?.status || errorEvent?.code || errorEvent?.error?.code || errorEvent?.status;
+  const classified = classifyFailureText([errorCode, providerError, result.stderr].filter(Boolean).join('\n'));
+  const providerStatus = completed ? null
+    : classified === REVIEW_FAILURE.USAGE_LIMIT ? 'capacity'
+    : classified === REVIEW_FAILURE.AUTH_EXPIRED ? 'auth'
+    : /network|stream disconnect|connection (?:closed|failed|reset|refused)|cannot connect|failed to connect|service unavailable|gateway|\b(?:500|502|503|504)\b/i.test(String(providerError)) ? 'blocked'
+    : null;
+  return {
+    completed, usage: totalTokens === null ? null : usage, totalTokens, providerError, providerStatus,
+    sessionId: events.find(event => event?.type === 'thread.started')?.thread_id ?? null,
+    unexpectedToolUse: events.some(event => event?.item && !['agent_message', 'reasoning'].includes(event.item.type)),
+  };
 }
 
 // Structured Outputs requires every property to be listed in required.
@@ -49,16 +90,18 @@ function omitNulls(value) {
 export class CodexRunner {
   constructor({ config, paths, logger, execute = runProcess, resolveExecutable = resolveCodexExecutable }) { this.config = config; this.paths = paths; this.logger = logger; this.execute = execute; this.resolveExecutable = resolveExecutable; }
   buildArgs({ workDir, schemaPath, reportPath }) {
-    const args = ['exec', '--ignore-user-config', '--sandbox', 'workspace-write', '-c', 'approval_policy="never"', '-c', 'sandbox_workspace_write.network_access=false', '--ephemeral', '--json', '--color', 'never', '--cd', workDir, '--output-schema', schemaPath, '--output-last-message', reportPath];
-    if (process.platform === 'win32') args.push('-c', 'windows.sandbox="elevated"');
-    if (this.config.codex?.model) args.push('--model', this.config.codex.model);
-    return [...args, '-'];
+    const model = this.config.codex?.model || DEFAULT_CODEX_MODEL;
+    const effort = reasoningEffortArg(this.config.codex?.reasoningEffort, model);
+    return ['exec', ...restrictedCodexArgs('workspace-write'), '--model', model, '-c', effort,
+      '--cd', workDir, '--output-schema', schemaPath, '--output-last-message', reportPath, '-'];
   }
   async run({ task, instruction, shouldStop = () => false, onHeartbeat = () => {} }) {
     const base = { ok: false, report: null, reportErrors: [], sessionId: null, costUsd: null, terminationReason: 'spawn_failed' };
     if (task.isolation !== 'worktree' || !task.work_dir) return { ...base, error: 'Codex実装は専用worktreeが必要です。' };
     const executable = this.resolveExecutable(this.config.codex?.executable || 'codex');
     if (!executable) return { ...base, error: 'Codex実行ファイルが見つかりません。設定・PATH・デスクトップ同梱先を確認しました。' };
+    const login = await probeCodexLogin({ executable, resolveExecutable: () => executable, execute: this.execute });
+    if (!login.ok) return { ...base, providerStatus: 'auth', providerError: login.reason, error: login.reason };
     const directory = path.join(this.paths.runsDir, task.id, `codex-${crypto.randomUUID()}`);
     fs.mkdirSync(directory, { recursive: true });
     const schemaPath = path.join(directory, 'schema.json');
@@ -68,8 +111,9 @@ export class CodexRunner {
     const started = Date.now();
     const result = await this.execute({ file: executable, args: this.buildArgs({ workDir: task.work_dir, schemaPath, reportPath }), cwd: task.work_dir, env: localEnvironment(), input, timeoutMs: (this.config.codex?.timeoutSeconds || 3600) * 1000, shouldStop, onOutput: onHeartbeat });
     const stdoutPath = writeEvidence(directory, 'events.json', result);
-    const outcome = { ...base, exitCode: result.exitCode, durationMs: Date.now() - started, stdoutPath, stderrTail: result.stderr?.slice(-2000), terminationReason: result.ok ? 'completed' : result.reason || 'crashed', error: result.error };
-    if (!result.ok) return outcome;
+    const events = parseCodexEvents(result);
+    const outcome = { ...base, ...events, promptBytes: Buffer.byteLength(input), exitCode: result.exitCode, durationMs: Date.now() - started, stdoutPath, stderrTail: redactText(result.stderr || '').slice(-2000), terminationReason: events.completed ? 'completed' : result.reason || (result.exitCode === null && result.error ? 'spawn_failed' : 'crashed'), error: events.providerError || result.error };
+    if (!events.completed) return outcome;
     try {
       if (fs.statSync(reportPath).size > 1024 * 1024) throw new Error('完了報告が大きすぎます');
       const report = omitNulls(JSON.parse(fs.readFileSync(reportPath, 'utf8')));
@@ -84,9 +128,12 @@ export class CodexRunner {
 export class ImplementationRouter {
   constructor({ repo, config, runners }) { this.repo = repo; this.config = config; this.runners = runners; }
   async run(args) {
-    const provider = this.repo.store.getMeta('implementationProvider') || this.config.execution?.provider || 'claude';
+    const provider = this.repo.store.getMeta('implementationProvider') || this.config.execution?.provider || 'codex';
     if (!this.runners[provider]) throw new Error('未対応の実装担当です: ' + provider);
-    this.repo.checkpoint(args.task.id, 'implementation_provider', { provider });
+    this.repo.checkpoint(args.task.id, 'implementation_provider', provider === 'codex'
+      ? { provider, model: this.config.codex?.model || DEFAULT_CODEX_MODEL,
+          reasoningEffort: this.config.codex?.reasoningEffort ?? DEFAULT_CODEX_EFFORT, reason: 'Host implementation settings' }
+      : { provider });
     return this.runners[provider].run(args);
   }
 }

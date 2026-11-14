@@ -1,6 +1,6 @@
-# BELLO Claude Code 自律開発管理システム
+# BELLO 自律開発管理システム
 
-開発指示をキューに積むと、Claude Code が調査・実装・テストを行い、OpenAI が完了報告を審査し、
+開発指示をキューに積むと、Codex が調査・実装を行い、ホストが独立テストを実行し、別の Codex セッションが成果を審査します。
 本人にしかできない操作だけがユーザー TODO として残る ——— その循環を Windows 上で常駐させる仕組みです。
 
 対象リポジトリ: `C:\Users\win\Documents\GitHub\aws-amplify-system`
@@ -16,13 +16,13 @@
   │                            [ タスクキュー ]
   │                                    │
   │                                    ▼
-  │                       [ Claude Runner ] claude -p --json-schema
+  │                       [ Codex Runner ] codex exec --output-schema
   │                                    │  構造化完了報告
   │                                    ▼
   │                       [ 証拠ゲート ] テスト結果 / exit code / Git 差分を機械的に突合
   │                                    │
   │                                    ▼
-  │              [ 審査 ] 別セッションの Claude / OpenAI / 人 のいずれか
+  │              [ 審査 ] 別セッションの Codex
   │                     accept / revision / user_action / pause / fail
   │                          │                 │
   │                          │                 └─→ [ ユーザーTODO ] 本人操作だけ
@@ -37,10 +37,16 @@
 別セッションが同時に触っているファイルを巻き込みません。自動コミットは、そのタスクが作ったと
 確認できたファイルだけを 1 つずつ明示して stage します（`git add -A` は実行前に落とされます）。
 
-**既定の審査は「別の Claude Code セッション」が行います。追加の API 課金はありません。**
-審査担当は実装セッションを継承せず（別 session_id）、編集系ツールを CLI の権限で塞いであるため
-実装はできません。完了報告を鵜呑みにせず、自分で `git diff` とテストを実行して裏を取ります。
-ダッシュボードから **Claude審査 / OpenAI審査 / 手動審査** を切り替えられます（既定は Claude審査）。
+既定の審査は、ChatGPT にサインインした読み取り専用の Codex セッションで行います。
+ホストが収集した Git 差分と独立テストの証跡を使って審査します。
+ダッシュボードでは Codex、Claude、OpenAI、手動の審査方式を選べます。
+
+協調エコの既定の実装階層は GPT-6.1 Terra low（定型修正）、GPT-6.1 Sol medium（通常実装）、GPT-6.1 Sol high（設計・安全性）です。
+構成済みのモデルと思考レベルを各 CLI 呼び出しに明示し、選定理由を実行記録に残します。
+Codex だけを使う協調エコプロファイルでは `implementationProvider` を `"codex"` に設定します。
+`models.codex` の `model` と `reasoningEffort` は仕様・ブラウザQAの既定で、`specification`、`browserQa` に同じ形式で個別設定できます。
+実装階層を変更する場合は `models.codex.implementation` の `economy`、`standard`、`advanced` と保存済みの `modelPolicy` に同じモデルと思考レベルを設定します。
+従来のプロファイルでは、`implementationProvider` を省略すると Claude 実装の構成を引き続き使えます。
 
 ---
 
@@ -75,7 +81,7 @@ powershell -ExecutionPolicy Bypass -File .\bello.ps1 status
 | いま何をしているか見る | ダッシュボードのホーム / `bello.ps1 status` |
 | 自分がやるべきことを見る | ダッシュボード最上部の「今、ユーザー様が行う必要があること」 |
 | 一時停止 / 再開 | ダッシュボードのホーム、またはタスクの停止ボタン |
-| 止める | `bello.ps1 stop`（実行中の Claude タスクの終了を待ちます） |
+| 止める | `bello.ps1 stop`（実行中のタスクの終了を待ちます） |
 | 調子を見る | `bello.ps1 diagnose` |
 | 作業場所と成果ブランチを見る | `node src\cli.mjs worktrees` |
 
@@ -94,8 +100,8 @@ inbox フォルダの場所はダッシュボードの「設定」画面に表�
 | `src/cli.mjs` | Node 側の入口 |
 | `src/app.mjs` | 単一起動・復旧・ループ・inbox 監視・ダッシュボードの組み立て |
 | `src/core/` | 状態機械 / Orchestrator / Git 安全策 / worktree 分離 / Git ガード / スキーマ検証 |
-| `src/runner/` | Claude Runner と完了報告スキーマ、テスト用 fake |
-| `src/review/` | Claude審査 / OpenAI審査 / 手動審査、審査スキーマ、証拠ゲート、失敗分類、テスト用 fake |
+| `src/runner/` | Codex / Claude 実装と完了報告スキーマ、テスト用 fake |
+| `src/review/` | Codex / Claude / OpenAI / 手動審査、審査スキーマ、証拠ゲート、失敗分類 |
 | `src/todo/` | ユーザー TODO |
 | `src/intake/` | Word 取込 (最小 ZIP リーダー + docx 抽出 + 監視) |
 | `src/dashboard/` | ローカルダッシュボード (node:http + 素の HTML/CSS/JS) |
@@ -112,7 +118,7 @@ Git 管理外です。リポジトリには入りません。
 ## 5. 秘密情報の扱い
 
 - 設定ファイルにキーを書きません。**環境変数のみ**です。
-- **既定の運用に API キーは要りません。** Claude審査はお使いの Claude Code の枠内で動きます。
+- 既定の実装・審査は Codex の ChatGPT サインインを使用します。
 - `OPENAI_API_KEY` … 「OpenAI審査」を選ぶ場合だけ必要です。未設定でもエラーにも TODO にもなりません。
 - `OPENAI_MODEL` … 省略可。
 - `BELLO_DASHBOARD_TOKEN` … LAN 公開を有効にする場合のみ必須。

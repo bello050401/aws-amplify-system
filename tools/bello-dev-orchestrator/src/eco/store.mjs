@@ -41,9 +41,10 @@ export function installEcoSchema(store) {
   });
 }
 export class EcoStore {
-  constructor({ store, capabilities = () => ({}), now = () => Date.now() }) {
+  constructor({ store, capabilities = () => ({}), implementationProvider = "codex", now = () => Date.now() }) {
     this.store = store;
     this.capabilities = capabilities;
+    this.implementationProvider = implementationProvider;
     this.now = now;
   }
   transaction(fn) {
@@ -63,18 +64,18 @@ export class EcoStore {
     );
   }
   settings() {
+    const capabilities = this.capabilities();
+    const defaults = () => ({
+      ...structuredClone(DEFAULT_ECO),
+      mode: (this.store.getMeta("implementationProvider") || this.implementationProvider) + "_only",
+      ...(capabilities.modelPolicy && { modelPolicy: structuredClone(capabilities.modelPolicy) }),
+    });
     if (!this.installed)
       return {
         version: 0,
-        config: {
-          ...structuredClone(DEFAULT_ECO),
-          mode:
-            this.store.getMeta("implementationProvider") === "codex"
-              ? "codex_only"
-              : "claude_only",
-        },
+        config: defaults(),
         installed: false,
-        capabilities: this.capabilities(),
+        capabilities,
       };
     const r = this.store.get(
       "SELECT * FROM eco_config ORDER BY version DESC LIMIT 1",
@@ -83,15 +84,9 @@ export class EcoStore {
       version: r?.version || 0,
       config: r
         ? JSON.parse(r.data)
-        : {
-            ...structuredClone(DEFAULT_ECO),
-            mode:
-              this.store.getMeta("implementationProvider") === "codex"
-                ? "codex_only"
-                : "claude_only",
-          },
+        : defaults(),
       installed: true,
-      capabilities: this.capabilities(),
+      capabilities,
     };
   }
   idempotent(key, input, fn) {

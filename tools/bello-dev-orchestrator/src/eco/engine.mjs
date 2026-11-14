@@ -27,6 +27,17 @@ const phaseAdapter = {
 // repair loop.
 const readOnlyArtifactPhases = new Set(["QA_INITIAL", "SPEC_READY", "QA_VERIFY"]);
 
+function addUsage(previous, reported) {
+  const usage = { ...previous };
+  if (!reported) return { ...usage, costKnown: false };
+  for (const key of ["measuredTokens", "estimatedTokens", "costUsd"]) {
+    if (!Number.isFinite(reported[key]) || reported[key] < 0) throw Error("Invalid usage");
+    usage[key] += reported[key];
+  }
+  usage.costKnown = usage.costKnown && reported.costKnown === true;
+  return usage;
+}
+
 /** Durable coordinator. Adapters must reconcile the persisted operation key before
  * dispatching; an unknown external result is never retried as a new operation.
  * This class does not authorize production operations or execute arbitrary commands.
@@ -215,9 +226,10 @@ export class EcoEngine {
       if (run.retryAt && this.now() < run.retryAt) return false;
       if (
         this.now() >= run.deadline ||
-        run.usage.measuredTokens + run.usage.estimatedTokens >=
-          run.configSnapshot.maxTokens ||
-        run.usage.costUsd >= run.configSnapshot.maxCostUsd
+        (!run.configSnapshot.subscriptionCapacityMode &&
+          (run.usage.measuredTokens + run.usage.estimatedTokens >=
+            run.configSnapshot.maxTokens ||
+            run.usage.costUsd >= run.configSnapshot.maxCostUsd))
       ) {
         this.change(run, "HUMAN_REVIEW", {}, "Execution budget exhausted");
         return true;
@@ -250,7 +262,9 @@ export class EcoEngine {
           );
           return true;
         }
-        this.repo.reserveEnvironment(id, run.configSnapshot.qaUrl);
+        // Photo Station (local build/test/UI evidence) has no reachable QA URL;
+        // lock per-task instead of colliding every such run on the empty string.
+        this.repo.reserveEnvironment(id, run.configSnapshot.qaUrl || "local-evidence:" + run.task_id);
       }
       if (!run.pendingEffect) {
         run = this.change(
@@ -377,7 +391,10 @@ export class EcoEngine {
       this.change(
         run,
         state,
-        result.effectCompleted ? { pendingEffect: null } : {},
+        {
+          ...(result.effectCompleted && { pendingEffect: null }),
+          ...(result.usage && result.effectCompleted && { usage: addUsage(run.usage, result.usage) }),
+        },
         result.reason || result.status,
       );
       return true;
@@ -390,16 +407,7 @@ export class EcoEngine {
       result.artifactInvalid === true &&
       readOnlyArtifactPhases.has(run.state)
     ) {
-      const usage = { ...run.usage };
-      if (!result.usage) usage.costKnown = false;
-      else {
-        for (const key of ["measuredTokens", "estimatedTokens", "costUsd"]) {
-          if (!Number.isFinite(result.usage[key]) || result.usage[key] < 0)
-            throw Error("Invalid usage");
-          usage[key] += result.usage[key];
-        }
-        usage.costKnown = usage.costKnown && result.usage.costKnown === true;
-      }
+      const usage = addUsage(run.usage, result.usage);
       const count = run.artifactFailures + 1;
       const capped = count > run.configSnapshot.artifactRetries;
       this.change(
@@ -426,16 +434,7 @@ export class EcoEngine {
         throw error;
       }
     }
-    const usage = { ...run.usage };
-    if (!result.usage) usage.costKnown = false;
-    else {
-      for (const key of ["measuredTokens", "estimatedTokens", "costUsd"]) {
-        if (!Number.isFinite(result.usage[key]) || result.usage[key] < 0)
-          throw Error("Invalid usage");
-        usage[key] += result.usage[key];
-      }
-      usage.costKnown = usage.costKnown && result.usage.costKnown === true;
-    }
+    const usage = addUsage(run.usage, result.usage);
     const patch = { pendingEffect: null, retryAt: null, usage };
     let next;
     switch (run.state) {
@@ -542,7 +541,7 @@ export class EcoEngine {
       default:
         throw Error("Unsupported phase");
     }
-    this.change(run, next, patch, "Validated phase result");
+    this.change(run, next, patch, result.status === "failed" ? result.reason || "Phase failed" : "Validated phase result");
     if (next === "COMPLETED_STAGING") this.repo.releaseEnvironment(run.id);
     return true;
   }

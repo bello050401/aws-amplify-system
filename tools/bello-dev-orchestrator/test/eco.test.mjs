@@ -280,6 +280,23 @@ test("eco: settings deny production bypass, unconnected activation, unsafe URL a
     );
 });
 
+test("eco: subscriptionCapacityMode defaults to false and is validated as a boolean opt-in", () => {
+  assert.equal(DEFAULT_ECO.subscriptionCapacityMode, false);
+  assert.equal(
+    validateEco(config(), capabilities()).config.subscriptionCapacityMode,
+    false,
+  );
+  assert.equal(
+    validateEco(config({ subscriptionCapacityMode: true }), capabilities())
+      .config.subscriptionCapacityMode,
+    true,
+  );
+  assert.throws(
+    () => validateEco(config({ subscriptionCapacityMode: "yes" }), capabilities()),
+    /Invalid subscriptionCapacityMode/,
+  );
+});
+
 test("eco: authenticated settings only; Agent cannot self-approve via role", async (t) => {
   const h = await fixture(t);
   const api = new EcoApi({
@@ -454,6 +471,32 @@ test("eco: budgets and default safety gate stop dispatch", async (t) => {
   assert.equal(h2.eco.get(h2.run.id).state, "WAITING_APPROVAL");
 });
 
+test("eco: default mode stops on token/cost thresholds even with time remaining", async (t) => {
+  const h = await fixture(t, { maxTokens: 10, maxCostUsd: 0.01 });
+  const e = engine(h);
+  const run = h.eco.get(h.run.id);
+  h.eco.mutate(run.id, run.version, run.state, {
+    usage: { measuredTokens: 10, estimatedTokens: 0, costUsd: 0, costKnown: true },
+  });
+  await e.tick(run.id);
+  assert.equal(h.eco.get(run.id).state, "HUMAN_REVIEW");
+});
+
+test("eco: subscriptionCapacityMode skips token/cost thresholds but still honors the deadline", async (t) => {
+  const h = await fixture(t, { maxTokens: 10, maxCostUsd: 0.01, subscriptionCapacityMode: true });
+  const e = engine(h);
+  let run = h.eco.get(h.run.id);
+  h.eco.mutate(run.id, run.version, run.state, {
+    usage: { measuredTokens: 999999, estimatedTokens: 0, costUsd: 999, costKnown: true },
+  });
+  await e.tick(run.id);
+  assert.equal(h.eco.get(run.id).state, "DISCOVERING");
+  run = h.eco.get(run.id);
+  h.eco.mutate(run.id, run.version, run.state, { deadline: 0 });
+  await e.tick(run.id);
+  assert.equal(h.eco.get(run.id).state, "HUMAN_REVIEW");
+});
+
 test("eco: auth and rate limit waits do not count as logical repairs", async (t) => {
   for (const [status, expected] of [
     ["auth", "WAITING_USER_AUTH"],
@@ -463,7 +506,10 @@ test("eco: auth and rate limit waits do not count as logical repairs", async (t)
     const e = engine(h, {
       discover: {
         reconcile: async () => ({ status: "absent" }),
-        execute: async () => ({ status }),
+        execute: async () => ({
+          status, effectCompleted: true,
+          usage: { measuredTokens: 17, estimatedTokens: 0, costUsd: 0, costKnown: false },
+        }),
       },
     });
     await e.tick(h.run.id);
@@ -471,6 +517,11 @@ test("eco: auth and rate limit waits do not count as logical repairs", async (t)
     const run = h.eco.get(h.run.id);
     assert.equal(run.state, expected);
     assert.equal(run.repairCount, 0);
+    assert.equal(run.logicalFailures, 0);
+    assert.equal(run.usage.measuredTokens, 17);
+    assert.equal(run.pendingEffect, null);
+    await e.tick(h.run.id);
+    assert.equal(h.eco.get(h.run.id).usage.measuredTokens, 17);
   }
 });
 

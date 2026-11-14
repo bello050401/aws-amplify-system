@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
-import { DEFAULT_ROUTING, validateRouting } from "./taskRouting.mjs";
+import { DEFAULT_ROUTING, modelKey, validateRouting } from "./taskRouting.mjs";
+import { DEFAULT_CODEX_MODEL, DEFAULT_CODEX_EFFORT, validReasoningEffort } from "../runner/codexOptions.mjs";
 function canonical(value) {
   return Array.isArray(value)
     ? value.map(canonical)
@@ -26,9 +27,14 @@ export const MODES = [
   "cooperative_eco",
   "fully_automatic",
 ];
+export const DEFAULT_CODEX_MODEL_POLICY = {
+  economy: { provider: "codex", model: "gpt-6.1-terra", reasoningEffort: "low", capabilities: ["code", "text"] },
+  standard: { provider: "codex", model: DEFAULT_CODEX_MODEL, reasoningEffort: DEFAULT_CODEX_EFFORT, capabilities: ["code", "text", "browser"] },
+  advanced: { provider: "codex", model: DEFAULT_CODEX_MODEL, reasoningEffort: "high", capabilities: ["code", "reasoning"] },
+};
 export const DEFAULT_ECO = Object.freeze({
   enabled: false,
-  mode: "claude_only",
+  mode: "codex_only",
   gptBrowserQa: true,
   claudeImplementation: true,
   modelAutoRouting: true,
@@ -40,13 +46,18 @@ export const DEFAULT_ECO = Object.freeze({
   maxElapsedSeconds: 3600,
   maxTokens: 100000,
   maxCostUsd: 5,
+  // Opt-in only. Claude.ai Max subscription usage is not metered in tokens/USD,
+  // so the token/cost thresholds below produce false stops against remaining
+  // subscription capacity. Deadline, repair limit, user stop, and provider
+  // capacity errors are unaffected by this flag.
+  subscriptionCapacityMode: false,
   communicationRetries: 2,
   artifactRetries: 2,
   retentionDays: 30,
   qaUrl: "",
   allowedDomains: [],
   testAccount: "",
-  modelPolicy: { economy: null, standard: null, advanced: null },
+  modelPolicy: DEFAULT_CODEX_MODEL_POLICY,
   taskRouting: DEFAULT_ROUTING,
 });
 export function validateEco(input, capabilities = {}) {
@@ -64,6 +75,7 @@ export function validateEco(input, capabilities = {}) {
     "contextCache",
     "rereadPrevention",
     "stagingAutoDeploy",
+    "subscriptionCapacityMode",
   ])
     if (typeof c[k] !== "boolean") throw Error("Invalid " + k);
   if (c.productionApproval !== true)
@@ -111,11 +123,22 @@ export function validateEco(input, capabilities = {}) {
   if (c.mode === "cooperative_eco" || c.mode === "fully_automatic") {
     if (c.gptBrowserQa && !capabilities.browserQa?.connected)
       missing.push("GPTブラウザQAの常駐接続が未設定");
-    if (c.claudeImplementation && !capabilities.claude?.connected)
+    const provider = c.modelPolicy?.standard?.provider;
+    if (provider === "claude" && c.claudeImplementation && !capabilities.claude?.connected)
       missing.push("Claude実行接続の認証・能力が未確認");
+    if (provider === "codex" && !capabilities.codex?.connected)
+      missing.push("Codex実行接続の認証・能力が未確認");
+    if (provider && capabilities.implementationProvider && provider !== capabilities.implementationProvider)
+      missing.push("モデル階層のproviderが対象プロファイルの設定と一致しません");
+    if (capabilities.modelPolicy && Object.entries(c.modelPolicy || {}).some(([tier, mapping]) =>
+      mapping && (!capabilities.modelPolicy[tier] || modelKey(mapping) !== modelKey(capabilities.modelPolicy[tier]))))
+      missing.push("モデル階層のモデル・思考レベルが対象プロファイルの設定と一致しません");
     if (c.stagingAutoDeploy && !capabilities.staging?.connected)
       missing.push("対象revisionを照合できるstaging接続が未設定");
-    if (!c.qaUrl) missing.push("QA URLが未設定");
+    // Only browser-QA target apps (the static-smoke check and real staging for
+    // 在庫Web/EC/ZAICO) publish to a reachable QA URL. Photo Station's approval
+    // profile judges by local build/test/UI evidence and never has one.
+    if (!c.qaUrl && c.gptBrowserQa) missing.push("QA URLが未設定");
     if (!c.modelPolicy?.standard)
       missing.push("利用可能なモデル階層マッピングが未設定");
   }
@@ -126,7 +149,9 @@ export function validateEco(input, capabilities = {}) {
       (!["claude", "codex"].includes(m.provider) ||
         typeof m.model !== "string" ||
         !m.model.trim() ||
-        !Array.isArray(m.capabilities))
+        !Array.isArray(m.capabilities) ||
+        (m.reasoningEffort !== undefined &&
+          (m.provider !== "codex" || !validReasoningEffort(m.reasoningEffort, m.model))))
     )
       throw Error("Invalid model mapping " + tier);
   }
@@ -148,9 +173,11 @@ export function routeModel(
     : phase === "architecture"
       ? 2
       : 1;
-  if (config.modelAutoRouting)
-    index = Math.min(2, index + Math.min(logicalFailures, 1));
-  else index = 1;
+  const promoted = config.modelAutoRouting && logicalFailures > 0 && index < 2 &&
+    config.modelPolicy[tiers[index + 1]]?.provider === config.modelPolicy[tiers[index]]?.provider;
+  if (!config.modelAutoRouting) index = 1;
+  else if (promoted)
+    index = Math.min(2, index + 1);
   const selected = config.modelPolicy[tiers[index]];
   const required = phase.startsWith("qa") ? "browser" : "code";
   if (!selected?.capabilities.includes(required))
@@ -161,8 +188,9 @@ export function routeModel(
     };
   return {
     ...selected,
+    ...(selected.provider === "codex" && { reasoningEffort: selected.reasoningEffort ?? DEFAULT_CODEX_EFFORT }),
     tier: tiers[index],
-    reason: logicalFailures
+    reason: promoted
       ? "論理失敗による一段昇格"
       : "作業内容に適合する開始階層",
   };

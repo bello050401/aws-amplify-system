@@ -79,7 +79,7 @@ test("eco schema未導入では従来どおりqueuedタスクをclaimする", as
 test("通常モード(claude_only)ではeco導入後も従来どおりclaimする", async () => {
   const { store, repo, task, orchestrator } = await fixture();
   installEcoSchema(store);
-  const eco = new EcoStore({ store, capabilities: CAPABILITIES });
+  const eco = new EcoStore({ store, capabilities: CAPABILITIES, implementationProvider: "claude" });
   eco.save({ enabled: false, mode: "claude_only" }, 0, "key-normal-mode-00001");
 
   const did = await orchestrator.tick();

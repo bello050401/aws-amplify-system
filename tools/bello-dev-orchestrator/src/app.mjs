@@ -15,6 +15,7 @@ import { Orchestrator } from "./core/orchestrator.mjs";
 import { ClaudeRunner } from "./runner/claudeRunner.mjs";
 import { OpenAiReviewEngine } from "./review/openaiReview.mjs";
 import { ClaudeReviewEngine } from "./review/claudeReview.mjs";
+import { CodexReviewEngine } from "./review/codexReview.mjs";
 import { TodoManager } from "./todo/todoManager.mjs";
 import { DocumentIntake } from "./intake/documentIntake.mjs";
 import { Dashboard } from "./dashboard/server.mjs";
@@ -113,9 +114,10 @@ export async function buildApp({ config, paths, echoLogs = true, ecoBindings = n
   const verifier = new IndependentVerifier({ config, paths, repo });
   const delivery = new (config.staging?.mode === "static-smoke" ? AmplifyStaticDelivery : StagingDelivery)({ config, repo, verifier });
   const notifications = new Notifications({ config, repo });
-  // 審査方式は実行時に選べる。既定は追加課金の要らない Claude 審査。
+  // 審査方式は実行時に選べる。
   // OpenAI は削除せず、選べば使えるオプションとして常に組み立てておく。
   const reviewEngines = {
+    codex: new CodexReviewEngine({ config, paths, logger }),
     claude: new ClaudeReviewEngine({ config, paths, logger }),
     openai: new OpenAiReviewEngine({ config, logger }),
   };
@@ -187,7 +189,7 @@ export async function runService({ config, paths, appFactory = buildApp }) {
   });
 
   // 環境不足に応じた初期 TODO (§8-3)。
-  // 既定の審査方式 (Claude) は API キーを要らないので、通常は何も作られない。
+  // Codex 審査は ChatGPT のサインインを使う。
   todoManager.requireOpenAiKey = repo.getReviewProvider(config.review.provider) === "openai";
   todoManager.ensureEnvironmentTodos();
   todoManager.closeObsoleteEnvironmentTodos();

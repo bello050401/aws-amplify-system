@@ -27,7 +27,13 @@ export class AmplifyStaticDelivery {
   update(id,state,error=null,jobId=this.row(id)?.job_id){this.repo.store.run('UPDATE staging_deliveries SET state=?,error=?,job_id=?,updated_at=? WHERE task_id=?',[state,error,jobId,new Date().toISOString(),id]);return this.row(id);}
   artifact(task){
     const s=this.settings;
-    if(!s.enabled||s.mode!=='static-smoke'||!s.isolatedDataConfirmed||!/^\d{12}$/.test(s.accountId)||!/^d[a-z0-9]+$/.test(s.appId)||s.branch!=='preview-orchestrator'||s.appName!=='bello-orchestrator-smoke') throw Error('Invalid dedicated smoke target');
+    // The generic infra self-check keeps its exact original hard-coded identity.
+    // Approved real-staging target-app profiles (在庫Web/EC/ZAICO) instead declare
+    // their own service/environment/stagingId; a static-smoke pass is never
+    // accepted as evidence for one of these real, separately-approved targets.
+    const validSmoke=s.mode==='static-smoke'&&s.enabled&&s.isolatedDataConfirmed&&/^\d{12}$/.test(s.accountId)&&/^d[a-z0-9]+$/.test(s.appId)&&s.branch==='preview-orchestrator'&&s.appName==='bello-orchestrator-smoke';
+    const validRealStaging=s.mode==='real-staging'&&s.enabled&&s.isolatedDataConfirmed&&/^\d{12}$/.test(s.accountId)&&/^d[a-z0-9]+$/.test(s.appId)&&['inventory_web','ec','zaico'].includes(s.service)&&typeof s.environment==='string'&&s.environment.trim()&&typeof s.stagingId==='string'&&s.stagingId.trim()&&typeof s.branch==='string'&&s.branch.trim()&&typeof s.appName==='string'&&s.appName.trim();
+    if(!validSmoke&&!validRealStaging) throw Error('Invalid dedicated smoke or approved real-staging target');
     if(task.isolation!=='worktree'||!task.work_dir||!this.verifier.required||!this.verifier.check(task).passed) throw Error('Independent worktree verification required');
     const head=runGit(task.work_dir,['rev-parse','HEAD']);const clean=runGit(task.work_dir,['status','--porcelain']);
     if(!head.ok||head.stdout.trim()!==task.git_end_commit||!clean.ok||clean.stdout.trim())throw Error('Verified commit must be clean');
@@ -125,5 +131,62 @@ export class AmplifyStaticDelivery {
       if(current.state==='running'&&Date.now()-Date.parse(row.created_at)<(this.settings.maxWaitSeconds||600)*1000)return this.update(task.id,'running','Waiting for verified publication');
       return this.update(task.id,'blocked',current.state==='starting'?'Dispatch uncertain; inspect saved job':'Static verification failed');
     }
+  }
+}
+
+// Evidence path for the Photo Station (WPF/Node) target-app profile: no cloud
+// deploy and no browser QA target exist for it. "Delivery" here means verifying
+// that the already-independently-tested revision also has a real, committed,
+// unchanged local UI evidence file (e.g. a screenshot) at the host-approved
+// path. Reuses the same staging_deliveries row shape/state machine as
+// AmplifyStaticDelivery so the existing generic deploy adapter needs no change.
+export class LocalEvidenceDelivery {
+  constructor({config,repo,verifier}) {this.settings=structuredClone(config.staging);this.repo=repo;this.verifier=verifier;}
+  row(id){return this.repo.store.get('SELECT * FROM staging_deliveries WHERE task_id=?',[id]);}
+  update(id,state,error=null,jobId=this.row(id)?.job_id){this.repo.store.run('UPDATE staging_deliveries SET state=?,error=?,job_id=?,updated_at=? WHERE task_id=?',[state,error,jobId,new Date().toISOString(),id]);return this.row(id);}
+  async preflight(){
+    const s=this.settings;
+    if(s.mode!=='local-build-evidence'||!s.enabled||!s.isolatedDataConfirmed) throw Error('Local UI evidence target is not an approved Photo Station profile');
+  }
+  artifact(task){
+    const s=this.settings;
+    if(s.mode!=='local-build-evidence'||!s.enabled||!s.isolatedDataConfirmed) throw Error('Invalid local UI evidence target');
+    if(task.isolation!=='worktree'||!task.work_dir||!this.verifier.required||!this.verifier.check(task).passed) throw Error('Independent local build/test verification required');
+    const head=runGit(task.work_dir,['rev-parse','HEAD']);const clean=runGit(task.work_dir,['status','--porcelain']);
+    if(!head.ok||head.stdout.trim()!==task.git_end_commit||!clean.ok||clean.stdout.trim())throw Error('Verified commit must be clean');
+    const evidencePath=s.uiEvidencePath;
+    if(typeof evidencePath!=='string'||!evidencePath||path.isAbsolute(evidencePath)||evidencePath.split(/[\\/]/).includes('..'))throw Error('Invalid UI evidence path');
+    const entry=runGit(task.work_dir,['ls-tree',task.git_end_commit,evidencePath]);
+    if(!entry.ok||!entry.stdout.startsWith('100644 '))throw Error('Regular committed local UI evidence file required');
+    const bytes=fs.readFileSync(path.join(task.work_dir,evidencePath));
+    if(!bytes.length||bytes.length>20*1024*1024)throw Error('UI evidence file is empty or exceeds the bounded size');
+    return {bytes,sha256:digest(bytes),evidencePath};
+  }
+  prepare(task){
+    const existing=this.row(task.id);
+    if(existing){
+      if((existing.state==='ready'||existing.state==='blocked')&&!existing.job_id&&existing.commit_id===task.git_end_commit){
+        try{
+          const artifact=this.artifact(task);
+          const receipt={settings:this.settings,sha256:artifact.sha256};
+          this.repo.store.run('UPDATE staging_deliveries SET config_json=?,state=?,error=NULL,updated_at=? WHERE task_id=?',[JSON.stringify(receipt),'ready',new Date().toISOString(),task.id]);
+          return this.row(task.id);
+        }catch{}
+      }
+      return existing;
+    }
+    let error=null,artifact;try{artifact=this.artifact(task)}catch(e){error=e.message}
+    const now=new Date().toISOString();const receipt={settings:this.settings,sha256:artifact?.sha256};
+    this.repo.store.run('INSERT INTO staging_deliveries(task_id,commit_id,config_json,state,error,created_at,updated_at) VALUES(?,?,?,?,?,?,?)',[task.id,task.git_end_commit,JSON.stringify(receipt),error?'blocked':'ready',error,now,now]);return this.row(task.id);
+  }
+  async advance(task){
+    const row=this.row(task.id);if(!row||['blocked','failed','succeeded'].includes(row.state))return row||{state:'blocked',error:'No receipt'};
+    const saved=JSON.parse(row.config_json);
+    if(JSON.stringify(saved.settings)!==JSON.stringify(this.settings))return this.update(task.id,'blocked','Target changed');
+    let a;
+    try{ a=this.artifact(task); if(a.sha256!==saved.sha256)throw Error('Evidence changed'); }
+    catch { return this.update(task.id,'blocked','Verified local UI evidence changed'); }
+    this.repo.checkpoint(task.id,'local_ui_evidence',{commit:task.git_end_commit,sha256:a.sha256,evidencePath:a.evidencePath,bytes:a.bytes.length});
+    return this.update(task.id,'succeeded',null,a.sha256.slice(0,16));
   }
 }

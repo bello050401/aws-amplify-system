@@ -17,6 +17,7 @@
     historyFilter: "all",
     openTaskId: null,
     currentStartedAt: null,
+    ecoStates: {},
   };
 
   // ------------------------------------------------------------ 小道具
@@ -87,6 +88,48 @@
   function stateChip(task) {
     var tone = STATE_TONE[task.state] || "unknown";
     return el("span", "chip chip-" + tone, task.stateLabel || task.state);
+  }
+
+  // 協調run (eco) は、旧タスク状態 (queued/paused 等) とは別の実体を持つ。
+  // HUMAN_REVIEW を「一時停止」と誤読させない・稼働中のrunを隠さないための表示。
+  var ECO_TERMINAL = ["COMPLETED_STAGING", "CANCELLED", "FAILED"];
+  var ECO_SUSPENDED = ["PAUSED", "WAITING_APPROVAL", "WAITING_USER_AUTH", "WAITING_CAPACITY", "HUMAN_REVIEW"];
+  var ECO_RUN_LABEL = {
+    HUMAN_REVIEW: "要確認・未完了",
+    CANCELLED: "中止・未完了",
+    COMPLETED_STAGING: "隔離検証完了", // ユーザー向け本番反映ではない
+  };
+  var ECO_RUN_TONE = { HUMAN_REVIEW: "bad", CANCELLED: "unknown", COMPLETED_STAGING: "ok" };
+
+  function ecoRunChip(runState) {
+    if (!runState) return null;
+    var label = ECO_RUN_LABEL[runState];
+    var tone = ECO_RUN_TONE[runState];
+    if (!label) {
+      var isActive = ECO_TERMINAL.indexOf(runState) < 0 && ECO_SUSPENDED.indexOf(runState) < 0;
+      label = isActive ? "エコ実行中" : runState;
+      tone = isActive ? "warn" : "unknown";
+    }
+    return el("span", "chip chip-" + tone, label);
+  }
+
+  function latestEcoStateByTask(runs) {
+    var map = {};
+    (runs || []).forEach(function (r) {
+      if (!(r.task_id in map)) map[r.task_id] = r.state;
+    });
+    return map;
+  }
+
+  /** 読み取り専用。失敗時は eco 表示なしにする（legacy 状態のみ表示 = fail closed）。 */
+  function fetchEcoStates() {
+    return api("/api/eco/runs")
+      .then(function (r) {
+        return latestEcoStateByTask(r.runs);
+      })
+      .catch(function () {
+        return {};
+      });
   }
 
   function sourceLabel(source) {
@@ -450,7 +493,9 @@
       main.appendChild(el("div", "hist-title", task.title));
       main.appendChild(el("div", "hist-sub", fmt(task.updatedAt) + " ・ " + sourceLabel(task.source)));
       row.appendChild(main);
-      row.appendChild(stateChip(task));
+      var ecoChip = ecoRunChip(state.ecoStates[task.id]);
+      if (ecoChip) row.appendChild(ecoChip);
+      else row.appendChild(stateChip(task));
       row.addEventListener("click", function () {
         openTaskDetail(task.id);
       });
@@ -467,7 +512,9 @@
 
       box.appendChild(el("h2", "panel-title", task.title));
       var meta = el("div", "todo-meta");
-      meta.appendChild(stateChip(task));
+      var ecoChip = ecoRunChip(state.ecoStates[task.id]);
+      if (ecoChip) meta.appendChild(ecoChip);
+      else meta.appendChild(stateChip(task));
       meta.appendChild(el("span", "chip", sourceLabel(task.source)));
       if (task.revisionCount) meta.appendChild(el("span", "chip", "修正 " + task.revisionCount + " 回"));
       box.appendChild(meta);
@@ -511,7 +558,7 @@
       section("テスト結果", (data.report && data.report.tests) || "（なし）");
       if (data.verification) section("独立テストの実測結果", data.verification.data);
       if (data.staging) section("staging反映", data.staging);
-      section("Claude 審査の詳細", reviews.length ? reviews : "（なし）");
+      section("審査の詳細", reviews.length ? reviews : "（なし）");
       section("完了報告", data.report || "（なし）");
       section(
         "Git 情報",
@@ -745,15 +792,18 @@
     if (state.view === "home") {
       api("/api/home").then(renderHome).catch(function () {});
     } else if (state.view === "history") {
-      api("/api/tasks").then(renderHistory).catch(function () {});
-      if (state.openTaskId) openTaskDetail(state.openTaskId);
+      fetchEcoStates().then(function (map) {
+        state.ecoStates = map;
+        var listDone = api("/api/tasks").then(renderHistory).catch(function () {});
+        if (state.openTaskId) listDone.then(function () { openTaskDetail(state.openTaskId); });
+      });
     } else if (state.view === "add") {
       api("/api/documents").then(renderDocuments).catch(function () {});
     } else if (state.view === "settings") {
       api("/api/settings")
         .then(function (r) {
           renderReviewProvider(r.reviewProvider || {});
-          byId("implementation-provider").value = r.implementationProvider || "claude";
+          byId("implementation-provider").value = r.implementationProvider || "codex";
           byId("implementation-provider").onchange = function () {
             api("/api/settings/implementation-provider", { method: "POST", body: { provider: this.value } }).then(function () {
               byId("implementation-status").textContent = "次の作業から反映します。";

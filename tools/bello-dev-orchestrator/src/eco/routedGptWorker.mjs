@@ -2,7 +2,9 @@ import {
   planWork,
   selectForWork,
   verifyEvaluationEvidence,
+  modelKey,
 } from "./taskRouting.mjs";
+import { DEFAULT_CODEX_EFFORT } from "../runner/codexOptions.mjs";
 
 /** GPT spec/QA workers are registered by the host for an exact model. Selection
  * never changes the desktop chat's model by pretending a prompt can do so.
@@ -17,6 +19,10 @@ export function routedGptWorker({
   describeWork,
   capacityLimited = () => false,
 }) {
+  const workerFor = (model) => workers[modelKey(model)] ??
+    ((model.reasoningEffort ?? DEFAULT_CODEX_EFFORT) === (workers[model.model]?.reasoningEffort ?? DEFAULT_CODEX_EFFORT)
+      ? workers[model.model]
+      : undefined);
   const read = (context) => {
     const row = repo.store.get(
       "SELECT data FROM checkpoints WHERE task_id=? AND phase=? ORDER BY id DESC LIMIT 1",
@@ -41,7 +47,7 @@ export function routedGptWorker({
       work,
       baseline,
       roleProvider: "codex",
-      available: (model) => !!workers[model.model],
+      available: (model) => !!workerFor(model),
       evidenceVerified: (model, category, ev) =>
         verifyEvaluationEvidence(repo.store, model, category, ev),
     });
@@ -66,7 +72,7 @@ export function routedGptWorker({
           selection.waiting === "WAITING_CAPACITY" ? "capacity" : "blocked",
         reason: selection.reason,
       };
-    const worker = workers[selection.model];
+    const worker = workerFor(selection);
     if (
       !worker ||
       selection.provider !== "codex" ||

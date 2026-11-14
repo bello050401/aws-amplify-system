@@ -29,6 +29,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** 審査できなかったタスクを次に見に行くまでの間隔。キー設定後 1 分以内に流れる。 */
 const REVIEW_RECHECK_MS = 60_000;
+const PROVIDER_REVIEW_HOLD = "9999-12-31T23:59:59.999Z";
 
 function failureSignature(parts) {
   return crypto.createHash("sha256").update(parts.filter(Boolean).join("|")).digest("hex").slice(0, 24);
@@ -106,7 +107,8 @@ export class Orchestrator {
     // legacy の状態機械へ触れない (§eco 所有権)。
     for (const waiting of this.repo.listTasks({ state: STATES.AWAITING_AI_REVIEW, limit: 500 })) {
       if (this.repo.hasActiveEcoRun(waiting.id)) continue;
-      if (waiting.retry_after) this.repo.updateTask(waiting.id, { retry_after: null });
+      if (waiting.retry_after && waiting.retry_after !== PROVIDER_REVIEW_HOLD)
+        this.repo.updateTask(waiting.id, { retry_after: null });
     }
 
     // 完了報告が残っている verifying は、Claude を走らせ直さずに審査から再開する。
@@ -349,7 +351,7 @@ export class Orchestrator {
       });
 
       // --- running -------------------------------------------------------
-      const running = this.repo.setState(task.id, STATES.RUNNING, "Claude Runner 実行", "system");
+      const running = this.repo.setState(task.id, STATES.RUNNING, "実装担当を実行", "system");
       const instruction = this.#buildInstruction(running);
       this.todoManager.triage?.markRunning(task.id);
 
@@ -363,11 +365,14 @@ export class Orchestrator {
       });
 
       this.repo.updateTask(task.id, { session_id: result.sessionId ?? null });
-      this.repo.checkpoint(task.id, "claude_finished", {
+      this.repo.checkpoint(task.id, "implementation_finished", {
         terminationReason: result.terminationReason,
         exitCode: result.exitCode,
         durationMs: result.durationMs,
         costUsd: result.costUsd,
+        usage: result.usage,
+        providerError: result.providerError,
+        providerStatus: result.providerStatus,
       });
 
       if (this.stopCurrentRequested && !this.stopping) {
@@ -375,10 +380,24 @@ export class Orchestrator {
         return;
       }
 
+      if (["capacity", "auth"].includes(result.providerStatus)) {
+        const auth = result.providerStatus === "auth";
+        const message = redactText(result.providerError || "Codex provider unavailable");
+        this.todoManager.createFromUserAction({
+          category: auth ? "auth" : "approval",
+          title: auth ? "CodexのChatGPT認証を確認してください" : "Codexの利用枠の回復を確認してください",
+          reason: message,
+          steps: [auth ? "codex login でChatGPTアカウントにサインインする" : "Codexの利用枠が回復するまで待つ"],
+          completionCondition: auth ? "codex login status がChatGPTサインインを確認した" : "Codexの利用枠が回復した",
+        }, { waitingTaskIds: [task.id], source: "codex" });
+        this.repo.setState(task.id, STATES.AWAITING_USER, message, "system", { blocked_reason: message, retry_after: null });
+        return;
+      }
+
       if (!result.report) {
         return this.#retryOrFail(
           task,
-          `Claude が完了報告を返しませんでした (${result.terminationReason}${result.error ? ": " + result.error : ""})`,
+          `実装担当が完了報告を返しませんでした (${result.terminationReason}${result.error ? ": " + result.error : ""})`,
           failureSignature([result.terminationReason, result.error, result.stderrTail?.slice(0, 200)]),
         );
       }
@@ -430,7 +449,7 @@ export class Orchestrator {
       for (const action of result.report.userActions ?? []) {
         const { todo } = this.todoManager.createFromUserAction(action, {
           waitingTaskIds: [task.id],
-          source: "claude",
+          source: this.repo.store.getMeta("implementationProvider") || this.config.execution?.provider || "codex",
         });
         todoIds.push(todo.id);
       }
@@ -538,6 +557,8 @@ export class Orchestrator {
         gitStat: git.diffStat(task.work_dir || task.repo_path, task.base_commit || task.git_start_commit),
         testSummary: report.tests ?? [],
         priorReviews: this.repo.reviewsFor(task.id),
+        independentVerification: this.verifier.check(task),
+        shouldStop: () => this.stopCurrentRequested,
       });
     } catch (err) {
       this.#handleReviewFailure(task, err, provider);
@@ -545,6 +566,7 @@ export class Orchestrator {
     }
 
     const { review, meta } = reviewResult;
+    if (provider === "codex") this.repo.checkpoint(task.id, "review_routing", meta);
     // 審査できたので待機指示と失敗カウンタは消す。残したまま次の状態へ行くと、
     // 後の再試行判定を狂わせる。審査失敗を知らせていた TODO も自動で閉じる。
     this.repo.updateTask(task.id, { retry_after: null, last_error: null, review_failures: 0 });
@@ -850,7 +872,7 @@ export class Orchestrator {
   // --------------------------------------------------------- 審査の失敗
   /** 審査失敗を知らせていた TODO を閉じる。審査が通ったのに残っていると紛らわしい。 */
   #closeReviewFailureTodos(taskId) {
-    for (const todo of this.repo.openTodosForTask(taskId, "review_failure")) {
+    for (const todo of this.repo.openTodosForTask(taskId).filter(todo => ["review_failure", "codex_review_hold"].includes(todo.kind))) {
       this.repo.store.run("UPDATE todos SET status='cancelled' WHERE id=? AND status='open'", [todo.id]);
       this.repo.audit("system", "todo.autoclose", todo.id, "審査が成功したため", null);
     }
@@ -868,6 +890,7 @@ export class Orchestrator {
     const fresh = this.repo.getTask(task.id) ?? task;
     const failures = (fresh.review_failures ?? 0) + 1;
     const needsUser = NEEDS_USER_ACTION.includes(reason);
+    const held = provider === "codex" && needsUser;
 
     // 利用上限は自然回復を待つので長め、認証切れと設定不足は人の操作後すぐ効くよう短め。
     const waitMs = needsUser
@@ -882,12 +905,12 @@ export class Orchestrator {
     this.repo.updateTask(task.id, {
       last_error: redactText(err.message).slice(0, 4000),
       review_failures: failures,
-      retry_after: new Date(Date.now() + waitMs).toISOString(),
+      retry_after: held ? PROVIDER_REVIEW_HOLD : new Date(Date.now() + waitMs).toISOString(),
       blocked_reason: needsUser
         ? `審査を実行できません (${reason})。状態は保存してあります。`
         : `審査に失敗しました。${Math.round(waitMs / 1000)} 秒後に再試行します。`,
     });
-    this.repo.checkpoint(task.id, "review_failure", { provider, reason, failures, message: redactText(err.message) });
+    this.repo.checkpoint(task.id, "review_failure", { provider, reason, failures, message: redactText(err.message), receipt: err.receipt });
     this.repo.audit("review_engine", "review.failed", task.id, reason, err.message);
 
     // 人の操作が要る失敗は初回から、そうでない失敗は繰り返してから TODO を出す。
@@ -896,7 +919,7 @@ export class Orchestrator {
     if (shouldNotify) {
       const description = describeFailure(reason, { provider });
       this.todoManager.createFromUserAction(
-        { ...description, kind: "review_failure" },
+        { ...description, kind: held ? "codex_review_hold" : "review_failure" },
         { waitingTaskIds: [task.id], source: "review_engine" },
       );
     }

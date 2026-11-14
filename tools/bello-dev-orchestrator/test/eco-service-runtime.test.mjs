@@ -1,10 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { Store } from "../src/store/db.mjs";
 import { Repo } from "../src/store/repo.mjs";
 import { STATES } from "../src/core/states.mjs";
 import { installEcoSchema } from "../src/eco/store.mjs";
 import { createEcoRuntime } from "../src/eco/serviceRuntime.mjs";
+import {
+  validateRuntimeConfig,
+  APPROVED_TARGET_APPS,
+  SUPPORTED_PROFILE_ID,
+} from "../src/eco/serviceBindings.mjs";
 
 const OPERATOR_TOKEN = "test-operator-token-0001";
 
@@ -515,4 +523,164 @@ test("adapter failures are logged and do not crash the tick loop", async () => {
   await runtime.tick(); // DISCOVERING -> HUMAN_REVIEW (adapters.discover missing; handled, not thrown)
   assert.equal(errors.length, 0);
   assert.equal(runtime.repo.list()[0].state, "HUMAN_REVIEW");
+});
+
+function fixtureRepoPath() {
+  return path.resolve(os.tmpdir(), "bello-target-app-fixture-repo");
+}
+function fixturePlaywrightModule(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bello-target-app-playwright-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, "fake-playwright.js");
+  fs.writeFileSync(file, "module.exports = {};");
+  return file;
+}
+const baseHostConfig = { repoPath: fixtureRepoPath(), claude: { model: "claude-fixture" } };
+function localEvidenceAppProfile(id, overrides = {}) {
+  return {
+    schemaVersion: 1,
+    profiles: {
+      [id]: {
+        targetApp: id,
+        repoPath: fixtureRepoPath(),
+        allowedPaths: ["apps/" + id.replace(/_/g, "-") + "/src/App.tsx"],
+        verification: { required: true, commands: [{ name: "build", file: "npm", args: ["run", "build"] }, { name: "test", file: "npm", args: ["test"] }] },
+        models: { codex: { model: "gpt-fixture" } },
+        staging: { mode: "local-build-evidence", enabled: true, isolatedDataConfirmed: true, uiEvidencePath: "evidence/" + id.replace(/_/g, "-") + ".png" },
+        ...overrides,
+      },
+    },
+  };
+}
+function photoStationProfile(overrides = {}) {
+  return localEvidenceAppProfile("photo_station", overrides);
+}
+function storeSimulatorProfile(overrides = {}) {
+  return localEvidenceAppProfile("store_simulator", overrides);
+}
+function stagingAppProfile(id, t, overrides = {}) {
+  return {
+    schemaVersion: 1,
+    profiles: {
+      [id]: {
+        targetApp: id,
+        repoPath: fixtureRepoPath(),
+        allowedPaths: ["apps/" + id + "/src/index.js"],
+        verification: { required: true, commands: [{ name: "test", file: "npm", args: ["test"] }] },
+        models: { codex: { model: "gpt-fixture" } },
+        qaUrl: "https://" + id.replace(/_/g, "-") + "-staging.example.test/",
+        allowedDomains: [id.replace(/_/g, "-") + "-staging.example.test"],
+        staging: {
+          mode: "real-staging",
+          enabled: true,
+          isolatedDataConfirmed: true,
+          service: id,
+          environment: "staging",
+          stagingId: id + "-staging-001",
+          accountId: "123456789012",
+          appId: "dfixture123",
+          branch: "staging",
+          appName: id + "-staging",
+          region: "us-west-2",
+          profile: "fixture-profile",
+        },
+        playwright: { modulePath: fixturePlaywrightModule(t) },
+        qaSteps: { sequence: [{ type: "navigate" }, { type: "reload" }, { type: "screenshot" }], maxTotalSeconds: 30 },
+        ...overrides,
+      },
+    },
+  };
+}
+
+test("target-app profiles: photo_station validates with local evidenceMode and no browser QA target", () => {
+  const profile = validateRuntimeConfig(photoStationProfile(), baseHostConfig);
+  assert.equal(profile.id, "photo_station");
+  assert.equal(profile.targetApp, "photo_station");
+  assert.equal(profile.evidenceMode, "local");
+  assert.equal(profile.configurationScope, "bounded-main");
+});
+
+test("target-app profiles: photo_station must not declare a browser QA target", () => {
+  assert.throws(
+    () => validateRuntimeConfig(photoStationProfile({ qaUrl: "https://example.test/" }), baseHostConfig),
+    /must not declare a browser QA target/,
+  );
+});
+
+test("target-app profiles: photo_station staging.mode must be local-build-evidence, not static-smoke", () => {
+  assert.throws(
+    () =>
+      validateRuntimeConfig(
+        photoStationProfile({ staging: { mode: "static-smoke", enabled: true, isolatedDataConfirmed: true } }),
+        baseHostConfig,
+      ),
+    /local-build-evidence/,
+  );
+});
+
+for (const id of ["inventory_web", "ec", "zaico"])
+  test(`target-app profiles: ${id} validates with staging evidenceMode and its own real staging identity`, (t) => {
+    const profile = validateRuntimeConfig(stagingAppProfile(id, t), baseHostConfig);
+    assert.equal(profile.id, id);
+    assert.equal(profile.targetApp, id);
+    assert.equal(profile.evidenceMode, "staging");
+    assert.equal(profile.staging.service, id);
+  });
+
+test("target-app profiles: real staging service field must match its own profile id, not another app", (t) => {
+  assert.throws(
+    () =>
+      validateRuntimeConfig(
+        stagingAppProfile("ec", t, { staging: { ...stagingAppProfile("ec", t).profiles.ec.staging, service: "zaico" } }),
+        baseHostConfig,
+      ),
+    /real staging target/,
+  );
+});
+
+test("target-app profiles: a static-smoke pass is never accepted as real staging for ec/zaico/web", (t) => {
+  assert.throws(
+    () =>
+      validateRuntimeConfig(
+        stagingAppProfile("zaico", t, { staging: { ...stagingAppProfile("zaico", t).profiles.zaico.staging, mode: "static-smoke" } }),
+        baseHostConfig,
+      ),
+    /real staging target/,
+  );
+});
+
+test("target-app profiles: exactly one profile must be configured, and only approved ids are accepted", (t) => {
+  const twoProfiles = { schemaVersion: 1, profiles: { ...photoStationProfile().profiles, ...stagingAppProfile("ec", t).profiles } };
+  assert.throws(() => validateRuntimeConfig(twoProfiles, baseHostConfig), /[Ee]xactly one/);
+  assert.throws(
+    () => validateRuntimeConfig({ schemaVersion: 1, profiles: { unapproved_app: {} } }, baseHostConfig),
+    /[Uu]nknown or unapproved/,
+  );
+});
+
+test("target-app profiles: targetApp must match the profile's own approved id exactly", () => {
+  assert.throws(
+    () => validateRuntimeConfig(photoStationProfile({ targetApp: "ec" }), baseHostConfig),
+    /targetApp must match/,
+  );
+});
+
+test("target-app profiles: an unconfigured connected runtime honestly fails startRun instead of silently no-op'ing", async () => {
+  const store = await Store.open(":memory:");
+  const repo = new Repo(store);
+  installEcoSchema(store);
+  const logger = { info() {}, warn() {}, error() {}, debug() {} };
+  const runtime = createEcoRuntime({ store, repo, config: {}, paths: {}, logger, bindings: null, operatorToken: OPERATOR_TOKEN });
+  assert.equal(runtime.connected, false);
+  assert.throws(
+    () => runtime.startRun({ taskId: "x", profileId: "photo_station", expectedVersion: 0, idempotencyKey: "a".repeat(10) }),
+    /not connected/,
+  );
+  store.close();
+});
+
+test("APPROVED_TARGET_APPS declares the two evidence categories required by AC-2/AC-3, and reserves static-smoke for none of them", () => {
+  for (const id of ["photo_station", "store_simulator"]) assert.equal(APPROVED_TARGET_APPS[id].evidenceMode, "local");
+  for (const id of ["inventory_web", "ec", "zaico"]) assert.equal(APPROVED_TARGET_APPS[id].evidenceMode, "staging");
+  assert.equal(SUPPORTED_PROFILE_ID in APPROVED_TARGET_APPS, false);
 });

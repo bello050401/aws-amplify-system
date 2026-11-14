@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { parseCodexEvents } from "../runner/codexRunner.mjs";
 
 export function evaluateAnswer(trial, answer) {
   if (
@@ -73,6 +74,15 @@ export function summarizeTrials({
 }
 
 export function parseCliResult(provider, result, outputText) {
+  if (provider === "codex") {
+    const { completed, providerError, providerStatus, usage, totalTokens, unexpectedToolUse } = parseCodexEvents(result);
+    if (!completed) return { ok: false, reason: providerError, providerStatus, usage, totalTokens };
+    try {
+      return { ok: true, answer: JSON.parse(outputText), usage, totalTokens, apiEquivalentUsd: null, actualModels: [], unexpectedToolUse };
+    } catch (err) {
+      return { ok: false, reason: "Invalid CLI result: " + err.message, usage, totalTokens };
+    }
+  }
   if (!result.ok)
     return {
       ok: false,
@@ -112,32 +122,7 @@ export function parseCliResult(provider, result, outputText) {
         unexpectedToolUse: !!data.permission_denials?.length,
       };
     }
-    const events = result.stdout
-      .trim()
-      .split(/\r?\n/)
-      .filter(Boolean)
-      .map((line) => JSON.parse(line));
-    const completion = events.findLast((e) => e.type === "turn.completed");
-    if (!completion) return { ok: false, reason: "No completed Codex turn" };
-    const usage = completion.usage || {};
-    // Codex input_tokens includes cached_input_tokens; do not count cache twice.
-    const totalTokens =
-      Number.isFinite(usage.input_tokens) &&
-      Number.isFinite(usage.output_tokens)
-        ? usage.input_tokens + usage.output_tokens
-        : null;
-    const unexpectedToolUse = events.some(
-      (e) => e.item && !["agent_message", "reasoning"].includes(e.item.type),
-    );
-    return {
-      ok: true,
-      answer: JSON.parse(outputText),
-      usage,
-      totalTokens,
-      apiEquivalentUsd: null,
-      actualModels: [],
-      unexpectedToolUse,
-    };
+    return { ok: false, reason: "Unsupported CLI provider" };
   } catch (err) {
     return { ok: false, reason: "Invalid CLI result: " + err.message };
   }

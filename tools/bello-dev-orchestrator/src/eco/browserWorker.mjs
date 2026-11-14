@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
-import { runProcess, localEnvironment } from "../pipeline/process.mjs";
-import { resolveCodexExecutable } from "../runner/codexRunner.mjs";
+import { runProcess } from "../pipeline/process.mjs";
 import { subscriptionTextWorker } from "./subscriptionTextWorker.mjs";
+export { probeCodexLogin } from "../runner/codexRunner.mjs";
 
 // Real browser QA worker: Playwright drives the page, the existing GPT-native
 // Codex CLI text worker judges acceptance criteria from the captured evidence.
@@ -42,26 +42,6 @@ export async function probeBrowserLaunch({ modulePath, headless = true, launch =
   } finally {
     if (browser) await browser.close().catch(() => {});
   }
-}
-
-/** Real `codex login status` probe (subscription auth, no API key). */
-export async function probeCodexLogin({
-  executable = "codex",
-  resolveExecutable = resolveCodexExecutable,
-  execute = runProcess,
-} = {}) {
-  const file = resolveExecutable(executable);
-  if (!file) return { ok: false, reason: "Codex executable not found" };
-  const result = await execute({
-    file,
-    args: ["login", "status"],
-    env: localEnvironment(),
-    timeoutMs: 15000,
-  });
-  return {
-    ok: !!result.ok,
-    reason: result.ok ? null : result.stderr || result.reason || "codex login status failed",
-  };
 }
 
 function withinScope(target, baseUrl) {
@@ -260,6 +240,7 @@ function makeQaArtifact(answer, context, { phase, sessions }) {
 export function createBrowserQaWorker({
   phase,
   model,
+  reasoningEffort,
   executable,
   directory,
   evidenceRoot,
@@ -313,6 +294,8 @@ export function createBrowserQaWorker({
 
   const inner = subscriptionTextWorker({
     model,
+    reasoningEffort,
+    selectionReason: "Host profile browser QA settings",
     executable,
     directory,
     schema: QA_VERDICT_SCHEMA,

@@ -35,13 +35,15 @@ export class ReviewUnavailableError extends Error {
 
 const USAGE_LIMIT_PATTERNS = [
   /usage limit/i,
-  /rate limit/i,
+  /rate[_ .-]limit/i,
+  /usage[_ .-]limit/i,
+  /capacity/i,
   /利用(?:上限|制限)/,
   /quota/i,
   /insufficient[_ ]quota/i,
   /too many requests/i,
   /overloaded/i,
-  /429/,
+  /\b429\b/,
   /max[_ ]budget/i,
   /budget (?:exceeded|limit)/i,
 ];
@@ -50,12 +52,14 @@ const AUTH_PATTERNS = [
   /\/login/,
   /not logged in/i,
   /log in to/i,
-  /authentication[_ ]error/i,
+  /authentication[_ ](?:error|required)/i,
+  /login[_ ]required/i,
+  /token[_ ](?:expired|invalid)/i,
   /unauthorized/i,
   /invalid api key/i,
   /credentials?[^a-z]{0,3}(?:expired|invalid)/i,
-  /401/,
-  /403/,
+  /\b401\b/,
+  /\b403\b/,
   /oauth token (?:has )?expired/i,
   /セッションの有効期限/,
 ];
@@ -76,6 +80,19 @@ export function classifyFailureText(text) {
 
 /** 失敗の種類ごとの、ユーザー向けの説明と手順。 */
 export function describeFailure(reason, { provider = "claude" } = {}) {
+  if (provider === "codex" && [REVIEW_FAILURE.USAGE_LIMIT, REVIEW_FAILURE.AUTH_EXPIRED].includes(reason)) {
+    const auth = reason === REVIEW_FAILURE.AUTH_EXPIRED;
+    return {
+      category: auth ? "auth" : "approval",
+      title: auth ? "審査用Codexの認証を確認してください" : "審査用Codexの利用枠を確認してください",
+      reason: auth ? "CodexのChatGPT認証を確認できませんでした。" : "Codexの利用枠に達しました。",
+      steps: [auth ? "codex login でChatGPTアカウントへサインインする" : "Codexの利用枠が回復するまで待つ"],
+      completionCondition: auth ? "codex login status がChatGPTサインインを確認した" : "Codexの利用枠が回復した",
+      canUseIPhone: !auth,
+      estimatedMinutes: 5,
+      priority: auth ? "urgent" : "normal",
+    };
+  }
   switch (reason) {
     case REVIEW_FAILURE.USAGE_LIMIT:
       return {
@@ -121,7 +138,7 @@ export function describeFailure(reason, { provider = "claude" } = {}) {
           "設定を用意するか、ダッシュボードで別の審査方式へ切り替えてください。",
         steps: [
           "ダッシュボードの「設定」画面を開く",
-          "審査方式を「Claude審査（追加課金なし）」または「手動審査」に変更する",
+          "審査方式を「Codex審査」または「手動審査」に変更する",
           "変更後、審査待ちのタスクは自動で進みます",
         ],
         completionCondition: "審査方式を変更したこと、または必要な設定を用意したこと",

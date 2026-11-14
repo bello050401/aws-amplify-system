@@ -9,6 +9,7 @@ import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { readConfigFile, salvageConfigText } from "./configFile.mjs";
+import { DEFAULT_CODEX_MODEL, DEFAULT_CODEX_EFFORT, validReasoningEffort } from "./runner/codexOptions.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const PACKAGE_ROOT = path.resolve(HERE, "..");
@@ -26,8 +27,8 @@ function localAppData() {
 const DEFAULTS = {
   repoPath: "",
   dataRoot: "",
-  execution: { provider: "claude" },
-  codex: { executable: "codex", model: "", timeoutSeconds: 3600 },
+  execution: { provider: "codex" },
+  codex: { executable: "codex", model: DEFAULT_CODEX_MODEL, reasoningEffort: DEFAULT_CODEX_EFFORT, timeoutSeconds: 3600 },
   verification: { required: true, commands: [] },
   staging: { enabled: false, accountId: "", appId: "", branch: "", region: "", profile: "", repository: "", isolatedDataConfirmed: false, maxWaitSeconds: 1800 },
   notifications: { enabled: false, webhookUrlEnvVar: "BELLO_NOTIFICATION_WEBHOOK_URL", tokenEnvVar: "BELLO_NOTIFICATION_TOKEN", maxAttempts: 5, timeoutSeconds: 10 },
@@ -44,8 +45,8 @@ const DEFAULTS = {
     extraArgs: [],
   },
   review: {
-    // 既定は追加課金の要らない Claude 審査。openai / manual も選べる。
-    provider: "claude",
+    provider: "codex",
+    codex: { model: DEFAULT_CODEX_MODEL, reasoningEffort: DEFAULT_CODEX_EFFORT },
     claude: {
       model: "sonnet",
       timeoutSeconds: 900,
@@ -115,8 +116,7 @@ function deepMerge(base, override) {
 }
 
 const PERMISSION_MODES = ["acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"];
-/** 審査方式。claude = 別セッションの Claude Code（追加課金なし・既定）。 */
-export const REVIEW_PROVIDERS = ["claude", "openai", "manual"];
+export const REVIEW_PROVIDERS = ["codex", "claude", "openai", "manual"];
 /** 作業場所の分離方式。 */
 export const GIT_ISOLATIONS = ["worktree", "in-place"];
 const PERMISSION_PROMPTS = ["host", "none"];
@@ -139,6 +139,8 @@ export function validateConfig(cfg, { checkEnvironment = true } = {}) {
 
   if (cfg.execution && !["claude", "codex"].includes(cfg.execution.provider)) errors.push("execution.provider は claude / codex を指定してください。");
   if (cfg.codex && (typeof cfg.codex.executable !== "string" || typeof cfg.codex.model !== "string" || !Number.isFinite(cfg.codex.timeoutSeconds) || cfg.codex.timeoutSeconds < 1)) errors.push("codex の実行ファイル・モデル・制限時間が不正です。");
+  if (cfg.codex?.reasoningEffort !== undefined && !validReasoningEffort(cfg.codex.reasoningEffort, cfg.codex.model || DEFAULT_CODEX_MODEL))
+    errors.push("codex.reasoningEffort が不正です。");
   if (cfg.verification) {
     if (typeof cfg.verification.required !== "boolean" || !Array.isArray(cfg.verification.commands)) errors.push("verification.required と commands が不正です。");
     else {
@@ -204,7 +206,10 @@ export function validateConfig(cfg, { checkEnvironment = true } = {}) {
     errors.push("review.claude.timeoutSeconds は 60 以上の数値である必要があります。");
   }
   // OPENAI_API_KEY が無いことは「エラー」でも「警告」でもない。
-  // 既定の審査方式は Claude であり、OpenAI は任意のオプションだから。
+  if ((cfg.review.provider === "codex" || cfg.review.codex !== undefined) &&
+      (typeof cfg.review.codex?.model !== "string" || !cfg.review.codex.model.trim() ||
+        !validReasoningEffort(cfg.review.codex.reasoningEffort, cfg.review.codex.model)))
+    errors.push("review.codex のモデル・reasoningEffort が不正です。");
   if (checkEnvironment && cfg.review.provider === "openai" && !process.env.OPENAI_API_KEY) {
     warnings.push(
       "review.provider=openai ですが OPENAI_API_KEY が未設定です。審査待ちで止まります。ダッシュボードの設定で「Claude審査」または「手動審査」へ切り替えられます。",

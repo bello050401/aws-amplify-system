@@ -5,7 +5,7 @@
   const labels = {
     enabled: "新規runで有効にする",
     gptBrowserQa: "GPTによるブラウザQA",
-    claudeImplementation: "Claudeによる実装",
+    claudeImplementation: "Claude実装の接続確認（従来プロファイル）",
     modelAutoRouting: "モデルの自動選択",
     contextCache: "読込要約の再利用",
     rereadPrevention: "同じファイルの再読込を抑える",
@@ -66,6 +66,21 @@
     modelInput.autocomplete = "off";
     wrap.append(modelLabel, modelInput);
 
+    const effortLabel = document.createElement("label");
+    const effortSelect = document.createElement("select");
+    effortSelect.id = "eco-mp-" + tier + "-effort";
+    effortLabel.htmlFor = effortSelect.id;
+    effortLabel.textContent = "Codex思考レベル";
+    for (const value of ["", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = value || "既定";
+      effortSelect.append(option);
+    }
+    const updateEffort = () => { effortSelect.disabled = providerSelect.value !== "codex"; };
+    providerSelect.addEventListener("change", updateEffort);
+    wrap.append(effortLabel, effortSelect);
+
     const capRow = document.createElement("div");
     capRow.className = "row";
     CAPABILITIES.forEach(([cap, capText]) => {
@@ -93,6 +108,16 @@
   }
   byId("eco-contextCache").addEventListener("change", dependencies);
 
+  function updateSubscriptionCapacityUI() {
+    const active = byId("eco-subscriptionCapacityMode").checked;
+    // Values stay untouched here; only the stop-condition behavior changes.
+    byId("eco-maxTokens").disabled = active;
+    byId("eco-maxCostUsd").disabled = active;
+    byId("eco-maxTokens-note").classList.toggle("hidden", !active);
+    byId("eco-maxCostUsd-note").classList.toggle("hidden", !active);
+  }
+  byId("eco-subscriptionCapacityMode").addEventListener("change", updateSubscriptionCapacityUI);
+
   async function request(route, body) {
     const headers = { "x-bello-request": "1" };
     const lanToken = new URLSearchParams(location.search).get("token");
@@ -112,13 +137,14 @@
   }
 
   function capabilityLabel(key) {
-    return { browserQa: "ブラウザQA", claude: "Claude実行", staging: "staging接続" }[key] || key;
+    return { browserQa: "ブラウザQA", claude: "Claude実行", codex: "Codex実行", staging: "staging接続" }[key] || key;
   }
 
   function renderCapabilities(capabilities) {
     const container = byId("eco-capabilities");
     container.textContent = "";
     Object.entries(capabilities || {}).forEach(([key, value]) => {
+      if (typeof value?.connected !== "boolean") return;
       const chip = document.createElement("span");
       chip.className = "chip " + (value?.connected ? "chip-ok" : "chip-bad");
       chip.textContent =
@@ -134,6 +160,9 @@
   function fillModelPolicyTier(tier, mapping, capabilities) {
     byId("eco-mp-" + tier + "-provider").value = mapping?.provider || "";
     byId("eco-mp-" + tier + "-model").value = mapping?.model || "";
+    const effort = byId("eco-mp-" + tier + "-effort");
+    effort.value = mapping?.reasoningEffort || "";
+    effort.disabled = mapping?.provider !== "codex";
     const caps = new Set(mapping?.capabilities || []);
     CAPABILITIES.forEach(([cap]) => {
       const input = byId("eco-mp-" + tier + "-cap-" + cap);
@@ -154,7 +183,8 @@
     const model = byId("eco-mp-" + tier + "-model").value.trim();
     if (!provider || !model) return null;
     const capabilities = CAPABILITIES.filter(([cap]) => byId("eco-mp-" + tier + "-cap-" + cap).checked).map(([cap]) => cap);
-    return { provider, model, capabilities };
+    const reasoningEffort = byId("eco-mp-" + tier + "-effort").value;
+    return { provider, model, capabilities, ...(provider === "codex" && reasoningEffort && { reasoningEffort }) };
   }
 
   async function loadQueuedTasks() {
@@ -197,6 +227,8 @@
     byId("eco-maxElapsedSeconds").value = config.maxElapsedSeconds;
     byId("eco-maxTokens").value = config.maxTokens;
     byId("eco-maxCostUsd").value = config.maxCostUsd;
+    byId("eco-subscriptionCapacityMode").checked = config.subscriptionCapacityMode;
+    updateSubscriptionCapacityUI();
     byId("eco-communicationRetries").value = config.communicationRetries;
     byId("eco-artifactRetries").value = config.artifactRetries;
     byId("eco-retentionDays").value = config.retentionDays;
@@ -216,7 +248,12 @@
       .map((c) => c.reason);
     byId("eco-status").textContent =
       (snapshot.installed
-        ? "設定 version " + snapshot.version + " / 稼働: " + (config.enabled ? "有効" : "無効")
+        ? "設定 version " +
+          snapshot.version +
+          " / 稼働: " +
+          (config.enabled ? "有効" : "無効") +
+          " / サブスクリプション枠モード: " +
+          (config.subscriptionCapacityMode ? "有効" : "無効")
         : "追加DBの適用前です。現在のタスクは従来どおり動作します。") +
       " / " +
       reasons.join(" / ");
@@ -239,6 +276,7 @@
       maxElapsedSeconds: Number(byId("eco-maxElapsedSeconds").value),
       maxTokens: Number(byId("eco-maxTokens").value),
       maxCostUsd: Number(byId("eco-maxCostUsd").value),
+      subscriptionCapacityMode: byId("eco-subscriptionCapacityMode").checked,
       communicationRetries: Number(byId("eco-communicationRetries").value),
       artifactRetries: Number(byId("eco-artifactRetries").value),
       retentionDays: Number(byId("eco-retentionDays").value),

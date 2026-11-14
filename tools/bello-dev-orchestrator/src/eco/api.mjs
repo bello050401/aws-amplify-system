@@ -12,6 +12,10 @@ export const disconnected = () => ({
     connected: false,
     reason: "実行ファイルの存在だけでは認証・モデル能力を確認できません",
   },
+  codex: {
+    connected: false,
+    reason: "CodexのChatGPT認証は未確認です",
+  },
   staging: {
     connected: false,
     reason: "協調runのrevision照合アダプターは未接続です",
@@ -25,12 +29,13 @@ export class EcoApi {
     store,
     operatorToken = "",
     capabilities = disconnected,
+    implementationProvider,
     engine = null,
     startRun = null,
     getRun = null,
     onControl = null,
   }) {
-    this.repo = new EcoStore({ store, capabilities });
+    this.repo = new EcoStore({ store, capabilities, implementationProvider });
     this.store = store;
     this.operatorToken = operatorToken;
     this.engine = engine;

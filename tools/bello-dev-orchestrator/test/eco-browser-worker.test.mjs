@@ -9,6 +9,8 @@ import { Repo } from "../src/store/repo.mjs";
 import { Logger } from "../src/log/logger.mjs";
 import { runQaSession, createBrowserQaWorker, QA_VERDICT_SCHEMA } from "../src/eco/browserWorker.mjs";
 import { createServiceBindings, validateRuntimeConfig, SUPPORTED_PROFILE_ID } from "../src/eco/serviceBindings.mjs";
+import { installEcoSchema } from "../src/eco/store.mjs";
+import { DEFAULT_ECO } from "../src/eco/policy.mjs";
 
 // ---------------------------------------------------------------- fakes
 
@@ -226,6 +228,7 @@ test("createBrowserQaWorker produces a valid PASS qa artifact with evidence on d
   const worker = createBrowserQaWorker({
     phase: "qaVerify",
     model: "gpt-test",
+    reasoningEffort: "high",
     executable: "codex",
     directory: tempDir("bello-qa-worker-"),
     evidenceRoot,
@@ -255,6 +258,7 @@ test("createBrowserQaWorker produces a valid PASS qa artifact with evidence on d
   assert.equal(receipt.artifact.body.acceptanceCriteria.length, 2);
   assert.equal(launchCalls.length, 1);
   assert.equal(cliCalls.length, 1);
+  assert.ok(cliCalls[0].includes('model_reasoning_effort="high"'));
   for (const ref of receipt.artifact.evidenceRefs) {
     assert.ok(fs.existsSync(path.join(evidenceRoot(context.run.id), ref)), ref + " must exist");
   }
@@ -693,7 +697,7 @@ test("createServiceBindings.refreshProbes records real-ish probe results the hos
       paths: h.paths,
       repo: h.repo,
       logger: h.logger,
-      execute: async ({ args }) => ({ ok: true, stdout: args.includes("--version") ? "1.0.0" : "logged in", stderr: "" }),
+      execute: async ({ args }) => ({ ok: true, stdout: args.includes("--version") ? "1.0.0" : "Logged in using ChatGPT", stderr: "" }),
       launchBrowser: async () => makeFakeBrowser(makeFakePage()),
       buildDelivery: () => ({ preflight: async () => {} }),
       resolveClaude: () => ({ file: "claude", kind: "configured" }),
@@ -707,4 +711,64 @@ test("createServiceBindings.refreshProbes records real-ish probe results the hos
   } finally {
     h.cleanup();
   }
+});
+
+test("Codex-only profile selects the isolated Codex runner and never resolves Claude", async (t) => {
+  const h = await buildHarnessWithRuntime();
+  t.after(() => h.cleanup());
+  const runtimeFile = path.join(h.paths.dataRoot, "eco-runtime.json");
+  const raw = JSON.parse(fs.readFileSync(runtimeFile, "utf8"));
+  const profile = raw.profiles[SUPPORTED_PROFILE_ID];
+  profile.implementationProvider = "codex";
+  profile.models = { codex: {
+    model: "gpt-6.1-sol",
+    reasoningEffort: "medium",
+    specification: { model: "gpt-6.1-sol", reasoningEffort: "high" },
+  } };
+  const config = { ...h.config, claude: undefined };
+  assert.equal(validateRuntimeConfig(raw, config).implementationProvider, "codex");
+  assert.throws(() => validateRuntimeConfig({ ...raw, profiles: { [SUPPORTED_PROFILE_ID]: {
+    ...profile, models: { codex: { model: "gpt-6.1-sol", reasoningEffort: "none" } },
+  } } }, config), /valid reasoning effort/);
+  fs.writeFileSync(runtimeFile, JSON.stringify(raw));
+  const calls = [];
+  const bindings = createServiceBindings({
+    config, paths: h.paths, repo: h.repo, logger: h.logger,
+    execute: async request => {
+      if (request.args[0] === "login") return { ok: true, stdout: "Logged in using ChatGPT" };
+      calls.push(request);
+      return { ok: false, stdout: JSON.stringify({
+        type: "turn.failed", error: { message: "401 Unauthorized" }, usage: { input_tokens: 10, output_tokens: 2, cached_input_tokens: 8 },
+      }) };
+    },
+    launchBrowser: async () => makeFakeBrowser(makeFakePage()),
+    buildDelivery: () => ({ preflight: async () => {} }),
+    resolveClaude: () => assert.fail("Codex-only profile consulted Claude"),
+    resolveCodex: () => "codex",
+  });
+  assert.equal(bindings.capabilities().codex.connected, false);
+  await bindings.refreshProbes();
+  assert.equal(bindings.capabilities().codex.connected, true);
+  assert.equal(bindings.capabilities().claude.connected, false);
+  installEcoSchema(h.store);
+  const { task } = h.repo.createTask({ title: "marker", instruction: "replace marker", source: "system", repoPath: h.repoPath });
+  const isolated = bindings.prepareTask(task, { revision: "r1", acIds: ["AC-1"] });
+  const run = { id: "eco-fixture", task_id: task.id, revision: "r1", acIds: ["AC-1"], risk: "low", specId: "spec-fixture", configSnapshot: DEFAULT_ECO };
+  h.store.run("INSERT INTO eco_artifacts VALUES(?,?,?,?,?,?)", [run.specId, run.id, run.revision, "spec", "fixture", JSON.stringify({
+    kind: "spec", runId: run.id, revision: run.revision,
+    body: { purpose: "marker", scope: ["README.md"], requirements: ["marker"], acceptanceCriteria: ["AC-1"], tests: ["test"], unresolved: [] },
+  })]);
+  const impl = { run, operationKey: "implement-fixture", signal: () => false };
+  const failed = await bindings.adapters.implement.execute(impl);
+  assert.equal(failed.status, "auth");
+  assert.equal(failed.reason, "401 Unauthorized");
+  assert.equal(failed.usage.measuredTokens, 12);
+  assert.equal(calls[0].cwd, isolated.work_dir);
+  assert.ok(calls[0].args.includes('model_reasoning_effort="medium"'));
+  assert.deepEqual(await bindings.adapters.implement.reconcile(impl), failed);
+  assert.equal(calls.length, 1);
+  const spec = await bindings.adapters.specification.execute({ run, operationKey: "specification-fixture", signal: () => false });
+  assert.equal(spec.status, "auth");
+  assert.equal(spec.usage.measuredTokens, 12);
+  assert.ok(calls[1].args.includes('model_reasoning_effort="high"'));
 });
