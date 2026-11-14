@@ -16,6 +16,8 @@
     "lint": "next lint",
     "pretypecheck": "node scripts/generate-mercari-masters-data.cjs",
     "typecheck": "tsc --noEmit",
+    "verify:quantity-planning": "tsx scripts/verify-quantity-planning.ts",
+    "verify:quantity-planning-persistence": "tsx --test lib/inventory/quantityPlanning/persistence.test.ts lib/inventory/quantityPlanning/boundaries.test.mjs",
     "amplify:sandbox": "ampx sandbox",
     "amplify:deploy": "ampx pipeline-deploy --branch $AWS_BRANCH --app-id $AWS_APP_ID",
     "verify:zaico": "node scripts/with-server-only-stub.cjs scripts/verify-zaico-sync.ts",

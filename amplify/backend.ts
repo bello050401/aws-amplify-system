@@ -1096,6 +1096,15 @@ if (process.env.AWS_APP_ID === 'd4hkkg7dty2du' && process.env.AWS_BRANCH === 'cl
         actions: ['dynamodb:GetItem', 'dynamodb:Query', 'dynamodb:PutItem'], resources: [inventoryAnalysisMetadataTable.tableArn],
         conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['current', 'control', 'audit:*'] } },
       }),
+      new PolicyStatement({
+        actions: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:ConditionCheckItem'],
+        resources: [inventoryAnalysisMetadataTable.tableArn],
+        conditions: { 'ForAllValues:StringEquals': { 'dynamodb:LeadingKeys': ['quantity-plan', 'quantity-settings'] } },
+      }),
+      new PolicyStatement({
+        actions: ['dynamodb:ConditionCheckItem'], resources: [inventoryAnalysisMetadataTable.tableArn],
+        conditions: { 'ForAllValues:StringEquals': { 'dynamodb:LeadingKeys': ['current'] } },
+      }),
     ],
   });
 }

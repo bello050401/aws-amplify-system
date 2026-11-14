@@ -1,7 +1,8 @@
 import {ListPreferences} from '../domain/listPreferences';
-import {readInventoryValue,readInventoryAnalysis} from '../runtime/service';
+import {readInventoryValue,readInventoryAnalysis,inventoryQuantityPlanning} from '../runtime/service';
+import { settingsPath } from "../../../lib/inventory/quantityPlanning/presentation";
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Linking, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { signIn, signOut, confirmSignIn, getCurrentUser } from "aws-amplify/auth";
 import * as Network from "expo-network";
 import * as Crypto from "expo-crypto";
@@ -157,6 +158,20 @@ export function LiveApp() {
     loadSales: readSales,
     loadInventoryValue: readInventoryValue,
     analysis: readInventoryAnalysis,
+    quantityPlanning: {
+      read: async id => {
+        try { return await inventoryQuantityPlanning.read(id); }
+        catch (error) { if (error instanceof StaffSessionError) await revoke(error.message); throw error; }
+      },
+      calculate: async (id, conditions) => {
+        try { return await inventoryQuantityPlanning.calculate(id, conditions); }
+        catch (error) { if (error instanceof StaffSessionError) await revoke(error.message); throw error; }
+      },
+      save: async (id, request) => {
+        try { return await inventoryQuantityPlanning.save(id, request); }
+        catch (error) { if (error instanceof StaffSessionError) await revoke(error.message); throw error; }
+      },
+    },
     save: (...args) => {detailAhead.clear();return saveInventory(...args);},
     sell: (...args) => {detailAhead.clear();return sellInventory(...args);},
     split: (...args) => {detailAhead.clear();return splitInventory(...args);},
@@ -200,7 +215,9 @@ export function LiveApp() {
   if (ports) return <StaffApp key={userId} ports={ports} offline={offline} onLogout={logout} writesEnabled={canEdit && mobileWritesEnabled()}
     canIssueDocuments={!offline && access?.owner===userId && access.role==="ADMIN"}
     canSellInventory={access?.owner===userId && access.role==="ADMIN"}
-    features={!offline && access?.owner === userId ? access.features : RESTRICTED_FEATURES} />;
+    features={!offline && access?.owner === userId ? access.features : RESTRICTED_FEATURES}
+    openQuantitySettings={!offline && access?.owner === userId && access.role === "ADMIN"
+      ? async () => { await Linking.openURL(API_ORIGIN + settingsPath); } : undefined} />;
   return <View style={s.root}><Image source={require("../../assets/bello-system-icon.png")} style={s.brand} contentFit="contain" accessibilityLabel="Bello SYSTEM"/>
     {message && <Text accessibilityRole="alert" style={s.error}>{message}</Text>}
     {!ready ? <Pressable accessibilityRole="button" onPress={setup} style={s.button}><Text style={s.white}>接続を確認する</Text></Pressable> : <>

@@ -13,6 +13,8 @@ import type {SalesResponse} from "../ui/SalesScreen";
 import type {AnalysisPorts,AnalysisResult,AnalysisTransport,DetailResult} from '../../../lib/inventory/analysisUi/model';
 import { InventoryWriteError, type SaveRequest } from "../domain/editor";
 import { InventoryReadError } from "../domain/readError";
+import type { QuantityPlanningCalculationResult, QuantityPlanningConditions, QuantityPlanningReadResult, QuantityPlanningSaveRequest } from "../../../lib/inventory/quantityPlanning/contracts";
+import type { QuantityPlanningPorts } from "../../../lib/inventory/quantityPlanning/useQuantityPlanning";
 import type { DeleteRequest } from "../domain/inventoryActions";
 import { readJson, ReadHttpError } from "./readJson";
 import {StockSplitError,type StockSplitRequest,type StockSplitResult} from '../../../lib/inventory/stockSplitInput';
@@ -302,6 +304,47 @@ async function readAnalysis<T>(input:AnalysisTransport):Promise<T> {
 export const readInventoryAnalysis:AnalysisPorts = {
   load:request=>readAnalysis<AnalysisResult>({operation:'summary',request}),
   drill:request=>readAnalysis<DetailResult>({operation:'detail',request}),
+};
+
+type QuantityPlanningAction =
+  | { action: "calculate"; conditions: QuantityPlanningConditions }
+  | ({ action: "save" } & QuantityPlanningSaveRequest);
+
+async function quantityPlanningRequest<T extends QuantityPlanningReadResult | QuantityPlanningCalculationResult>(
+  id: string, action?: QuantityPlanningAction,
+): Promise<T> {
+  const session = await authenticatedSession();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20_000);
+  try {
+    const response = await fetch(`${API_ORIGIN}/api/mobile/inventory/${encodeURIComponent(id)}/quantity-planning`, {
+      method: action ? "POST" : "GET",
+      credentials: "same-origin", redirect: "error", cache: "no-store", signal: controller.signal,
+      headers: {
+        Accept: "application/json", "X-Bello-Mobile": "1",
+        ...(action ? { "Content-Type": "application/json" } : {}),
+        ...(session.cookie ? { Cookie: session.cookie } : {}),
+      },
+      body: action ? JSON.stringify(action) : undefined,
+    });
+    if (response.status === 401) throw new StaffSessionError("ログインが必要です。");
+    const envelope = await response.json() as { owner?: string; result?: T };
+    if (envelope.owner !== session.owner || !envelope.result) {
+      if (response.status === 403) throw new StaffSessionError("スタッフ用アプリの利用権限がありません。");
+      throw new Error("適正数量の応答を確認できませんでした。");
+    }
+    return envelope.result;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export const inventoryQuantityPlanning: QuantityPlanningPorts = {
+  read: id => quantityPlanningRequest<QuantityPlanningReadResult>(id),
+  calculate: (id, conditions) => quantityPlanningRequest<QuantityPlanningCalculationResult>(id, { action: "calculate", conditions }),
+  save: (id, request) => mobileWritesEnabled()
+    ? quantityPlanningRequest<QuantityPlanningReadResult>(id, { action: "save", ...request })
+    : Promise.resolve({ status: "forbidden", message: "計算結果を保存する権限がありません。" }),
 };
 
 export async function readInventoryValue(month?:string):Promise<import('../../../lib/inventory/inventoryValue').InventoryValueView> {

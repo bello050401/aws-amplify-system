@@ -22,6 +22,7 @@ import { InventoryImageGallery } from "../../InventoryImageGallery";
 import { InventoryHeader } from "../../InventoryHeader";
 import { DeleteInventoryButton } from "./DeleteInventoryButton";
 import { InventoryHistoryTable } from "./InventoryHistoryTable";
+import { InventoryQuantityPlanning } from "./InventoryQuantityPlanning";
 import { DetailSection } from "./DetailSection";
 import { formatFieldValue, type ExtraSectionField } from "./ExtendedFieldsSummary";
 import { DetailInfoTable, type DetailInfoRow } from "./DetailInfoTable";
@@ -385,6 +386,10 @@ export default async function InventoryDetailPage(
             <InventoryHistoryTable inventoryId={item.id} />
           </Suspense>
         </div>
+        <InventoryQuantityPlanning inventoryId={item.id} version={item.updatedAt} editHref={canEdit ? editHref : undefined}
+          admin={role === "ADMIN"} title={item.name}
+          storageKey={productGallery.kind === "INVENTORY" ? productGallery.images[0]?.storageKey ?? null : null}
+          imageUrl={productGallery.kind === "PHOTO_ASSET" ? productGallery.assets[0]?.processedUrl ?? null : null} />
       </div>
     </div>
     </InventoryPreviewUrls>

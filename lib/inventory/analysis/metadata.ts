@@ -154,6 +154,29 @@ export function createAnalysisMetadataStore(db: Db, table: string) {
     return { status: 'ok' as const, categories: categories.value.categories, taxonomyRevision: categories.revision, current: current ? parseRow(current) : null };
   }
 
+  async function quantityClassification(inventoryId?: string) {
+    const inventoryKey = inventoryId === undefined ? undefined : 'inventory:' + inventoryId;
+    const [taxItem, inventoryItem] = await Promise.all([
+      get(CURRENT, 'taxonomy'), inventoryKey ? get(CURRENT, inventoryKey) : undefined,
+    ]);
+    const tax = taxItem ? parseRow(taxItem) : initialTaxonomy;
+    const inventory = inventoryItem ? parseRow(inventoryItem) : null;
+    const inventoryValue = inventory?.value.type === 'inventory' ? inventory.value : null;
+    const kindKey = inventoryValue?.kindState === 'confirmed' && inventoryValue.kindId ? 'kind:' + inventoryValue.kindId : null;
+    const kindItem = kindKey ? await get(CURRENT, kindKey) : undefined;
+    const kind = kindItem ? parseRow(kindItem) : null;
+    return {
+      taxonomy: productCategories([tax]),
+      inventory: inventoryValue,
+      kind: kind?.value.type === 'kind' && kind.value.state === 'confirmed' ? kind.value : null,
+      versions: [
+        { scope: CURRENT, id: 'taxonomy', revision: taxItem ? tax.revision : 0 },
+        ...(inventoryKey ? [{ scope: CURRENT, id: inventoryKey, revision: inventory?.revision ?? 0 }] : []),
+        ...(kindKey ? [{ scope: CURRENT, id: kindKey, revision: kind?.revision ?? 0 }] : []),
+      ],
+    };
+  }
+
   async function list(type: 'kind' | 'lot', cursor?: string) {
     if ((type !== 'kind' && type !== 'lot') || (cursor !== undefined && (!reference(cursor) || !cursor.startsWith(type + ':')))) return { status: 'error' as const };
     const page = await queryCurrent(type + ':', cursor, 25);
@@ -229,5 +252,5 @@ export function createAnalysisMetadataStore(db: Db, table: string) {
     return { status: 'ok', revision: next, rebuildRequired: true };
   }
 
-  return { forRebuild, inspect, list, save };
+  return { forRebuild, inspect, list, save, quantityClassification };
 }

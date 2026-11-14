@@ -30,6 +30,8 @@ import { colors } from "./theme";
 import { canOpenTab, permittedTab, RESTRICTED_FEATURES, type MobileFeatures } from "../domain/access";
 import { visibleDetailFields } from "../domain/detailFields";
 import { InventoryPhotos } from "./InventoryPhotos";
+import { NativeQuantityPlanningPanel } from "./QuantityPlanningPanel";
+import type { QuantityPlanningPorts } from "../../../lib/inventory/quantityPlanning/useQuantityPlanning";
 import {InventoryPhotoPreview} from './InventoryPhotoPreview';
 import {BarcodeScanner} from "./BarcodeScanner";
 import {SalesScreen, type SalesResponse} from "./SalesScreen";
@@ -63,6 +65,7 @@ export interface StaffAppPorts extends EditorPorts {
   loadOptions?: () => Promise<InventoryOptions>;
   loadCategories?: () => Promise<CategoryChoice[]>;
   analysis?: AnalysisPorts;
+  quantityPlanning?: QuantityPlanningPorts;
   analysisToday?:string;
   renderSaleOperation?:(operation:"purchases"|"invoice",close:()=>void)=>React.ReactNode;
   loadSales?: (year:number,month:number,items?:boolean)=>Promise<SalesResponse>;
@@ -78,9 +81,9 @@ export interface StaffAppPorts extends EditorPorts {
   openEcListing?: () => Promise<void>;
 }
 
-export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, writesEnabled = false, canIssueDocuments = false, canSellInventory = false, features = RESTRICTED_FEATURES, previewAccount, onTogglePreviewAccount }: {
+export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, writesEnabled = false, canIssueDocuments = false, canSellInventory = false, features = RESTRICTED_FEATURES, previewAccount, onTogglePreviewAccount, openQuantitySettings }: {
   ports: StaffAppPorts; offline: boolean; preview?: boolean; onToggleOffline?: () => void; onLogout?: () => void; writesEnabled?: boolean;
-  canIssueDocuments?: boolean; canSellInventory?: boolean; features?: MobileFeatures; previewAccount?: string; onTogglePreviewAccount?: () => void;
+  canIssueDocuments?: boolean; canSellInventory?: boolean; features?: MobileFeatures; previewAccount?: string; onTogglePreviewAccount?: () => void; openQuantitySettings?: () => Promise<void>;
 }) {
   const [scanSearch,setScanSearch]=useState(false);
   const [priceEntryOpen,setPriceEntryOpen]=useState(false);
@@ -580,6 +583,12 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
           <DetailFact label={field.label} value={selected.details?.[field.key]} multiline={field.kind === "multiline"} />
         </View>)}
         {!writesEnabled && <Text style={s.homeSub}>このアプリでは現在、在庫の閲覧のみ利用できます。</Text>}
+        {ports.quantityPlanning && (!ports.loadDetail || selected.detailLoadedAt) && <NativeQuantityPlanningPanel
+          key={selected.id} id={selected.id} version={selected.updatedAt} ports={ports.quantityPlanning}
+          canWrite={writesEnabled && !selected.mergedIntoInventoryId} enabled={!offline && !detailLoading}
+          newOperationId={ports.newMutationId} image={<ProductImage item={selected} cache={ports.listPhotoCache} />}
+          onEdit={writesEnabled && !selected.mergedIntoInventoryId ? () => setEditor(new InventoryEditor(selected, ports)) : undefined}
+          onSettings={openQuantitySettings} />}
       </ScrollView> : tab === "home" ? <HomeScreen onMessages={()=>setMessagesOpen(true)} onPriceEntry={()=>setPriceEntryOpen(true)} offline={offline} creating={creating} writesEnabled={writesEnabled} onInventory={()=>setTab("inventory")} onCreate={()=>{void startCreate();}} onScan={()=>setScanSearch(true)} /> : tab === "inventory" ? <View style={s.list}>
         <PullToRefreshList contentOffset={{x:0,y:listOffset.current}} onPositionChange={offset=>{listOffset.current=offset;}} scrollEventThrottle={100} keyboardShouldPersistTaps="handled" ListHeaderComponent={<View style={s.listHeader}>
         <View style={s.search}><Ionicons name="search" size={24} color={colors.text} /><InventoryQueryInput value={query} onChange={changeQuery} onSubmit={submitSearch}/>{query !== "" && <Pressable accessibilityRole="button" accessibilityLabel="検索をクリア" onPress={() => changeQuery("")}><Ionicons name="close-circle" size={22} color={colors.muted} /></Pressable>}</View>

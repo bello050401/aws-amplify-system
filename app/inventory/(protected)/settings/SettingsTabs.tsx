@@ -23,6 +23,7 @@ const ListingPartitionBackfillPanel = dynamic(() => import("./ListingPartitionBa
 const BaseSettingsPanel = dynamic(() => import("./BaseSettingsPanel").then(m => m.BaseSettingsPanel), { loading: () => <p className="text-sm text-gray-500">設定を読み込み中…</p> });
 const MercariPcConnectionPanel = dynamic(() => import("./MercariPcConnectionPanel").then(m => m.MercariPcConnectionPanel), { loading: () => <p className="text-sm text-gray-500">設定を読み込み中…</p> });
 const MercariPrivateCreateTrialPanel = dynamic(() => import("./MercariPrivateCreateTrialPanel").then(m => m.MercariPrivateCreateTrialPanel), { loading: () => <p className="text-sm text-gray-500">設定を読み込み中…</p> });
+const QuantityPlanningSettingsPanel = dynamic(() => import("./QuantityPlanningSettingsPanel").then(m => m.QuantityPlanningSettingsPanel));
 const ShippingRatePanel = dynamic(() => import("./ShippingRatePanel").then(m => m.ShippingRatePanel), { loading: () => <p className="text-sm text-gray-500">設定を読み込み中…</p> });
 const LineSettingsPanel = dynamic(() => import("./LineSettingsPanel").then(m => m.LineSettingsPanel), { loading: () => <p className="text-sm text-gray-500">設定を読み込み中…</p> });
 const SystemAuditPanel = dynamic(() => import("./SystemAuditPanel").then(m => m.SystemAuditPanel), { loading: () => <p className="text-sm text-gray-500">設定を読み込み中…</p> });
@@ -100,6 +101,7 @@ export function SettingsTabs({
     "mercariBridge",
     "pricing",
     "shipping",
+    "quantityPlanning",
     "line",
     "systemAudit",
     "photoProfile",
@@ -120,6 +122,7 @@ export function SettingsTabs({
   return (
     <div>
       <div className="flex flex-wrap border-b border-gray-200">
+        {isAdmin && <button type="button" onClick={() => setTab("quantityPlanning")} className={tabClass(tab === "quantityPlanning")}>適正数量</button>}
         {isAdmin && <button type="button" onClick={() => setTab("usedGoodsLedger")} className={tabClass(tab === "usedGoodsLedger")}>古物台帳</button>}
         {!readOnly && <button type="button" onClick={() => setTab("ecListing")} className={tabClass(tab === "ecListing")}>出品設定</button>}
         {isAdmin && <button type="button" onClick={() => setTab("econveni")} className={tabClass(tab === "econveni")}>eコンビニ連携</button>}
@@ -248,6 +251,7 @@ export function SettingsTabs({
           </div>
         )}
         {tab === "shipping" && isAdmin && <ShippingRatePanel />}
+        {tab === "quantityPlanning" && isAdmin && <QuantityPlanningSettingsPanel />}
         {tab === "line" && isAdmin && <LineSettingsPanel lineConnected={lineConnected} lineTokenSource={lineTokenSource} />}
         {tab === "systemAudit" && isAdmin && <SystemAuditPanel />}
         {tab === "photoProfile" && isAdmin && <PhotoProfilePanel />}
