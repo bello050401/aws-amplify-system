@@ -100,10 +100,14 @@ export function QuantityPlanningSettings({ ports }: { ports: QuantityPlanningSet
             reassemblyMinutes: row.method === "disassembled" ? nullableNumber(row.reassemblyMinutes) : null,
           })),
           expenses: loaded.settings.expenses.map((row, index) => ({ ...row, value: decimalValue(draft.expenses[index]) })),
-          remainingWork: loaded.settings.remainingWork.map(({ includedInExpenseId: _previous, ...row }, index) => ({
-            ...row, minutes: decimalValue(draft.work[index]),
-            ...(draft.workExpenseIds[index] ? { includedInExpenseId: draft.workExpenseIds[index] } : {}),
-          })),
+          remainingWork: loaded.settings.remainingWork.map((work, index) => {
+            const row = { ...work };
+            delete row.includedInExpenseId;
+            return {
+              ...row, minutes: decimalValue(draft.work[index]),
+              ...(draft.workExpenseIds[index] ? { includedInExpenseId: draft.workExpenseIds[index] } : {}),
+            };
+          }),
         },
       });
       if (response.status !== "ok") return setError(response.message);

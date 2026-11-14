@@ -62,7 +62,8 @@ export async function POST(request: Request, context: Context) {
     return response(session.owner, await service.calculate(id, body.conditions));
   }
   if (body.action === 'save' && hasKeys(body, ['action', 'conditions', 'token', 'operationId'])) {
-    const { action: _action, ...save } = body;
+    const save = { ...body };
+    delete save.action;
     return response(session.owner, await service.save(id, save, writesEnabled()));
   }
   return response(session.owner, invalid);

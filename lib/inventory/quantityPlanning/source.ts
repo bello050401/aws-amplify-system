@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createAnalysisMetadataStore } from '../analysis/metadata';
-import { fields, nonnegative, text } from '../analysis/normalize';
+import { nonnegative, text } from '../analysis/normalize';
 import { UNKNOWN } from '../analysis/types';
 import { parseCustomFields } from '../customFieldsCodecCore';
 import type { QuantityPlanningConditions, QuantityPlanningSettings, QuantityPlanningSource, QuantityWorkSetting } from './contracts';
