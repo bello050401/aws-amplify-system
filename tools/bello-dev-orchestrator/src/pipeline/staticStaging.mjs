@@ -27,13 +27,10 @@ export class AmplifyStaticDelivery {
   update(id,state,error=null,jobId=this.row(id)?.job_id){this.repo.store.run('UPDATE staging_deliveries SET state=?,error=?,job_id=?,updated_at=? WHERE task_id=?',[state,error,jobId,new Date().toISOString(),id]);return this.row(id);}
   artifact(task){
     const s=this.settings;
-    // The generic infra self-check keeps its exact original hard-coded identity.
-    // Approved real-staging target-app profiles (在庫Web/EC/ZAICO) instead declare
-    // their own service/environment/stagingId; a static-smoke pass is never
-    // accepted as evidence for one of these real, separately-approved targets.
+    // Only the dedicated text-only infrastructure smoke target belongs here.
+    // Next.js and local runtime evidence have separate delivery adapters.
     const validSmoke=s.mode==='static-smoke'&&s.enabled&&s.isolatedDataConfirmed&&/^\d{12}$/.test(s.accountId)&&/^d[a-z0-9]+$/.test(s.appId)&&s.branch==='preview-orchestrator'&&s.appName==='bello-orchestrator-smoke';
-    const validRealStaging=s.mode==='real-staging'&&s.enabled&&s.isolatedDataConfirmed&&/^\d{12}$/.test(s.accountId)&&/^d[a-z0-9]+$/.test(s.appId)&&['inventory_web','ec','zaico'].includes(s.service)&&typeof s.environment==='string'&&s.environment.trim()&&typeof s.stagingId==='string'&&s.stagingId.trim()&&typeof s.branch==='string'&&s.branch.trim()&&typeof s.appName==='string'&&s.appName.trim();
-    if(!validSmoke&&!validRealStaging) throw Error('Invalid dedicated smoke or approved real-staging target');
+    if(!validSmoke) throw Error('Invalid dedicated static-smoke target; Next.js requires its own adapter');
     if(task.isolation!=='worktree'||!task.work_dir||!this.verifier.required||!this.verifier.check(task).passed) throw Error('Independent worktree verification required');
     const head=runGit(task.work_dir,['rev-parse','HEAD']);const clean=runGit(task.work_dir,['status','--porcelain']);
     if(!head.ok||head.stdout.trim()!==task.git_end_commit||!clean.ok||clean.stdout.trim())throw Error('Verified commit must be clean');
@@ -83,6 +80,7 @@ export class AmplifyStaticDelivery {
     if(!r.ok)throw Error('Amplify '+operation+' failed');return JSON.parse(r.stdout);
   }
   async preflight(){
+    if(this.settings.mode!=='static-smoke')throw Error('Static adapter only accepts static-smoke');
     const s=this.settings;const {app}=await this.call('get-app');const {branch}=await this.call('get-branch',['--branch-name',s.branch]);
     if(app.appArn!==`arn:aws:amplify:${s.region}:${s.accountId}:apps/${s.appId}`||app.name!==s.appName||app.platform!=='WEB'||app.repository||app.iamServiceRoleArn||app.computeRoleArn||Object.keys(app.environmentVariables||{}).length||app.buildSpec)throw Error('App is not isolated static hosting');
     if(branch.branchName!==s.branch||branch.stage!=='DEVELOPMENT'||branch.enableAutoBuild||branch.backendEnvironmentArn||branch.backend?.stackArn||branch.computeRoleArn||Object.keys(branch.environmentVariables||{}).length||branch.buildSpec)throw Error('Branch is not isolated');

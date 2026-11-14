@@ -52,7 +52,7 @@ export class EcoApi {
       return {
         ...s,
         writable: !!this.operatorToken && s.installed,
-        ...validateEco({ ...s.config, enabled: false }, s.capabilities),
+        ...validateEco({ ...s.config, enabled: false }, s.capabilities, { checkConnectedTarget: false }),
         config: s.config,
       };
     }

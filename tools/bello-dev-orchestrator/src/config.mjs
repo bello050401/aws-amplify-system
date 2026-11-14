@@ -150,7 +150,10 @@ export function validateConfig(cfg, { checkEnvironment = true } = {}) {
       }
     }
   }
-  if (cfg.staging?.enabled && (!/^\d{12}$/.test(cfg.staging.accountId || "") || !/^[a-z0-9]+$/.test(cfg.staging.appId || "") || !/^(staging|stage|preview)(?:[-/][A-Za-z0-9._-]+)?$/.test(cfg.staging.branch || "") || !/^[a-z]{2}(?:-[a-z]+)+-\d+$/.test(cfg.staging.region || "") || cfg.staging.isolatedDataConfirmed !== true)) errors.push("staging専用アカウント・アプリ・ブランチ・リージョン・データ分離の設定が必要です。");
+  if (cfg.staging?.mode !== undefined && !['static-smoke','real-staging','local-build-evidence','local-next-isolated'].includes(cfg.staging.mode)) errors.push('Unknown staging mode; production fallback is forbidden');
+  if (cfg.staging?.enabled && ['real-staging','local-next-isolated'].includes(cfg.staging.mode)) {
+    errors.push('Next.js staging modes must be configured in an eco runtime profile');
+  } else if (cfg.staging?.enabled && cfg.staging.mode !== 'local-build-evidence' && (!/^\d{12}$/.test(cfg.staging.accountId || "") || !/^[a-z0-9]+$/.test(cfg.staging.appId || "") || !/^(staging|stage|preview)(?:[-/][A-Za-z0-9._-]+)?$/.test(cfg.staging.branch || "") || !/^[a-z]{2}(?:-[a-z]+)+-\d+$/.test(cfg.staging.region || "") || cfg.staging.isolatedDataConfirmed !== true)) errors.push("staging専用アカウント・アプリ・ブランチ・リージョン・データ分離の設定が必要です。");
   if (cfg.notifications?.enabled && (!/^[A-Z][A-Z0-9_]*$/.test(cfg.notifications.webhookUrlEnvVar || "") || !Number.isInteger(cfg.notifications.maxAttempts) || cfg.notifications.maxAttempts < 1 || cfg.notifications.maxAttempts > 20 || !Number.isFinite(cfg.notifications.timeoutSeconds) || cfg.notifications.timeoutSeconds < 1 || cfg.notifications.timeoutSeconds > 60)) errors.push("通知の環境変数名・再送上限・制限時間が不正です。");
 
   if (!cfg.repoPath || typeof cfg.repoPath !== "string") {

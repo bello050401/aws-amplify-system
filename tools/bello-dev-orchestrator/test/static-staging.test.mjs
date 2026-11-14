@@ -5,6 +5,14 @@ import {spawnSync} from 'node:child_process';
 import {buildHarness,initRepo} from './helpers.mjs';
 import {AmplifyStaticDelivery,validateSmokeHtml} from '../src/pipeline/staticStaging.mjs';
 const s={enabled:true,mode:'static-smoke',accountId:'123456789012',appId:'dtest',appName:'bello-orchestrator-smoke',branch:'preview-orchestrator',region:'us-west-2',profile:'test',isolatedDataConfirmed:true,maxWaitSeconds:600};
+
+test('static adapter refuses real-staging and local Next.js before any external call',async()=>{
+  for(const mode of ['real-staging','local-next-isolated','production']){
+    const d=new AmplifyStaticDelivery({config:{staging:{...s,mode}}});
+    d.call=()=>assert.fail('must reject mode before AWS');
+    assert.throws(()=>d.artifact({}));await assert.rejects(d.preflight());
+  }
+});
 test('static HTML blocks executable, remote and escaped markup',()=>{validateSmokeHtml('<html><h2>BELLO</h2><ul><li>verified</li></ul></html>');for(const x of ['<script>BELLO</script>','<p onclick="x">BELLO</p>','<p>BELLO &lt;</p>','<p>BELLO https://x</p>'])assert.throws(()=>validateSmokeHtml(x));});
 test('static preflight rejects repository, roles, variables and backend',async()=>{const app={appArn:'arn:aws:amplify:us-west-2:123456789012:apps/dtest',name:s.appName,platform:'WEB'};const branch={branchName:s.branch,stage:'DEVELOPMENT',enableAutoBuild:false};const d=new AmplifyStaticDelivery({config:{staging:s}});d.call=async op=>op==='get-app'?{app}:{branch};await d.preflight();for(const [obj,key,val] of [[app,'repository','https://github.com/x/y'],[app,'iamServiceRoleArn','role'],[app,'environmentVariables',{TOKEN:'x'}],[branch,'backend',{stackArn:'stack'}],[branch,'enableAutoBuild',true]]){obj[key]=val;await assert.rejects(d.preflight());delete obj[key];}});
 async function setup(){const h=await buildHarness();initRepo(h.config.repoPath);fs.unlinkSync(h.config.repoPath+'/README.md');fs.writeFileSync(h.config.repoPath+'/index.html','<html><p>BELLO</p></html>');spawnSync('git',['add','-A'],{cwd:h.config.repoPath});spawnSync('git',['commit','-qm','static'],{cwd:h.config.repoPath});const task=h.repo.createTask({title:'static',instruction:'test',repoPath:h.config.repoPath}).task;Object.assign(task,{work_dir:h.config.repoPath,isolation:'worktree',git_end_commit:spawnSync('git',['rev-parse','HEAD'],{cwd:h.config.repoPath,encoding:'utf8'}).stdout.trim()});const d=new AmplifyStaticDelivery({config:{staging:s},repo:h.repo,verifier:{required:true,check:()=>({passed:true})}});return {h,task,d};}

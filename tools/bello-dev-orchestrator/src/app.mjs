@@ -235,7 +235,10 @@ export async function runService({ config, paths, appFactory = buildApp }) {
     stopping = true;
     logger.info("停止処理を開始します", { why });
     orchestrator.stop();
-    if (ecoRuntime) ecoStopPromise = ecoRuntime.stop();
+    if (ecoRuntime) {
+      ecoStopPromise = ecoRuntime.stop();
+      ecoStopPromise.catch(() => {}); // The shutdown finalizer awaits and reports this failure.
+    }
     // シャットダウン通知時もチェックポイントを残す (§11-3)
     if (orchestrator.currentTaskId) {
       repo.checkpoint(orchestrator.currentTaskId, "shutdown", { why, at: new Date().toISOString() });

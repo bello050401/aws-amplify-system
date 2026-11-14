@@ -14,6 +14,29 @@ import { DesktopQaBridge } from "../src/eco/desktopQaBridge.mjs";
 import { IndependentVerifier } from "../src/pipeline/verification.mjs";
 import { runGit } from "../src/core/git.mjs";
 
+test('eco deploy requires HTTP identity evidence before health can pass for Next.js', async t => {
+  const h = await buildHarness(); t.after(() => h.cleanup()); initRepo(h.config.repoPath);
+  const task = h.repo.createTask({ title: 'Next health gate',instruction: 'test',repoPath: h.config.repoPath,workDir: h.config.repoPath }).task;
+  Object.assign(task,{ isolation: 'worktree',work_dir: h.config.repoPath });
+  const revision = runGit(task.work_dir,['rev-parse','HEAD']).stdout.trim();
+  const qaUrl = 'https://preview.example.test/';
+  const saved = { settings: { environmentId: 'isolated-test',dataScopeId: 'fixture-test',qaUrl },source: { commit: revision,fingerprint: 'f'.repeat(64) } };
+  const row = { state: 'succeeded',commit_id: revision,job_id: '71',config_json: JSON.stringify(saved) };
+  let live = { ok: false };
+  const adapters = existingAdapters({ repo: h.repo,taskForRun: () => task,assertIsolated: () => {},delivery: { revisionContract: true,row: () => row,verifyDeployed: async () => live } });
+  const context = { run: { task_id: task.id,headSHA: revision,configSnapshot: { qaUrl } } };
+  assert.equal((await adapters.deploy.reconcile(context)).status,'blocked');
+  saved.http = { revision,deploymentId: '71',environmentId: saved.settings.environmentId,dataScopeId: saved.settings.dataScopeId,verificationFingerprint: saved.source.fingerprint };
+  row.config_json = JSON.stringify(saved);
+  assert.equal((await adapters.deploy.reconcile(context)).status,'blocked');
+  live = { ok: true, identity: { ...saved.http,deploymentId: '72' } };
+  assert.equal((await adapters.deploy.reconcile(context)).status,'blocked');
+  live.identity = { ...saved.http };
+  assert.equal((await adapters.deploy.reconcile(context)).healthPassed,true);
+  saved.http.dataScopeId = 'operational'; row.config_json = JSON.stringify(saved);
+  assert.equal((await adapters.deploy.reconcile(context)).status,'blocked');
+});
+
 test("eco implementation: weekly quota is capacity, never a logical failure or model upgrade", () => {
   assert.equal(
     implementationFailure({

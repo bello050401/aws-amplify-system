@@ -33,6 +33,7 @@ export class AmplifyStaging {
     if (branch.stage !== 'DEVELOPMENT' || branch.branchName !== s.branch || branch.enableAutoBuild) throw new Error('DEVELOPMENT・自動ビルド無効の専用ブランチのみ反映できます');
     const buildSpec = branch.buildSpec || app.buildSpec || '';
     if (/backend\s*:|pipeline-deploy|ampx|cloudformation|\bterraform\b/i.test(buildSpec)) throw new Error('バックエンド変更を実行するビルド設定は承認前に反映できません');
+    return { app, branch };
   }
   async start(commit) {
     const response = await this.call('start-job', ['--branch-name', this.settings.branch, '--job-type','RELEASE','--commit-id',commit,'--job-reason','BELLO verified staging release']);
@@ -43,10 +44,16 @@ export class AmplifyStaging {
 
 export class StagingDelivery {
   constructor({ config, repo, verifier, adapterFactory = settings => new AmplifyStaging({ settings }), git = runGit, publish = pushVerifiedStaging }) { this.settings = structuredClone(config.staging ?? { enabled:false }); this.repo = repo; this.verifier = verifier; this.adapterFactory = adapterFactory; this.git = git; this.publish = publish; }
+  row(taskId) { return this.repo.store.get('SELECT * FROM staging_deliveries WHERE task_id=?', [taskId]); }
+  async preflight() {
+    if (this.settings.mode && (this.settings.mode !== 'real-staging' || !this.revisionContract)) throw Error('Explicit staging mode requires its dedicated delivery adapter');
+    return this.adapterFactory(this.settings).preflight();
+  }
   prepare(task) {
     if (!task.work_dir) return { state: 'blocked', error: '専用worktreeがありません' };
     const changed = this.git(task.work_dir, ['diff', '--name-only', task.base_commit, task.git_end_commit]);
     let error = !changed.ok ? '反映差分を取得できません' : stagingPolicy(this.settings, task, changed.stdout.split(/\r?\n/).filter(Boolean));
+    if (this.settings.mode && (this.settings.mode !== 'real-staging' || !this.revisionContract)) error = 'Explicit staging mode requires its dedicated delivery adapter';
     if (!error && (!this.verifier.required || !this.verifier.check(task).passed)) error = '独立検証の成功が必要です';
     const clean = this.git(task.work_dir, ['status','--porcelain']);
     if (!clean.ok || clean.stdout) error = '未コミット変更があるため反映できません';
@@ -55,7 +62,7 @@ export class StagingDelivery {
     const workflows = this.git(task.work_dir, ['ls-tree', '-r', '--name-only', task.git_end_commit, '.github/workflows']);
     if (!workflows.ok || workflows.stdout.trim()) error = 'pushで起動するGitHubワークフローの影響確認が必要です';
     const existing = this.repo.store.get('SELECT * FROM staging_deliveries WHERE task_id=?', [task.id]);
-    if (existing && ['starting','running'].includes(existing.state)) return existing;
+    if (existing && ['starting','running','succeeded','failed'].includes(existing.state)) return existing;
     const now = new Date().toISOString();
     this.repo.store.run('INSERT INTO staging_deliveries(task_id,commit_id,config_json,state,error,created_at,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET commit_id=excluded.commit_id,config_json=excluded.config_json,state=excluded.state,error=excluded.error,job_id=NULL,created_at=excluded.created_at,updated_at=excluded.updated_at', [task.id, task.git_end_commit || '', JSON.stringify(this.settings), error ? 'blocked' : 'ready', error, now, now]);
     return this.repo.store.get('SELECT * FROM staging_deliveries WHERE task_id=?', [task.id]);
@@ -64,13 +71,22 @@ export class StagingDelivery {
     const row = this.repo.store.get('SELECT * FROM staging_deliveries WHERE task_id=?', [task.id]);
     if (!row) return { state:'blocked', error:'反映記録がありません' };
     if (row.state === 'succeeded' || row.state === 'blocked' || row.state === 'failed') return row;
-    const settings = JSON.parse(row.config_json);
+    const saved = JSON.parse(row.config_json);
+    const settings = saved.settings ?? saved;
     const update = (state, error = null, jobId = row.job_id) => {
       this.repo.store.run('UPDATE staging_deliveries SET state=?,error=?,job_id=?,updated_at=? WHERE task_id=?', [state, error && redactText(error), jobId, new Date().toISOString(), task.id]);
-      return { state, error, job_id: jobId };
+      return this.row(task.id);
     };
+    if (this.settings.mode && (this.settings.mode !== 'real-staging' || !this.revisionContract)) return update('blocked', 'Explicit staging mode requires its dedicated delivery adapter');
     if (!this.settings.enabled || JSON.stringify(settings) !== JSON.stringify(this.settings)) return update('blocked', 'staging設定が変更または無効化されたため再確認が必要です');
-    if (row.state === 'starting') return update('blocked', '起動要求の応答前に中断しました。重複反映を避けるためジョブ確認が必要です');
+    if (row.state === 'starting') {
+      if (this.revisionContract) this.repo.store.run('UPDATE staging_deliveries SET config_json=? WHERE task_id=?',[JSON.stringify({ ...saved,dispatchAttempted: true }),task.id]);
+      return update('blocked', '起動要求の応答前に中断しました。重複反映を避けるためジョブ確認が必要です');
+    }
+    if (this.validateReceipt) {
+      try { this.validateReceipt(task, row); }
+      catch { return update('blocked', 'Verified source or target changed after preparation'); }
+    }
     const adapter = this.adapterFactory(settings);
     try {
       if (row.state === 'ready') {
@@ -80,18 +96,24 @@ export class StagingDelivery {
         const previousCommit = remote.stdout?.split(/\s/)[0];
         if (!remote.ok || !/^[a-f0-9]{40}$/.test(previousCommit || '')) return update('blocked', 'stagingリモートブランチを確認できません');
         if (previousCommit !== row.commit_id) {
+          if (this.requirePublished) return update('blocked', 'Verified revision has not been pushed to the approved staging branch');
           const published = this.publish({ repoPath: task.work_dir, repository: settings.repository, branch: settings.branch, commit: row.commit_id, previousCommit });
           if (!published.ok) return update('blocked', 'stagingブランチを安全に更新できません。競合または認証を確認してください');
           const confirmed = this.git(task.work_dir, ['ls-remote', settings.repository, `refs/heads/${settings.branch}`]);
           if (!confirmed.ok || confirmed.stdout.split(/\s/)[0] !== row.commit_id) return update('blocked', 'stagingブランチの更新結果を確認できません');
         }
         update('starting'); // persist BEFORE non-idempotent API call
+        if (this.revisionContract) this.repo.store.run('UPDATE staging_deliveries SET config_json=? WHERE task_id=?',[JSON.stringify({ ...saved,dispatchAttempted: true }),task.id]);
         const jobId = await adapter.start(row.commit_id);
+        if (this.revisionContract && !/^\d+$/.test(jobId || '')) throw Error('Invalid deployment job identity');
         return update('running', null, jobId);
       }
       const job = await adapter.poll(row.job_id);
-      if (job.commitId !== row.commit_id) return update('blocked', '反映ジョブのコミットが検証対象と一致しません');
-      if (job.status === 'SUCCEED') return update('succeeded');
+      if (job.commitId !== row.commit_id || ((this.revisionContract || job.jobId !== undefined) && job.jobId !== row.job_id)) return update('blocked', '反映ジョブのコミットが検証対象と一致しません');
+      if (job.status === 'SUCCEED') {
+        if (this.verifyPublication) await this.verifyPublication(task, row);
+        return update('succeeded');
+      }
       if (['FAILED','CANCELLED'].includes(job.status)) return update('failed', `staging ${job.status}`);
       if (Date.now() - Date.parse(row.created_at) > (settings.maxWaitSeconds || 1800) * 1000) return update('blocked', 'staging完了待ちの上限を超えました。既存ジョブを確認してください');
       return row;

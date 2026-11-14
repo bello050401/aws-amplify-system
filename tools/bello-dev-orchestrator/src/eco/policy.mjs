@@ -55,12 +55,13 @@ export const DEFAULT_ECO = Object.freeze({
   artifactRetries: 2,
   retentionDays: 30,
   qaUrl: "",
+  stagingMode: "",
   allowedDomains: [],
   testAccount: "",
   modelPolicy: DEFAULT_CODEX_MODEL_POLICY,
   taskRouting: DEFAULT_ROUTING,
 });
-export function validateEco(input, capabilities = {}) {
+export function validateEco(input, capabilities = {}, { checkConnectedTarget = true } = {}) {
   if (!input || Object.keys(input).some((k) => !(k in DEFAULT_ECO)))
     throw Error("Unknown configuration field");
   const c = { ...structuredClone(DEFAULT_ECO), ...input };
@@ -102,15 +103,19 @@ export function validateEco(input, capabilities = {}) {
     c.rereadPrevention = false;
     warnings.push("キャッシュOFFのため再読込抑制は無効です");
   }
+  if (!['','static-smoke','real-staging','local-build-evidence','local-next-isolated'].includes(c.stagingMode)) throw Error('Unknown staging mode');
+  const localNext = c.stagingMode === 'local-next-isolated';
+  const localTarget = localNext && capabilities.staging?.connected === true && capabilities.staging.mode === 'local-next-isolated' && capabilities.staging.qaUrl === c.qaUrl;
+  if (checkConnectedTarget && localNext && !localTarget) throw Error('Local Next.js requires the connected host-approved isolation target');
   if (
     !Array.isArray(c.allowedDomains) ||
-    c.allowedDomains.some((d) => !/^([a-z0-9-]+\.)+[a-z]{2,}$/i.test(d))
+    c.allowedDomains.some((d) => !(localNext && ['127.0.0.1','[::1]'].includes(d)) && !/^([a-z0-9-]+\.)+[a-z]{2,}$/i.test(d))
   )
     throw Error("Invalid allowed domains");
   if (c.qaUrl) {
     const u = new URL(c.qaUrl);
     if (
-      u.protocol !== "https:" ||
+      (localNext ? u.protocol !== 'http:' || !['127.0.0.1','[::1]'].includes(u.hostname) || !u.port : u.protocol !== "https:" || (c.stagingMode === 'real-staging' && !!u.port)) ||
       u.username ||
       u.password ||
       u.search ||
@@ -120,6 +125,7 @@ export function validateEco(input, capabilities = {}) {
       throw Error("QA URL must be an allowed HTTPS URL without credentials");
   }
   const missing = [];
+  if (localNext && !localTarget) missing.push('Local Next.js requires the connected host-approved isolation target');
   if (c.mode === "cooperative_eco" || c.mode === "fully_automatic") {
     if (c.gptBrowserQa && !capabilities.browserQa?.connected)
       missing.push("GPTブラウザQAの常駐接続が未設定");
@@ -133,7 +139,7 @@ export function validateEco(input, capabilities = {}) {
     if (capabilities.modelPolicy && Object.entries(c.modelPolicy || {}).some(([tier, mapping]) =>
       mapping && (!capabilities.modelPolicy[tier] || modelKey(mapping) !== modelKey(capabilities.modelPolicy[tier]))))
       missing.push("モデル階層のモデル・思考レベルが対象プロファイルの設定と一致しません");
-    if (c.stagingAutoDeploy && !capabilities.staging?.connected)
+    if (c.stagingAutoDeploy && !capabilities.staging?.connected && !localNext)
       missing.push("対象revisionを照合できるstaging接続が未設定");
     // Only browser-QA target apps (the static-smoke check and real staging for
     // 在庫Web/EC/ZAICO) publish to a reachable QA URL. Photo Station's approval

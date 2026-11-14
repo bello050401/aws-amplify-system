@@ -286,15 +286,7 @@ export function existingAdapters({
       },
     };
   });
-  const tests = journal(async ({ run, operationKey, signal }) => {
-    const value = await task(run);
-    if (!verifier.required || !verifier.settings.commands.length)
-      throw Error("Independent test plan required");
-    const report = await verifier.run(value, signal);
-    const proof = evidence(run, operationKey, report);
-    if (!report.passed || !verifier.check(value).passed)
-      return { status: "failed", evidenceRefs: [proof], usage: zeroUsage };
-    // Only the host commits, after independent checks. No remote write here.
+  async function commitScopedChanges(value, run, freeze = false) {
     const dirty = runGit(value.work_dir, ["status", "--porcelain"]);
     if (!dirty.ok) throw Error("Cannot inspect verified worktree");
     if (dirty.stdout.trim()) {
@@ -302,19 +294,21 @@ export function existingAdapters({
       const tracked = runGit(value.work_dir, [
         "diff",
         "--name-only",
+        "--no-renames",
         "-z",
         "HEAD",
       ]);
+      const staged = runGit(value.work_dir, ["diff", "--cached", "--name-only", "--no-renames", "-z"]);
       const untracked = runGit(value.work_dir, [
         "ls-files",
         "--others",
         "--exclude-standard",
         "-z",
       ]);
-      if (!tracked.ok || !untracked.ok) throw Error("Cannot enumerate changes");
+      if (!tracked.ok || !staged.ok || !untracked.ok) throw Error("Cannot enumerate changes");
       const changed = [
         ...new Set(
-          (tracked.stdoutRaw + untracked.stdoutRaw).split("\0").filter(Boolean),
+          (tracked.stdoutRaw + staged.stdoutRaw + untracked.stdoutRaw).split("\0").filter(Boolean),
         ),
       ];
       if (
@@ -323,17 +317,58 @@ export function existingAdapters({
       )
         throw Error("Change outside host-approved file scope");
       if (
-        !runGit(value.work_dir, ["add", "--", ...changed]).ok ||
+        !runGit(value.work_dir, ["--literal-pathspecs", "add", "--", ...changed]).ok ||
         !runGit(value.work_dir, [
+          ...(freeze ? ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false"] : []),
           "commit",
           "-m",
-          "BELLO isolated verification " + run.id,
+          "BELLO isolated source " + run.id,
         ]).ok
       )
         throw Error("Cannot commit verified change");
     }
+  }
+  const tests = journal(async ({ run, operationKey, signal }) => {
+    const value = await task(run);
+    if (!verifier.required || !verifier.settings.commands.length)
+      throw Error("Independent test plan required");
+    const pinnedBundle = !!delivery?.settings?.hostBundle && delivery.settings.mode === 'local-next-isolated';
+    let source;
+    if (pinnedBundle) {
+      await assertIsolated(value, run);
+      verifier.assertSource?.(value);
+      const priorReview = repo.store.get(
+        "SELECT data FROM checkpoints WHERE task_id=? AND phase='local_next_bundle_review' ORDER BY id DESC LIMIT 1",
+        [value.id],
+      );
+      const previous = priorReview && JSON.parse(priorReview.data);
+      const continuingReview = previous?.runId === run.id && previous.repairCount === run.repairCount;
+      if (!continuingReview) await commitScopedChanges(value, run, true);
+      const clean = runGit(value.work_dir, ["status", "--porcelain"]);
+      if (!clean.ok || clean.stdout.trim()) throw Error("Frozen verification source must be clean");
+      source = {
+        commit: head(value),
+        fingerprint: fingerprint(value.work_dir),
+        plan: verifier.planDigest,
+      };
+      if (continuingReview && !['commit','fingerprint','plan'].every(key => previous.source[key] === source[key]))
+        return { status: "blocked", effectCompleted: true, usage: zeroUsage, reason: "Frozen verification tuple changed while awaiting bundle approval" };
+      if (!delivery.hasApprovedBundle(source)) {
+        repo.checkpoint(value.id, 'local_next_bundle_review', { runId: run.id, repairCount: run.repairCount, operationKey, source });
+        return {
+          status: "approval", effectCompleted: true, usage: zeroUsage,
+          reason: "Prepare and pin a reviewed local Next.js bundle for frozen commit " + source.commit + "; then resume independent verification",
+        };
+      }
+    }
+    const report = await verifier.run(value, signal);
+    const proof = evidence(run, operationKey, report);
+    if (!report.passed || !verifier.check(value).passed)
+      return { status: "failed", evidenceRefs: [proof], usage: zeroUsage };
+    // A pinned bundle is verified against the already frozen commit.
+    if (!pinnedBundle) await commitScopedChanges(value, run);
     const revision = head(value);
-    if (!verifier.check(value).passed)
+    if ((source && source.commit !== revision) || !verifier.check(value).passed)
       throw Error("Source changed after independent tests");
     repo.updateTask(value.id, { git_end_commit: revision });
     return {
@@ -346,18 +381,35 @@ export function existingAdapters({
       usage: zeroUsage,
     };
   });
-  const deploymentResult = (run, row) => {
+  const deploymentResult = async (run, value, row) => {
     if (row?.state === "succeeded") {
       if (row.commit_id !== run.headSHA)
         return {
           status: "blocked",
           reason: "Deployment belongs to a different revision",
         };
+      let proof = null;
+      if (delivery.revisionContract) {
+        let saved;
+        try { saved = JSON.parse(row.config_json); } catch { saved = null; }
+        const ref = saved?.http;
+        if (!ref || saved.stopped || ref.revision !== run.headSHA || ref.deploymentId !== row.job_id ||
+            ref.environmentId !== saved.settings?.environmentId || ref.dataScopeId !== saved.settings?.dataScopeId ||
+            ref.verificationFingerprint !== saved.source?.fingerprint || saved.source?.commit !== row.commit_id ||
+            saved.settings?.qaUrl !== run.configSnapshot.qaUrl)
+          return { status: 'blocked', reason: 'Deployment requires matching independent verification and real HTTP identity evidence' };
+        let live;
+        try { live = await delivery.verifyDeployed(value); } catch { /* Live evidence is required. */ }
+        proof = live?.identity;
+        if (!live?.ok || !proof || !['revision','deploymentId','environmentId','dataScopeId','verificationFingerprint'].every(key => proof[key] === ref[key]))
+          return { status: 'blocked', reason: 'Live deployment identity could not be verified' };
+      }
       return {
         status: "succeeded",
         healthPassed: true,
         revision: row.commit_id,
         deploymentId: row.job_id,
+        ...(proof && { environmentId: proof.environmentId, dataScopeId: proof.dataScopeId, verificationFingerprint: proof.verificationFingerprint }),
         url: run.configSnapshot.qaUrl,
         usage: zeroUsage,
       };
@@ -386,19 +438,19 @@ export function existingAdapters({
         const value = await task(run);
         const row = delivery.row(value.id);
         if (!row) return { status: "absent" };
+        if (delivery.prepareRevision && row.commit_id !== run.headSHA) return { status: "absent" };
         if (row.state === "ready") return { status: "absent" };
         if (row.state === "running")
-          return deploymentResult(run, await delivery.advance(value));
-        // Recheck published bytes on every final QA invocation in the QA bridge.
-        return deploymentResult(run, row);
+          return deploymentResult(run, value, await delivery.advance(value));
+        return deploymentResult(run, value, row);
       },
       async execute({ run }) {
         const value = await task(run);
         if (!verifier.check(value).passed || head(value) !== run.headSHA)
           throw Error("Staging requires the verified revision");
-        const row = delivery.prepare(value);
-        if (row.state !== "ready") return deploymentResult(run, row);
-        return deploymentResult(run, await delivery.advance(value));
+        const row = delivery.prepareRevision ? await delivery.prepareRevision(value) : delivery.prepare(value);
+        if (row?.state !== "ready") return deploymentResult(run, value, row);
+        return deploymentResult(run, value, await delivery.advance(value));
       },
     },
   };

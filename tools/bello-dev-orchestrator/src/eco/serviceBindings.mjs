@@ -8,6 +8,8 @@ import { DEFAULT_CODEX_EFFORT, validReasoningEffort } from "../runner/codexOptio
 import { ClaudeRunner } from "../runner/claudeRunner.mjs";
 import { IndependentVerifier } from "../pipeline/verification.mjs";
 import { AmplifyStaticDelivery, LocalEvidenceDelivery, digest } from "../pipeline/staticStaging.mjs";
+import { NextStagingDelivery, validateNextSettings } from "../pipeline/nextStaging.mjs";
+import { LocalNextDelivery, validateLocalNextSettings, assertIsolationProof, assertLocalNextSource, isLoopback } from "../pipeline/localNextStaging.mjs";
 import { runProcess, localEnvironment } from "../pipeline/process.mjs";
 import { DEFAULT_CODEX_MODEL_POLICY, hash } from "./policy.mjs";
 import { modelKey } from "./taskRouting.mjs";
@@ -19,7 +21,7 @@ import { createBrowserQaWorker, probeBrowserLaunch, ALLOWED_ACTIONS } from "./br
  * 常駐サービス結線。
  *
  * paths.dataRoot/eco-runtime.json を読み、host が明示した唯一の対応profile
- * (static-smoke) が今の config と完全一致するときだけ実adapterを組み立てる。
+ * のscopeと配布modeを照合し、各mode専用のadapterを組み立てる。
  * 欠落・不一致・未対応profileは、理由付きの「未接続」を正直に返す。
  * capabilities() は常に、直近の実probe結果 (paths.stateDir/eco-probes.json、
  * refreshProbes() が書く) を照合して答える。probeを装って接続済みと詐称しない。
@@ -148,11 +150,16 @@ function validateTargetAppProfile(profileId, entry, config) {
   } catch {
     throw Error("Profile qaUrl must be a valid URL");
   }
-  if (qaUrl.protocol !== "https:" || qaUrl.search || qaUrl.hash || qaUrl.username || qaUrl.password)
+  const localNext = entry.staging?.mode === "local-next-isolated";
+  if ((localNext ? qaUrl.protocol !== "http:" || !isLoopback(qaUrl.hostname) : qaUrl.protocol !== "https:") || qaUrl.search || qaUrl.hash || qaUrl.username || qaUrl.password)
     throw Error("Profile qaUrl must be a bare HTTPS URL without credentials or query");
   if (!Array.isArray(entry.allowedDomains) || !entry.allowedDomains.length || !entry.allowedDomains.includes(qaUrl.hostname))
     throw Error("Profile allowedDomains must include the qaUrl host");
   const st = entry.staging;
+  if (localNext) {
+    validateLocalNextSettings(st);
+    if (st.qaUrl !== entry.qaUrl || st.service !== profileId) throw Error('Local Next.js URL/service does not match its profile');
+  } else {
   if (
     !st ||
     st.mode !== "real-staging" ||
@@ -169,6 +176,10 @@ function validateTargetAppProfile(profileId, entry, config) {
     typeof st.profile !== "string" || !st.profile
   )
     throw Error(profileId + " profile requires a fully specified real staging target (service, environment, stagingId, isolatedDataConfirmed and its own AWS identity)");
+  validateNextSettings(st);
+  if (st.qaUrl !== entry.qaUrl) throw Error('Next.js QA URL does not match the approved target');
+  }
+  if (entry.allowedDomains.length !== 1 || entry.allowedDomains[0] !== qaUrl.hostname) throw Error('Next.js QA must use only its approved origin');
   if (
     !entry.playwright ||
     typeof entry.playwright.modulePath !== "string" ||
@@ -399,7 +410,7 @@ async function probeClaudeAvailability({ config, execute = runProcess, resolveEx
 
 async function probeStagingPreflight({ delivery }) {
   try {
-    await delivery.preflight();
+    await delivery.preflight({ checkPort: false });
     return { ok: true };
   } catch (error) {
     return { ok: false, reason: error.message };
@@ -428,6 +439,7 @@ function makeVerifyDeployedBuild({ repo, delivery, assertIsolated, request }) {
     const row = delivery.row(task.id);
     if (row?.state !== "succeeded" || row.commit_id !== run.headSHA || row.job_id !== run.deployment?.deploymentId)
       return { ok: false, reason: "Staging delivery does not match the run revision" };
+    if (delivery.revisionContract) return delivery.verifyDeployed(task);
     let expected;
     try {
       expected = delivery.artifact(task).sha256;
@@ -470,6 +482,15 @@ function makeVerifyInitialBuild({ profile, request }) {
 /** {capabilities,adapters,evidenceRoot,safetyGate,prepareTask} for createEcoRuntime().
  * execute/launchBrowser/buildDelivery/request are injection seams for tests only;
  * production callers should leave them at their real defaults. */
+export function createStagingDelivery(options) {
+  const mode = options.config.staging?.mode;
+  if (mode === 'local-build-evidence') return new LocalEvidenceDelivery(options);
+  if (mode === 'static-smoke') return new AmplifyStaticDelivery(options);
+  if (mode === 'real-staging') return new NextStagingDelivery(options);
+  if (mode === 'local-next-isolated') return new LocalNextDelivery(options);
+  throw Error('Unknown staging mode; no static or production fallback is permitted');
+}
+
 export function createServiceBindings({
   config,
   paths,
@@ -477,10 +498,7 @@ export function createServiceBindings({
   logger,
   execute = runProcess,
   launchBrowser = null,
-  buildDelivery = ({ config: c, repo: r, verifier: v }) =>
-    c.staging?.mode === "local-build-evidence"
-      ? new LocalEvidenceDelivery({ config: c, repo: r, verifier: v })
-      : new AmplifyStaticDelivery({ config: c, repo: r, verifier: v }),
+  buildDelivery = createStagingDelivery,
   request = fetch,
   resolveClaude = resolveClaudeExecutable,
   resolveCodex = resolveCodexExecutable,
@@ -541,6 +559,21 @@ export function createServiceBindings({
 
   const verifier = new IndependentVerifier({ config: effectiveConfig, paths, repo });
   const delivery = buildDelivery({ config: effectiveConfig, repo, verifier });
+  if (profile.staging.mode === 'local-next-isolated') {
+    verifier.assertSource = task => assertLocalNextSource(task);
+    // Independently executed repository tests share the same enforced sandbox;
+    // a stripped environment alone is insufficient filesystem/network isolation.
+    verifier.execute = async (command, { worktree, fingerprint, plan }) => {
+      const head = runGit(worktree, ['rev-parse','HEAD']);
+      const status = runGit(worktree, ['status','--porcelain']);
+      if (profile.staging.hostBundle && (!head.ok || !status.ok || status.stdout.trim())) throw Error('Pinned isolated verification requires a clean committed worktree');
+      if (profile.staging.hostBundle && path.relative(worktree, command.cwd)) throw Error('Pinned isolated verification commands use the approved bundle script from the worktree root');
+      if (!delivery.available()) throw Error('Pinned local verification host is unavailable');
+      const result = await delivery.host.runVerification({ settings: structuredClone(profile.staging), source: { commit: head.stdout.trim(), fingerprint, plan }, command: { ...command, env: localEnvironment() } });
+      assertIsolationProof(result.isolation, profile.staging);
+      return result;
+    };
+  }
 
   // Only ever called for a task the host itself isolated via prepareTask() below,
   // against the one dedicated static-only repo this connected profile points at
@@ -567,7 +600,9 @@ export function createServiceBindings({
 
   function readProbes() {
     try {
-      return JSON.parse(fs.readFileSync(probesFile, "utf8"));
+      const saved = JSON.parse(fs.readFileSync(probesFile, "utf8"));
+      if (delivery.revisionContract && saved.profileHash !== hash(profile)) return {};
+      return saved;
     } catch {
       return {};
     }
@@ -578,13 +613,15 @@ export function createServiceBindings({
 
   function capabilities() {
     const probes = readProbes();
+    const stagingAvailable = delivery.available?.() ?? !delivery.revisionContract;
+    const localHostAvailable = profile.staging.mode !== 'local-next-isolated' || stagingAvailable;
     return {
       implementationProvider,
       ...(implementationProvider === "codex" && { modelPolicy }),
       browserQa:
-        freshOk(probes.browser) && freshOk(probes.codex) && probes.codex.account === "chatgpt"
+        localHostAvailable && freshOk(probes.browser) && freshOk(probes.codex) && probes.codex.account === "chatgpt"
           ? { connected: true, sessionScoped: false }
-          : { connected: false, reason: describeStaleProbe(probes, ["browser", "codex"], "ブラウザQA") },
+          : { connected: false, reason: localHostAvailable ? describeStaleProbe(probes, ["browser", "codex"], "ブラウザQA") : 'Pinned local browser host is unavailable' },
       codex: freshOk(probes.codex) && probes.codex.account === "chatgpt"
         ? { connected: true }
         : { connected: false, reason: describeStaleProbe(probes, ["codex"], "Codex実行") },
@@ -592,14 +629,27 @@ export function createServiceBindings({
         ? { connected: true }
         : { connected: false, reason: implementationProvider === "codex"
           ? "Codex-only profile" : describeStaleProbe(probes, ["claude"], "Claude実行") },
-      staging: freshOk(probes.staging)
-        ? { connected: true }
-        : { connected: false, reason: describeStaleProbe(probes, ["staging"], "staging isolation") },
+      staging: stagingAvailable && freshOk(probes.staging)
+        ? { connected: true, mode: profile.staging.mode, qaUrl: profile.qaUrl }
+        : { connected: false, reason: stagingAvailable ? describeStaleProbe(probes, ["staging"], "staging isolation") : profile.staging.mode === 'real-staging' ? 'Trusted immutable Next.js release transport is unavailable' : 'Pinned local isolation host is unavailable' },
     };
   }
 
   /** ホストが自分のスケジュールで呼ぶ。この呼び出し以外で実probeは行わない。 */
   async function refreshProbes() {
+    const localHost = profile.staging.mode === 'local-next-isolated';
+    const browserProbe = async () => {
+      if (!profile.playwright) return { ok: true, reason: "この対象プロファイルはブラウザQAを使用しません" };
+      if (localHost && delivery.capturesBrowser) {
+        try { await delivery.probeBrowser(); return { ok: true }; }
+        catch (error) { return { ok: false, reason: error.message }; }
+      }
+      return probeBrowserLaunch({
+        modulePath: profile.playwright.modulePath,
+        headless: profile.playwright.headless !== false,
+        launch: localHost ? () => delivery.launchBrowser() : launchBrowser,
+      });
+    };
     // A "local" evidenceMode target app (Photo Station, Store Simulator) has
     // no browser QA target at all; a profile that forbids one must never
     // attempt to launch a browser to "prove" a capability it does not need or
@@ -609,17 +659,11 @@ export function createServiceBindings({
         ? probeClaudeAvailability({ config, execute, resolveExecutable: resolveClaude })
         : Promise.resolve({ ok: false, reason: "Codex-only profile" }),
       probeCodexLogin({ executable: config.codex?.executable, execute, resolveExecutable: resolveCodex }),
-      profile.playwright
-        ? probeBrowserLaunch({
-            modulePath: profile.playwright.modulePath,
-            headless: profile.playwright.headless !== false,
-            launch: launchBrowser,
-          })
-        : Promise.resolve({ ok: true, reason: "この対象プロファイルはブラウザQAを使用しません" }),
+      browserProbe(),
       probeStagingPreflight({ delivery }),
     ]);
     const at = Date.now();
-    const record = { claude: { at, ...claude }, codex: { at, ...codex, ...(codex.ok && { account: "chatgpt" }) }, browser: { at, ...browser }, staging: { at, ...staging } };
+    const record = { profileHash: hash(profile), claude: { at, ...claude }, codex: { at, ...codex, ...(codex.ok && { account: "chatgpt" }) }, browser: { at, ...browser }, staging: { at, ...staging } };
     fs.mkdirSync(paths.stateDir, { recursive: true });
     fs.writeFileSync(probesFile, JSON.stringify(record, null, 2));
     return record;
@@ -634,11 +678,13 @@ export function createServiceBindings({
     }
     if ((run.configSnapshot.qaUrl || "") !== (profile.qaUrl || ""))
       return { allowed: false, reason: "Configured QA URL is outside the connected profile" };
+    if (delivery.revisionContract && run.configSnapshot.stagingMode !== profile.staging.mode)
+      return { allowed: false, reason: 'Run staging mode does not match the approved Next.js profile' };
     if ((run.configSnapshot.allowedDomains || []).some((d) => !(profile.allowedDomains || []).includes(d)))
       return { allowed: false, reason: "Configured allowed domain is outside the connected profile" };
     if (run.state === "STAGING_DEPLOYING") {
       try {
-        await delivery.preflight();
+        await delivery.preflight({ checkPort: false });
       } catch (error) {
         return { allowed: false, reason: "Staging isolation preflight failed: " + error.message };
       }
@@ -787,7 +833,7 @@ export function createServiceBindings({
         if (phase === "qaInitial") {
           fs.writeFileSync(
             proofFile,
-            JSON.stringify({ phase, note: appLabel + " baseline: no local UI evidence exists before implementation." }, null, 2),
+                JSON.stringify({ phase, note: appLabel + " baseline: no verified implementation evidence exists before delivery." }, null, 2),
             { flag: "wx" },
           );
           result = {
@@ -806,18 +852,18 @@ export function createServiceBindings({
                 deploymentId: "baseline",
                 url: run.configSnapshot.qaUrl,
                 revision: "baseline",
-                browser: "local-evidence",
+                browser: delivery.revisionContract ? 'not-run' : 'local-evidence',
                 viewport: "n/a",
-                accountType: "local-build",
+                accountType: delivery.revisionContract ? 'none' : 'local-build',
                 acceptanceCriteria: run.acIds.map((id) => ({
                   id,
                   result: "NOT_RUN",
-                  steps: ["baseline: no local UI evidence collected yet"],
+                  steps: ["baseline: no verified implementation evidence collected yet"],
                   evidenceRefs: [],
                 })),
-                findings: "ローカルUI証拠のベースラインは未収集です",
+                findings: "実装に対応する検証証跡のベースラインは未収集です",
                 verdict: "BLOCKED",
-                reason: appLabel + " baseline requires implementation before local UI evidence exists",
+                reason: appLabel + " baseline requires implementation and verified delivery before evidence exists",
               },
             },
           };
@@ -880,7 +926,7 @@ export function createServiceBindings({
   }
 
   const qaInitial =
-    profile.evidenceMode === "local"
+    profile.evidenceMode === "local" || delivery.revisionContract
       ? makeLocalUiQaWorker("qaInitial")
       : createBrowserQaWorker({
           phase: "qaInitial",
@@ -894,10 +940,11 @@ export function createServiceBindings({
           allowedDomains: profile.allowedDomains,
           sequence: profile.qaSteps.sequence,
           staticSmoke,
+          localNextIsolated: profile.staging.mode === 'local-next-isolated',
           timeBudgetMs: profile.qaSteps.maxTotalSeconds * 1000,
           verifyBuild: makeVerifyInitialBuild({ profile, request }),
           contextFor,
-          launch: launchBrowser,
+          launch: profile.staging.mode === 'local-next-isolated' ? () => delivery.launchBrowser() : launchBrowser,
           execute,
         });
 
@@ -916,10 +963,13 @@ export function createServiceBindings({
           allowedDomains: profile.allowedDomains,
           sequence: profile.qaSteps.sequence,
           staticSmoke,
+          localNextIsolated: profile.staging.mode === 'local-next-isolated',
           timeBudgetMs: profile.qaSteps.maxTotalSeconds * 1000,
           verifyBuild: makeVerifyDeployedBuild({ repo, delivery, assertIsolated, request }),
           contextFor,
-          launch: launchBrowser,
+          capture: profile.staging.mode === 'local-next-isolated' && delivery.capturesBrowser
+            ? (run, options) => delivery.captureQaSession(repo.getTask(run.task_id), options) : null,
+          launch: profile.staging.mode === 'local-next-isolated' ? () => delivery.launchBrowser() : launchBrowser,
           execute,
         });
 
@@ -967,5 +1017,7 @@ export function createServiceBindings({
     safetyGate,
     prepareTask,
     refreshProbes,
+    stop: () => delivery.stop?.(),
+    stopRun: run => delivery.stopTask?.(run.task_id),
   };
 }

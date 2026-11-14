@@ -559,6 +559,18 @@ function storeSimulatorProfile(overrides = {}) {
   return localEvidenceAppProfile("store_simulator", overrides);
 }
 function stagingAppProfile(id, t, overrides = {}) {
+  const qaUrl = 'https://staging.dfixture123.amplifyapp.com/';
+  const staging = {
+    mode: 'real-staging', framework: 'nextjs', enabled: true, isolatedDataConfirmed: true,
+    service: id, environment: 'staging', stagingId: id + '-staging-001',
+    accountId: '123456789012', appId: 'dfixture123', branch: 'staging', appName: id + '-staging', region: 'us-west-2', profile: 'fixture-profile',
+    repository: 'https://github.com/example/' + id, environmentId: id + '-foundation', dataScopeId: id + '-fixture', qaUrl, revisionPath: '/api/revision',
+  };
+  staging.hostApproval = {
+    approved: true, purpose: 'verification-only', approvalId: 'test-only',
+    ...Object.fromEntries(['service','accountId','region','appId','appName','branch','repository','environment','stagingId','environmentId','dataScopeId','qaUrl','profile','revisionPath'].map(key => [key,staging[key]])),
+    isolation: { dedicated: true, productionDataAccess: false, verifiedBy: 'host-test', evidenceId: 'test-resource-proof', resourceIds: ['dedicated-test-resource'], operationalResourceIds: ['operational-test-resource'], operationalDataScopeIds: ['operational-test-scope'] },
+  };
   return {
     schemaVersion: 1,
     profiles: {
@@ -568,22 +580,9 @@ function stagingAppProfile(id, t, overrides = {}) {
         allowedPaths: ["apps/" + id + "/src/index.js"],
         verification: { required: true, commands: [{ name: "test", file: "npm", args: ["test"] }] },
         models: { codex: { model: "gpt-fixture" } },
-        qaUrl: "https://" + id.replace(/_/g, "-") + "-staging.example.test/",
-        allowedDomains: [id.replace(/_/g, "-") + "-staging.example.test"],
-        staging: {
-          mode: "real-staging",
-          enabled: true,
-          isolatedDataConfirmed: true,
-          service: id,
-          environment: "staging",
-          stagingId: id + "-staging-001",
-          accountId: "123456789012",
-          appId: "dfixture123",
-          branch: "staging",
-          appName: id + "-staging",
-          region: "us-west-2",
-          profile: "fixture-profile",
-        },
+        qaUrl,
+        allowedDomains: ['staging.dfixture123.amplifyapp.com'],
+        staging,
         playwright: { modulePath: fixturePlaywrightModule(t) },
         qaSteps: { sequence: [{ type: "navigate" }, { type: "reload" }, { type: "screenshot" }], maxTotalSeconds: 30 },
         ...overrides,

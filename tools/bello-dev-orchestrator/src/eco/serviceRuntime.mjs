@@ -43,6 +43,7 @@ export function createEcoRuntime({
 
   let stopRequested = false;
   let tickInFlight = null;
+  const runCleanups = new Map();
 
   // Also reflects config.enabled here (not just at the top of tick()), because
   // EcoEngine.tick() re-checks this same function mid-flight via context.signal()
@@ -134,11 +135,25 @@ export function createEcoRuntime({
     const events = store
       .all("SELECT data FROM eco_events WHERE run_id=? ORDER BY sequence ASC", [id])
       .map((e) => JSON.parse(e.data));
-    return { run, artifacts, events };
+    let pendingLocalBundle;
+    if (run.state === 'WAITING_APPROVAL' && run.resumeState === 'TESTING' && run.configSnapshot.stagingMode === 'local-next-isolated') {
+      const row = store.get("SELECT data FROM checkpoints WHERE task_id=? AND phase='local_next_bundle_review' ORDER BY id DESC LIMIT 1", [run.task_id]);
+      const pending = row && JSON.parse(row.data);
+      if (pending?.runId === id && pending.repairCount === run.repairCount) pendingLocalBundle = pending.source;
+    }
+    return { run, artifacts, events, ...(pendingLocalBundle && { pendingLocalBundle }) };
   }
 
   function reflectFinishedRun(run) {
     if (!TERMINAL_RUN_STATES.has(run.state)) return;
+    if (['FAILED','CANCELLED'].includes(run.state) && bindings?.stopRun && !runCleanups.has(run.id)) {
+      let cleanup;
+      try { cleanup = Promise.resolve(bindings.stopRun(run)); }
+      catch (error) { cleanup = Promise.reject(error); }
+      cleanup = cleanup.catch(() => logger?.error?.('Local Next.js stop requires host reconciliation', { runId: run.id }));
+      runCleanups.set(run.id, cleanup);
+      cleanup.finally(() => runCleanups.delete(run.id));
+    }
     const lastEvent = store.get(
       "SELECT data FROM eco_events WHERE run_id=? ORDER BY sequence DESC LIMIT 1",
       [run.id],
@@ -220,7 +235,13 @@ export function createEcoRuntime({
 
   async function stop() {
     stopRequested = true;
-    if (tickInFlight) await tickInFlight;
+    let cleanup;
+    try { cleanup = Promise.resolve(bindings?.stop?.()); }
+    catch (error) { cleanup = Promise.reject(error); }
+    const results = await Promise.allSettled([cleanup, tickInFlight, ...runCleanups.values()]);
+    await Promise.all(runCleanups.values());
+    const failure = results.find(result => result.status === 'rejected');
+    if (failure) throw failure.reason;
   }
 
   const api = new EcoApi({ store, operatorToken, capabilities, implementationProvider, engine, startRun, getRun, onControl: reflectFinishedRun });
