@@ -3,7 +3,7 @@
 import Image from 'next/image';
 import Link from 'next/link';
 import {useEffect,useRef,useState} from 'react';
-import {formatMetric,metricLabel,type AnalysisPorts,type DetailItem,type Metric,type ProductFact,type Slice} from '../../../../../lib/inventory/analysisUi/model';
+import {categoryBasisLabel,formatMetric,holdingBasisLabel,metricLabel,type AnalysisPorts,type DetailItem,type Metric,type ProductFact,type Slice} from '../../../../../lib/inventory/analysisUi/model';
 import {AnalysisManagement} from './AnalysisManagement';
 import type {AnalysisManagementPorts} from '../../../../../lib/inventory/analysisUi/management';
 import {useDetail} from '../../../../../lib/inventory/analysisUi/useAnalysis';
@@ -44,6 +44,9 @@ function ProductCard({item,slice,drill,productHref,management}:{
   const [expanded,setExpanded] = useState(false);
   const group = item.type === 'group' ? item.group : null;
   const record = item.type === 'group' ? item.group.representative : item.record;
+  const basis = slice.dimension === 'holdingCount'
+    ? holdingBasisLabel(record.holdingBasis)
+    : slice.dimension === 'category' ? categoryBasisLabel(record.categoryBasis) : undefined;
   return <article className="analysis-product">
     <div className="analysis-product-row">
       <ProductImage key={record.imageUrl || record.id} item={record}/>
@@ -51,6 +54,7 @@ function ProductCard({item,slice,drill,productHref,management}:{
         <h3>{record.title}</h3>
         <p>{record.categoryLabel}{!group && record.date ? ' · '+record.date.replaceAll('-','/') : ''}</p>
         <p>{(group ? group.quantity : record.quantity) === null ? '数量未確認' : formatMetric((group ? group.quantity : record.quantity)!,'quantity')} · {(group ? group.amount : record.amount) === null ? (slice.request.target === 'sales' ? '売上未確認' : '原価未登録') : formatMetric((group ? group.amount : record.amount)!,'amount')}</p>
+        {basis && <p>{basis}</p>}
         {group ? <button type="button" className="analysis-button" aria-expanded={expanded} onClick={()=>setExpanded(value=>!value)}>
           {expanded ? '構成レコードを閉じる' : '構成レコードを表示（'+group.count+'件）'}
         </button> : productHref && record.inventoryId && <Link className="analysis-button" href={productHref(record.inventoryId)} prefetch={false}>商品詳細</Link>}

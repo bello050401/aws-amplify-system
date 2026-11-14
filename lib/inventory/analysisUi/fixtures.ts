@@ -1,3 +1,5 @@
+import {CATEGORY_COLORS,TITLE_CATEGORIES} from '../analysis/categoryFromTitle';
+import {withCurrentHoldingCounts} from '../analysis/holdings';
 import {VALUE_GROUPS,type InventoryValue} from '../inventoryValue';
 import type {AnalysisResponse,Summary,Totals} from '../analysis/types';
 import type {
@@ -24,6 +26,19 @@ const categories = [
 
 const counts = (fields:Partial<Totals['unknown']>={}):Totals['unknown'] => ({cost:0,amount:0,quantity:0,category:0,kind:0,lot:0,channel:0,origin:0,date:0,...fields});
 const amountFor = (fact:ProductFact) => fact.amount ?? 0;
+
+// Generated density fixture with invented stock counts, item names and costs.
+const denseCategories = [...TITLE_CATEGORIES,{id:'__unknown__',label:'未分類'}];
+const denseCounts = [1,2,3,4,5,6,7,8,9,10,11,12,13,16,35,94];
+const denseRecords = [160,31,22,15,12,9,7,6,4,3,2,2,2,2,1,1];
+function denseStock() {
+  return denseCounts.flatMap((quantity,index)=>Array.from({length:denseRecords[index]},(_,record)=>{
+    const category = denseCategories[(index+record) % denseCategories.length];
+    return fact('dense-'+quantity+'-'+record,'検証用 '+category.label+' '+(record+1),category.id,(record+11)*quantity*100,quantity,{
+      categoryLabel:category.label,kindId:null,kindCount:0,categoryBasis:category.id==='__unknown__'?'unknown':'title',
+    });
+  }));
+}
 
 function fact(id:string, title:string, category:string, amount:number|null, quantity:number|null, extra:Partial<ProductFact>={}):ProductFact {
   return {
@@ -59,12 +74,21 @@ const sales = [
   fact('sales-u','商品コードのみ登録された品','__unknown__',12_000,null,{kindId:null,kindCount:0,lotId:null,lotBand:'unknown',lot:'unknown',lotCount:0}),
 ];
 
+function stockWithCurrentCounts(rows:ProductFact[]):ProductFact[] {
+  return withCurrentHoldingCounts(rows).map((fact,index)=>({...rows[index],...fact}));
+}
+
 function rowsFor(request:AnalysisRequest, mode:string|null) {
   if (mode==='empty') return [];
   if (mode==='unknown' && request.target==='inventory') return [
-    fact('unpriced','原価未登録の商品','__unknown__',null,1,{kindId:null,kindCount:0,holding:'unknown',holdingBand:'unknown'}),
+    fact('unpriced','原価未登録の商品','__unknown__',null,1,{kindId:null,kindCount:0,holding:'unknown',holdingBand:'unknown',holdingCount:1,holdingBasis:'inventory-record'}),
   ];
-  if (request.target==='inventory') return stock;
+  if (mode==='exact-counts' && request.target==='inventory') return stockWithCurrentCounts([
+    ...stock, fact('two','在庫数が2点の商品','chair',1000,2,{kindId:null,kindCount:0}),
+    fact('three','在庫数が3点の商品','storage',3000,3), fact('five','在庫数が5点の商品','lighting',5000,5),
+  ]);
+  if (mode==='dense-stock' && request.target==='inventory') return stockWithCurrentCounts(denseStock());
+  if (request.target==='inventory') return stockWithCurrentCounts(stock);
   if (request.target==='acquisitions') return recent;
   if (request.target==='retailReference') return [
     fact('retail-bench',bench,'bench',75_000,3,{imageRef:'fixture/bench',imageUrl:'/bench.jpg'}),
@@ -87,7 +111,12 @@ const singleColor = '#386456', multiColor = '#76a59a', unknownColor = '#9aa49f';
 function identify(dimension:Dimension,key:string):{label:string;color:string} {
   if (dimension==='category') {
     const category = categories.find(([id])=>id===key);
-    return {label:category?.[1]??'未分類',color:category?.[2]??unknownColor};
+    return {label:category?.[1]??denseCategories.find(entry=>entry.id===key)?.label??'未分類',color:CATEGORY_COLORS[key]??category?.[2]??unknownColor};
+  }
+  if (dimension==='holdingCount') {
+    const colors = ['#244d48','#58958d','#ae794f','#8a749b','#b9a255','#547a98','#849358','#bd8591','#9a5949','#416d78','#8a783d','#527868','#a771ac','#aa635e','#517cae','#a78b53','#698d73','#77616e'];
+    const color = colors[(Number(key)-1) % colors.length] ?? unknownColor;
+    return {label:key==='__unknown__'?'保有数不明':key+'点保有',color};
   }
   if (dimension==='holdingBand'||dimension==='lotBand') {
     const color = ({'1':singleColor,'2-3':multiColor,'4-8':'#708ab4','9+':'#c28959'})[key] ?? unknownColor;
@@ -119,12 +148,17 @@ function totals(rows:ProductFact[]):Totals {
     }),
   };
 }
-function summarize(rows:ProductFact[]):Summary {
+function bucketKey(row:ProductFact,dimension:Dimension) {
+  if (dimension!=='holdingCount') return row[dimension];
+  return row.holdingCount == null ? '__unknown__' : String(row.holdingCount);
+}
+function summarize(rows:ProductFact[],target:Target):Summary {
   const dimensions:Dimension[] = ['category','holding','holdingBand','lot','lotBand'];
+  if (target==='inventory') dimensions.push('holdingCount');
   const buckets = Object.fromEntries(dimensions.map(dimension=>{
     const byKey = new Map<string,ProductFact[]>();
     for (const row of rows) {
-      const key = row[dimension];
+      const key = bucketKey(row,dimension);
       byKey.set(key,[...byKey.get(key)??[],row]);
     }
     const data:Bucket[] = [...byKey].map(([key,items])=>({key,...identify(dimension,key),...totals(items)}));
@@ -167,7 +201,7 @@ export function createFixtures(mode:string|null = null):{ports:AnalysisPorts} {
       if (mode==='missing' || request.daily || (request.target==='sales' && request.start && request.start<'2026-10-01')) return {status:'missing'};
       return {
         status:'ok',target:request.target,period:periodFor(request.target,request),
-        summary:summarize(rowsFor(request,mode)),
+        summary:summarize(rowsFor(request,mode),request.target),
         inventoryValue:stockView(rowsFor({target:'inventory'},mode)),
         metadata:{version:1,generation,asOf,timezone:'Asia/Tokyo',scopeId:'synthetic-fixture',
           amountBasis:'集計基準：検証用データ',metadataVersions:{},coverageStart:'2026-10-01',coverageEnd:previewToday,
@@ -179,7 +213,7 @@ export function createFixtures(mode:string|null = null):{ports:AnalysisPorts} {
       if (request.generation!==generation) return {status:'expired'};
       let rows = rowsFor(request,mode);
       const {dimension,key,groupKindId} = request;
-      if (dimension && key) rows = rows.filter(row=>row[dimension]===key);
+      if (dimension && key) rows = rows.filter(row=>bucketKey(row,dimension)===key);
       const groups = new Map<string,ProductFact[]>();
       for (const row of rows) {
         if (row.kindId) groups.set(row.kindId,[...groups.get(row.kindId)??[],row]);

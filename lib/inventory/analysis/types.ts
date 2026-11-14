@@ -6,7 +6,7 @@ export type Confirmation = 'confirmed' | 'candidate' | 'unknown';
 export type Band = '1' | '2-3' | '4-8' | '9+' | 'unknown';
 export type Target = 'inventory' | 'sales' | 'acquisitions' | 'retailReference';
 export type Metric = 'amount' | 'quantity' | 'kinds' | 'lots';
-export type Dimension = 'category' | 'holding' | 'holdingBand' | 'lot' | 'lotBand';
+export type Dimension = 'category' | 'holding' | 'holdingBand' | 'holdingCount' | 'lot' | 'lotBand';
 export interface ProductCategory { id:string; label:string; mergedInto?:string }
 export interface Taxonomy { type:'taxonomy'; categories:ProductCategory[] }
 export interface ProductKind {
@@ -55,7 +55,11 @@ export interface Summary extends Totals {
 export interface Fact {
   id:string; inventoryId:string|null; title:string; imageRef:string|null;
   date:string|null; category:string; kindId:string|null;
+  categoryBasis?:'confirmed'|'title'|'unknown';
   holding:'single'|'multiple'|'unknown'; holdingBand:Band;
+  /** Current quantity for the stated basis. Older generations omit these fields. */
+  holdingCount?:number|null;
+  holdingBasis?:'confirmed-kind'|'inventory-record'|'unknown';
   lot:'single'|'multiple'|'unknown'; lotBand:Band; lotId:string|null;
   amount:number|null; quantity:number|null; kindCount:number; lotCount:number;
   unknown:UnknownCounts;

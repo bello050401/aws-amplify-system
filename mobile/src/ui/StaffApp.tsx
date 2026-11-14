@@ -35,7 +35,7 @@ import type { QuantityPlanningPorts } from "../../../lib/inventory/quantityPlann
 import {InventoryPhotoPreview} from './InventoryPhotoPreview';
 import {BarcodeScanner} from "./BarcodeScanner";
 import {SalesScreen, type SalesResponse} from "./SalesScreen";
-import {initialAnalysisState,jstDay,firstMonth,type AnalysisPorts,type AnalysisState} from "../../../lib/inventory/analysisUi/model";
+import {initialAnalysisState,jstDay,type AnalysisPorts,type AnalysisState} from "../../../lib/inventory/analysisUi/model";
 import { InventoryReadError } from "../domain/readError";
 import { HomeScreen } from "./HomeScreen";
 import {PriceEntry} from "./PriceEntry";
@@ -102,12 +102,6 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
     return {year,month};
   });
   const changeAnalysis = (change:Partial<AnalysisState>) => setSalesState(current=>({...current,...change}));
-  const changeLegacyMonth = (month:{year:number;month:number}) => {
-    setLegacyMonth(month);
-    const saleMonth = month.year+'-'+String(month.month).padStart(2,'0');
-    const today = (ports.analysisToday ?? jstDay()).slice(0,7);
-    if (saleMonth >= firstMonth && saleMonth <= today) changeAnalysis({saleMonth,preset:saleMonth===today?'current':'month',slice:null});
-  };
   const salesDetail = useRef(false);
   const [requestedTab, setTab] = useState<Tab>("home");
   // Filter the screen as well as navigation, including when access changes on an open screen.
@@ -615,7 +609,7 @@ export function StaffApp({ ports, offline, preview, onToggleOffline, onLogout, w
             </Pressable>
           </View>} />
       </View> : tab === "outbound" ? <OutboundEntry offline={offline}/> : tab === "sales" && ports.loadSales ? <SalesScreen loadInventoryValue={ports.loadInventoryValue} analysis={ports.analysis} today={ports.analysisToday} analysisState={salesState} onAnalysisChange={changeAnalysis}
-        renderSaleOperation={ports.renderSaleOperation} legacyMonth={legacyMonth} onLegacyMonthChange={changeLegacyMonth} canIssueDocuments={canIssueDocuments} load={ports.loadSales} offline={offline}
+        renderSaleOperation={ports.renderSaleOperation} legacyMonth={legacyMonth} onLegacyMonthChange={setLegacyMonth} canIssueDocuments={canIssueDocuments} load={ports.loadSales} offline={offline}
         onOpen={id=>{
           if (!ports.loadDetail) return;
           const attempt = ++detailGeneration.current;

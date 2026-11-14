@@ -32,7 +32,7 @@ function verifiesSums(model: AnalysisBuild, target: Target) {
     for (const metric of ['amount', 'gross', 'returns', 'quantity', 'grossQuantity', 'returnedQuantity', 'records'] as const) {
       assert.equal(buckets.reduce((total, value) => total + value[metric], 0), summary[metric], dimension + ': ' + metric);
     }
-    if (dimension === 'holding' || dimension === 'holdingBand' || dimension === 'category') {
+    if (dimension === 'holding' || dimension === 'holdingBand' || dimension === 'holdingCount' || dimension === 'category') {
       assert.equal(buckets.reduce((total, value) => total + value.kinds, 0), summary.kinds, dimension);
     }
   }
@@ -66,6 +66,60 @@ const twoSingles = build([fixtureInventory('yesterday', 1, 5000), fixtureInvento
 ]);
 assert.deepEqual([bucket(twoSingles, 'inventory', 'holding', 'multiple')?.quantity, bucket(twoSingles, 'inventory', 'holding', 'multiple')?.kinds], [2, 1]);
 assert.equal(bucket(twoSingles, 'acquisitions', 'lot', 'single')?.lots, 2);
+
+const exactHoldings = buildAnalysis([
+  fixtureInventory('one', 1, 100), fixtureInventory('two-a', 1, 200),
+  fixtureInventory('two-b', 1, 300, { categoryId: 'photo' }), fixtureInventory('three', 3, 400),
+  fixtureInventory('five-a', 2, 500), fixtureInventory('five-b', 3, 600, { categoryId: 'trade' }),
+  fixtureInventory('ten', 10, 100), fixtureInventory('unknown-kind', 2, null, { name: 'five-a' }),
+  fixtureInventory('same-title-unmatched', 2, 55, { name: 'five-a' }),
+  fixtureInventory('zero-current', 0, 100), fixtureInventory('missing-current', null, 100),
+  fixtureInventory('previously-sold', 4, 100, { categoryId: 'sold', saleEndDate: '2026-11-10' }),
+], [...workflow, { id: 'photo', name: '撮影待ち' }], [
+  taxonomy,
+  ...['one', 'two', 'three', 'five', 'ten'].map(kind => fixtureKind(kind, null)),
+  ...['one', 'three', 'ten'].map(kind => fixtureAssignment(kind, kind)),
+  fixtureAssignment('two-a', 'two'), fixtureAssignment('two-b', 'two'),
+  assignment('five-a', 'five', 'lot2'), assignment('five-b', 'five', 'lot3'),
+  fixtureLot('lot2', '2026-11-13', 2, 1000), fixtureLot('lot3', '2026-11-13', 3, 1800),
+  fixtureAssignment('zero-current', 'five'), fixtureAssignment('missing-current', 'five'), fixtureAssignment('previously-sold', 'five'),
+], asOf, generation);
+const exact = take(exactHoldings, 'inventory').summary;
+assert.deepEqual(exact.dimensions.holdingCount?.map(({ key, label, amount, quantity, kinds, records }) => [key, label, amount, quantity, kinds, records]), [
+  ['1', '1点保有', 100, 1, 1, 1], ['2', '2点保有', 610, 6, 1, 4], ['3', '3点保有', 1200, 3, 1, 1],
+  ['5', '5点保有', 2800, 5, 1, 2], ['10', '10点保有', 1000, 10, 1, 1],
+]);
+assert.equal(exact.amount, exactHoldings.inventoryValue.total);
+assert.equal(exact.quantity, exactHoldings.inventoryValue.quantity);
+assert.equal(exact.records, exactHoldings.inventoryValue.count);
+verifiesSums(exactHoldings, 'inventory');
+const exactRequest = { target: 'inventory', generation, dimension: 'holdingCount', key: '5' } as const;
+const exactDetail = drilldownAnalysis(exactHoldings, exactRequest);
+assert(exactDetail.status === 'ok');
+assert.deepEqual(exactDetail.items.map(item => item.type === 'group' && [item.group.kindId, item.group.count, item.group.representative.holdingCount, item.group.representative.holdingBasis]), [['five', 2, 5, 'confirmed-kind']]);
+const exactMembers = drilldownAnalysis(exactHoldings, { ...exactRequest, groupKindId: 'five' });
+assert(exactMembers.status === 'ok');
+assert.deepEqual(exactMembers.items.map(item => item.type === 'record' && [item.record.id, item.record.quantity]), [['five-a', 2], ['five-b', 3]]);
+const twoDetail = drilldownAnalysis(exactHoldings, { ...exactRequest, key: '2' });
+assert(twoDetail.status === 'ok');
+assert.deepEqual(twoDetail.items.flatMap(item => item.type === 'record' ? [[item.record.id, item.record.holdingCount, item.record.holdingBasis, item.record.kindId, item.record.kindCount]] : []), [
+  ['same-title-unmatched', 2, 'inventory-record', null, 0], ['unknown-kind', 2, 'inventory-record', null, 0],
+]);
+assert.equal(exact.unknown.kind, 2);
+assert.equal(exact.kinds, 5);
+assert.equal(drilldownAnalysis(exactHoldings, { ...exactRequest, generation: 'different-generation' }).status, 'expired');
+for (const key of ['0', '02', '2-3', '2.0', '9007199254740992']) {
+  assert.equal(drilldownAnalysis(exactHoldings, { ...exactRequest, key }).status, 'error');
+}
+const olderExactHoldings = { ...exactHoldings, inventory: exactHoldings.inventory.map(({ holdingCount: _count, holdingBasis: _basis, ...fact }) => fact) };
+assert.deepEqual(take(olderExactHoldings, 'inventory').summary.dimensions.holdingCount, exact.dimensions.holdingCount);
+assert.deepEqual(drilldownAnalysis(olderExactHoldings, exactRequest), exactDetail);
+const missingCount = { ...olderExactHoldings, inventory: olderExactHoldings.inventory.map(fact => fact.id === 'unknown-kind'
+  ? { ...fact, quantity: null, unknown: { ...fact.unknown, quantity: 1 } } : fact) };
+assert.equal(bucket(missingCount, 'inventory', 'holdingCount', UNKNOWN)?.unknown.quantity, 1);
+const unknownDetail = drilldownAnalysis(missingCount, { ...exactRequest, key: UNKNOWN });
+assert(unknownDetail.status === 'ok');
+assert.deepEqual(unknownDetail.items.map(item => item.type === 'record' && [item.record.id, item.record.holdingCount, item.record.holdingBasis]), [['unknown-kind', null, 'unknown']]);
 
 // Fixed example 4: 20 acquired, 12 remain, 8 sold wholesale. Warehouse image is source-specific.
 const twenty = build([

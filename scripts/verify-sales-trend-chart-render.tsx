@@ -113,11 +113,22 @@ async function main() {
   check(errorRingCount >= 1, "★要件: error月は赤いリング(#dc2626)で描画される", `${errorRingCount}箇所`);
   check(missingRingCount >= 1, "★要件: missing月は灰色のリング(#9ca3af)で描画される", `${missingRingCount}箇所`);
 
-  const salesBars = (html.match(/<rect [^>]*fill="#111827"/g) || []).length;
-  const profitBars = (html.match(/<rect [^>]*fill="#10b981"/g) || []).length;
-  check(salesBars === 4 && profitBars === 4, "実績がある月のみ売上と粗利益の2本の棒を描画する");
-  check(/height="2" fill="#111827"/.test(html), "0円の月を基準線上の短い棒として描画する");
-  check(!/<path/.test(html), "推移は棒グラフで表示する");
+  // ok(実0件含む)の点は塗りつぶし円(fill="#111827"などの実測プロット) — missing/errorは白抜き(fill="white")
+  const filledOkCircles = (html.match(/fill="#111827"/g) || []).length; // 売上高の点
+  check(filledOkCircles >= 4, "★要件: ok(実0件含む)の月は塗りつぶし円で売上高がプロットされる", `${filledOkCircles}箇所`);
+  const hollowCircles = (html.match(/fill="white" stroke=/g) || []).length;
+  check(hollowCircles === 2, "★要件: missing/errorの月(2ヶ月)だけが白抜きリングになる(okの月は白抜きにならない)", `${hollowCircles}箇所`);
+
+  // 折れ線(売上高パス)はmissing/errorの月をまたいで直接つながず、セグメントが分断される
+  // (4月ok→5月missing→6月error→7月ok なので、売上高パスは "M"(新規開始)が
+  //  少なくとも2回現れる=1本の連続線にならず途切れる)
+  const salesPathMatch = html.match(/<path d="([^"]*)" fill="none" stroke="#111827"/);
+  const salesPathSegmentStarts = salesPathMatch ? (salesPathMatch[1].match(/M /g) || []).length : 0;
+  check(
+    salesPathSegmentStarts >= 2,
+    "★要件: missing/errorの月を挟むと折れ線が0円へ繋がらず別セグメントとして途切れる",
+    `M(新規開始)が${salesPathSegmentStarts}回`,
+  );
 
   console.log(`\n${passes} passed, ${failures} failed`);
   if (failures > 0) process.exit(1);

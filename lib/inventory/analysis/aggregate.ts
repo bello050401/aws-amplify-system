@@ -1,4 +1,6 @@
 import { buildInventoryValue, selectInventoryValueRow } from '../inventoryValue';
+import { withCurrentHoldingCounts } from './holdings';
+import { categoryFromTitle, TITLE_CATEGORIES, TITLE_CATEGORY_VERSION } from './categoryFromTitle';
 import { fields, hasEvidence, imageReference, importedLot, integer, nonnegative, positive, productCategories, quantityBand, quantityClass, readSources, sourceKey, text } from './normalize';
 import { jstDay, recordedDay, rollingPeriod, shiftDay, sourceDay } from './period';
 import { normalizedCapturedSalesRecords } from './salesProjection';
@@ -48,16 +50,16 @@ function metadataIndex(rows: readonly MetadataRow[]) {
 
 function fact(input: {
   id: string; row?: AnalysisSource; date: string | null; assignment: Assignment;
-  lot?: AcquisitionLot; holding?: number; amount: number | null; quantity: number | null;
+  lot?: AcquisitionLot; amount: number | null; quantity: number | null;
   title?: string; unknownChannel?: boolean; unknownOrigin?: boolean; missingCost?: boolean; countsLot?: boolean;
 }): Fact {
-  const { id, row, date, assignment, lot, holding = null, amount, quantity } = input;
+  const { id, row, date, assignment, lot, amount, quantity } = input;
   const { category, kindId } = assignment;
   const lotQuantity = positive(lot?.quantity);
   return {
     id, inventoryId: row?.id ?? null, title: row?.name?.trim() || input.title || row?.sku || '商品名未登録',
     imageRef: row ? imageReference(row) : null,
-    date, category, kindId, holding: quantityClass(holding), holdingBand: quantityBand(holding),
+    date, category, kindId, holding: 'unknown', holdingBand: 'unknown',
     lot: quantityClass(lotQuantity), lotBand: quantityBand(lotQuantity), lotId: lot?.id ?? null,
     amount, quantity, kindCount: kindId ? 1 : 0,
     lotCount: lot && input.countsLot !== false ? 1 : 0,
@@ -237,14 +239,15 @@ export function buildAnalysis(
   const eligibleRows = rows.filter(row => !row.deletedAt).map(row => ({
     row, value: selectInventoryValueRow(row, masters), observed: observedRows.get(row.id)!,
   }));
-  const holdings = new Map<string, number>();
-  for (const { value, observed } of eligibleRows) {
-    if (!value.eligible || !observed.kindId) continue;
-    const count = (holdings.get(observed.kindId) ?? 0) + value.quantity;
-    if (!Number.isSafeInteger(count)) throw new Error('ANALYSIS_QUANTITY_OVERFLOW');
-    holdings.set(observed.kindId, count);
+  const titleCandidates = new Set(eligibleRows.filter(({value,observed}) => value.eligible &&
+    !observed.kindId && canonicalAssignment(observed).category === UNKNOWN).map(({row})=>categoryFromTitle(row.name)));
+  // Deterministic bounded taxonomy, independent of scan order. Preserve old-reader compatibility.
+  for (const definition of TITLE_CATEGORIES) {
+    if (result.categories.length >= 100) break;
+    if (!titleCandidates.has(definition.id) || taxonomy.canonical(definition.id) !== UNKNOWN ||
+        result.categories.some(category=>category.id===definition.id)) continue;
+    result.categories.push({...definition});
   }
-
   const capturedSales = new Map(normalizedCapturedSalesRecords(rows, asOf).map(record => [record.id, record]));
   const unlocatedRoots = new Set<string>();
   for (const { row, value, observed } of eligibleRows) {
@@ -252,13 +255,31 @@ export function buildAnalysis(
     const origin = rowLot(row.id);
     const lot = origin?.lot;
     const root = sources.roots.get(row.id);
-    const holding = observed.kindId ? holdings.get(observed.kindId) : undefined;
     const assignment = canonicalAssignment(observed);
     if (value.eligible) {
-      result.inventory.push(fact({
-        id: row.id, row, date: origin?.date ?? null, assignment, lot, holding,
+      const stock = fact({
+        id: row.id, row, date: origin?.date ?? null, assignment, lot,
         amount: value.validPrice ? value.amount : null, quantity: value.quantity,
-      }));
+      });
+      stock.categoryBasis = stock.category === UNKNOWN ? 'unknown' : 'confirmed';
+      // Current-stock display only; reviewed metadata always wins and raw inventory is unchanged.
+      // A confirmed kind must never be split among category buckets by per-row title guesses.
+      if (stock.category === UNKNOWN && !stock.kindId) {
+        const suggested = categoryFromTitle(row.name);
+        const definition = TITLE_CATEGORIES.find(category => category.id === suggested);
+        const existing = definition && result.categories.find(category => category.id === definition.id);
+        if (definition) {
+          const category = taxonomy.canonical(definition.id);
+          const resolved = category === UNKNOWN ? definition.id : category;
+          // Keep publications readable by the previous deployed reader during rollback.
+          if (existing || result.categories.some(entry => entry.id === resolved)) {
+            stock.category = resolved;
+            stock.categoryBasis = 'title';
+            stock.unknown.category = 0;
+          }
+        }
+      }
+      result.inventory.push(stock);
     }
     if (!lot && (row.transactionDate || root === null || value.eligible || row.saleEndDate ||
       ['__restageImport', '__yahooPurchaseImport', '__trefacImport'].some(key => Object.hasOwn(sources.custom.get(row.id)!, key)))) {
@@ -320,6 +341,8 @@ export function buildAnalysis(
       countsLot: sign > 0,
     }));
   }
+  result.inventory = withCurrentHoldingCounts(result.inventory);
+  result.metadata.metadataVersions['title-category-rules'] = TITLE_CATEGORY_VERSION;
   return result;
 }
 

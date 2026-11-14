@@ -6,7 +6,7 @@ import type { AnalysisBuild, AnalysisRequest, AnalysisResult, DetailResult, Dime
 
 type Db = Pick<DynamoDBDocumentClient, 'send'>;
 type ReadResult = { status: 'ok'; build: AnalysisBuild } | { status: 'missing' | 'error' | 'expired' };
-const dimensions = new Set<Dimension>(['category', 'holding', 'holdingBand', 'lot', 'lotBand']);
+const dimensions = new Set<Dimension>(['category', 'holding', 'holdingBand', 'holdingCount', 'lot', 'lotBand']);
 const summaryKeys = ['target', 'start', 'end', 'daily', 'generation', 'rollingDays'];
 const detailKeys = [...summaryKeys, 'dimension', 'key', 'groupKindId', 'cursor', 'limit'];
 

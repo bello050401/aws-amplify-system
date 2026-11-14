@@ -131,7 +131,7 @@ export function stateFromQuery(query:URLSearchParams, today:string):AnalysisStat
 }
 
 function isDimension(value:string):value is Dimension {
-  return ['category','holding','holdingBand','lot','lotBand'].includes(value);
+  return ['category','holding','holdingBand','holdingCount','lot','lotBand'].includes(value);
 }
 
 export function writeQuery(query:URLSearchParams, state:AnalysisState) {
@@ -203,12 +203,12 @@ export function groupingFor(state:AnalysisState) {
 }
 
 export function metricLabel(target:Target,metric:Metric) {
-  if (metric === 'quantity') return target === 'acquisitions' ? '仕入数量' : '数量';
+  if (metric === 'quantity') return target === 'acquisitions' ? '仕入数量' : target === 'inventory' ? '在庫数量' : '数量';
   if (metric === 'kinds') return '商品種類数';
   if (metric === 'lots') return '仕入ロット数';
   if (target === 'sales') return '売上';
   if (target === 'acquisitions') return '仕入原価';
-  return target === 'retailReference' ? '小売売却原価' : '在庫原価';
+  return target === 'retailReference' ? '小売売却原価' : '在庫金額';
 }
 export function formatMetric(value:number, metric:Metric) {
   return metric === 'amount'
@@ -223,6 +223,7 @@ export interface DisplayRow {
   value: number;
   percent: number;
   quantity?: number;
+  recordCount?: number;
   unknownValue?:boolean;
   categories?: DisplayRow[];
 }
@@ -240,18 +241,26 @@ export function chartBasis(summary:Totals,metric:Metric) {
   return {gross,total:compositionValue(summary,metric,gross),returned,net:summary[metric]};
 }
 
-export function displayRows(buckets:Bucket[], metric:Metric, gross:boolean, showAll:boolean, category:boolean,target:Target='inventory') {
+export function displayRows(buckets:Bucket[], metric:Metric, gross:boolean, showAll:boolean, category:boolean,target:Target='inventory',dimension?:Dimension) {
   const value = (bucket:Bucket) => compositionValue(bucket,metric,gross);
-  const sorted = [...buckets].sort((a,b)=>value(b)-value(a));
+  const exact = dimension === 'holdingCount';
+  const inventoryCategory = target === 'inventory' && dimension === 'category';
+  const sorted = inventoryCategory ? buckets : [...buckets].sort(exact
+    ? (a,b)=>(a.key===unknownKey ? Infinity : Number(a.key))-(b.key===unknownKey ? Infinity : Number(b.key))
+    : (a,b)=>value(b)-value(a));
   const total = sorted.reduce((sum,bucket)=>sum+Math.max(0,value(bucket)),0);
   const rows:DisplayRow[] = sorted.map(bucket=>({
-    key:bucket.key,label:bucket.label,color:bucket.color,value:value(bucket),
+    key:bucket.key,label:bucket.label,
+    color:bucket.color,
+    value:value(bucket),
     percent:total > 0 ? Math.max(0,value(bucket))/total*100 : 0,
     ...(metric === 'amount' && bucket.quantity > 0 ? {quantity:bucket.quantity} : {}),
+    ...(exact && metric === 'quantity' ? {recordCount:bucket.records} : {}),
     unknownValue:metric === 'amount' && bucket.records > 0 && unknownAmount(bucket,target) >= bucket.records,
   }));
   const classified = rows.filter(row=>row.key!==unknownKey);
   const others = classified.slice(5);
+  if (inventoryCategory) return {rows,expandable:false};
   if (showAll || !category || others.length < 2) return {rows, expandable:category && others.length >= 2};
   const other:DisplayRow = {
     key:'__other_categories__',label:'他のカテゴリー',color:'#a6ada9',categories:others,
@@ -263,6 +272,10 @@ export function displayRows(buckets:Bucket[], metric:Metric, gross:boolean, show
   return {rows:[...classified.slice(0,5),other,...rows.filter(row=>row.key===unknownKey)],expandable:true};
 }
 
+export function formatRecordCount(count:number) {
+  return count.toLocaleString('ja-JP') + '商品ページ';
+}
+
 export function graphSegments(rows:DisplayRow[]) {
   let offset = 0;
   return rows.filter(row=>row.percent>0).map(row=>{
@@ -270,6 +283,27 @@ export function graphSegments(rows:DisplayRow[]) {
     offset += row.percent;
     return segment;
   });
+}
+
+export const holdingBasisNote = '同一商品として確認済みのものは合算、未照合は商品ページごとに集計。';
+
+export function inventoryCompositionNote(metric:Metric) {
+  if (metric === 'amount') return '割合の分母は、購入単価が確認できる在庫の金額合計です。';
+  if (metric === 'kinds') return '割合の分母は、確認済みの商品種類数の合計です。';
+  return '割合の分母は、集計時点の在庫数量の合計です。';
+}
+
+export function categoryBasisLabel(basis:Fact['categoryBasis']) {
+  if (basis === 'title') return '商品名による分類';
+  if (basis === 'confirmed') return '確認済みのカテゴリー';
+  return undefined;
+}
+
+export function holdingBasisLabel(basis:Fact['holdingBasis']) {
+  if (basis === 'confirmed-kind') return '同一商品として合算';
+  if (basis === 'inventory-record') return '未照合・商品ページの在庫数';
+  if (basis === 'unknown') return '保有数不明';
+  return undefined;
 }
 
 export function chartContent(target:Target,metric:Metric,bands:boolean):{title:string; dimension:Dimension}[] {
@@ -284,21 +318,10 @@ export function chartContent(target:Target,metric:Metric,bands:boolean):{title:s
   if (target === 'retailReference') return [{title:'カテゴリー別の小売実績の参考配分',dimension:'category'}];
   return [
     {title:'カテゴリー別の'+metricLabel(target,metric),dimension:'category'},
-    {title:metric === 'amount' ? '単品保有と複数保有の資金配分' : '単品保有と複数保有の'+metricLabel(target,metric),dimension:bands ? 'holdingBand' : 'holding'},
+    {title:'在庫数別の内訳',dimension:'holdingCount'},
   ];
 }
 
-
-export function setLegacyMonth(query:URLSearchParams, year:number, month:number) {
-  query.set('y',String(year));
-  query.set('m',String(month));
-  const selected = String(year)+'-'+String(month).padStart(2,'0');
-  if (selected >= firstMonth && selected <= jstDay().slice(0,7)) {
-    query.set('salesMonth',selected);
-    query.set('period',selected === jstDay().slice(0,7) ? 'current' : 'month');
-  }
-  for (const key of ['dimension','slice','sliceLabel','generation','detailStart','detailEnd','detailTarget']) query.delete(key);
-}
 
 export function arcPath(percent:number,offset:number,radius=88,center=110) {
   if (percent>=100) return 'M '+center+' '+(center-radius)+' a '+radius+' '+radius+' 0 1 1 0 '+(2*radius)+' a '+radius+' '+radius+' 0 1 1 0 '+(-2*radius);
@@ -307,13 +330,4 @@ export function arcPath(percent:number,offset:number,radius=88,center=110) {
     return (center+radius*Math.sin(angle))+' '+(center-radius*Math.cos(angle));
   };
   return 'M '+point(offset)+' A '+radius+' '+radius+' 0 '+(percent > 50 ? 1 : 0)+' 1 '+point(offset+percent);
-}
-
-
-
-export function selectedSalesMonth(state:AnalysisState,today:string) {
-  if (state.preset === 'current') return today.slice(0,7);
-  if (state.preset === 'previous') return shiftMonth(today.slice(0,7),-1);
-  if (state.preset === 'month') return state.saleMonth;
-  return null;
 }

@@ -11,8 +11,8 @@ import {
 } from "@/lib/inventory/sales";
 import { InventoryHeader } from "../../InventoryHeader";
 import { YearMonthPicker } from "./YearMonthPicker";
-import { jstDay,setLegacyMonth } from "@/lib/inventory/analysisUi/model";
-import { SalesTrendDisclosure } from "./SalesTrendChart";
+import { jstDay } from "@/lib/inventory/analysisUi/model";
+import { SalesTrendChart } from "./SalesTrendChart";
 import { SalesItemsSection } from "./SalesItemsSection";
 import {InventoryValuePicker} from './InventoryValuePanel';
 import {SalesAnalysisTabs} from './analysis/SalesAnalysis';
@@ -80,9 +80,7 @@ export default async function SalesPage(props: SalesPageProps) {
   const summary = view.totals;
 
   function monthHref(y: number, m: number): string {
-    const next=new URLSearchParams(searchParams);
-    setLegacyMonth(next,y,m);
-    return "/inventory/sales?"+next;
+    return `/inventory/sales?y=${y}&m=${m}`;
   }
 
   const prev = shiftYearMonth(year, month, -1);
@@ -126,8 +124,6 @@ export default async function SalesPage(props: SalesPageProps) {
       <InventoryHeader role={role} center={<h1 className="text-base font-bold text-gray-900">売上</h1>} />
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-6">
         <SalesAnalysisTabs today={today}/>
-        <ProductionSalesAnalysis today={today} canManage={canManage} salesGeneration={view.aggregateGeneration} syncLegacyMonths/>
-        <h2 className="mb-2 text-base font-semibold text-gray-900">月次売上・予測</h2>
         {/* 集計をいつ作り直したか、そもそも集計が無い/読めないのかを
             隠さずに出す —— §8「初期未集計と実0件を区別」の要件その
             もの。0円と「まだ集計されていない」を絶対に混同させない。
@@ -210,7 +206,10 @@ export default async function SalesPage(props: SalesPageProps) {
           <SummaryTile label="平均販売単価" value={view.status === "ok" ? yen(Math.round(summary.averageSalePrice)) : "—"} />
         </div>
 
-        <SalesTrendDisclosure points={view.trend}/>
+        <div className="mb-6 max-w-3xl border border-gray-200 p-3">
+          <p className="mb-2 text-[11px] font-bold text-gray-400">直近12ヶ月の推移</p>
+          <SalesTrendChart points={view.trend} />
+        </div>
 
         {/* 対象商品一覧(明細)。ユーザーが明示的に開くまでInventoryへは
             アクセスしない(SalesItemsSection参照)。 */}

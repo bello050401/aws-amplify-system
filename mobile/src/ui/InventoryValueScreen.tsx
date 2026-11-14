@@ -9,11 +9,11 @@ const yen=(n:number)=>'¥'+n.toLocaleString('ja-JP');
 function Breakdown({value:v,metric}:{value:InventoryValue;metric:'amount'|'quantity'}) {
   const amount=metric==='amount',total=amount?v.total:v.quantity;
   const unknown=amount && v.count>0 && v.unpricedCount>=v.count;
-  const title=amount?'在庫金額の割合':'在庫数量の割合';
+  const title=amount?'作業状況別の在庫金額':'作業状況別の在庫数量';
   const display=(n:number)=>amount?yen(n):n.toLocaleString('ja-JP')+'点';
   return <View style={s.card}>
     <Text accessibilityRole="header" style={s.title}>{title}</Text>
-    <View style={{alignItems:'center'}}><Svg width={240} height={240} viewBox="0 0 120 120" accessibilityLabel={title+'・カテゴリ別円グラフ'} accessibilityRole="image">
+    <View style={{alignItems:'center'}}><Svg width={240} height={240} viewBox="0 0 120 120" accessibilityLabel={title+'・円グラフ'} accessibilityRole="image">
       <Circle cx={60} cy={60} r={45} fill="none" stroke="#eef1ef" strokeWidth={16}/>
       {donutSegments(v.groups,metric).map(g=><Circle key={g.key} cx={60} cy={60} r={45} fill="none" stroke={g.color} strokeWidth={16} strokeDasharray={[g.length/100*2*Math.PI*45,(100-g.length)/100*2*Math.PI*45]} strokeDashoffset={-g.offset/100*2*Math.PI*45} rotation={-90} origin="60,60"/>)}
       <SvgText x={60} y={56} textAnchor="middle" fill="#66736d" fontSize={5}>{amount?'在庫金額':'在庫数量'}</SvgText>
@@ -38,10 +38,19 @@ export function InventoryValueScreen({load,offline,month,setMonth,analysis,analy
       {analysis}
       <Breakdown value={v} metric="amount"/>
       <Breakdown value={v} metric="quantity"/>
-      {v.unpricedCount>0&&<Text style={s.date}>購入単価を確認できない{v.unpricedCount}商品は金額に含めず、数量のみ計上しています。</Text>}
+      {v.unpricedCount>0&&<InventoryValueNotes unpriced={v.unpricedCount}/>}
     </>}
     {!v && analysis}
   </ScrollView>;
+}
+function InventoryValueNotes({unpriced}:{unpriced:number}) {
+  const [expanded,setExpanded] = useState(false);
+  return <View>
+    <Pressable accessibilityRole="button" accessibilityState={{expanded}} onPress={()=>setExpanded(value=>!value)} style={s.button}>
+      <Text style={s.buttonText}>在庫金額の集計について</Text>
+    </Pressable>
+    {expanded && <Text style={s.note}>購入単価を確認できない在庫記録 {unpriced.toLocaleString('ja-JP')}件は数量のみ計上しています。</Text>}
+  </View>;
 }
 const s=StyleSheet.create({
   body:{padding:18,paddingBottom:36,gap:18,maxWidth:720,width:'100%',alignSelf:'center'},card:{backgroundColor:'white',borderColor:'#e1e7e3',borderWidth:1,borderRadius:16,padding:18,gap:8},

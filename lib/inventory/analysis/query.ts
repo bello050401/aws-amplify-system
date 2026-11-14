@@ -1,9 +1,12 @@
 import { Sha256 } from '@aws-crypto/sha256-js';
+import { CATEGORY_COLORS } from './categoryFromTitle';
+import { withCurrentHoldingCounts } from './holdings';
+import { positive } from './normalize';
 import { dateOnly, monthPeriod, requestedPeriod, rollingPeriod } from './period';
 import { UNKNOWN, type AnalysisBuild, type AnalysisRequest, type AnalysisResult, type Bucket, type DetailItem, type DetailRecord, type DetailResult, type Dimension, type DrilldownRequest, type Fact, type Period, type Summary, type Target, type Totals, type UnknownCounts } from './types';
 
 const dimensions: Record<Target, readonly Dimension[]> = {
-  inventory: ['category', 'holding', 'holdingBand'],
+  inventory: ['category', 'holding', 'holdingBand', 'holdingCount'],
   sales: ['category', 'lot', 'lotBand'],
   acquisitions: ['category', 'lot', 'lotBand'],
   retailReference: ['category', 'lot', 'lotBand'],
@@ -13,9 +16,15 @@ const classLabels: Record<string, string> = { single: '単品仕入れ', multipl
 const holdingLabels: Record<string, string> = { single: '1点だけ保有', multiple: '2点以上保有', unknown: '判定不明' };
 const bandLabels: Record<string, string> = { '1': '1点', '2-3': '2〜3点', '4-8': '4〜8点', '9+': '9点以上', unknown: '判定不明' };
 const colors = ['#2f6659', '#b78243', '#6b83aa', '#a06975', '#788448', '#548e9b', '#8a75a4', '#b46e4e', '#9b9355', '#497f76', '#767584'];
+const holdingCountColors = [
+  '#244d48', '#58958d', '#ae794f', '#8a749b', '#b9a255', '#547a98', '#849358', '#bd8591', '#9a5949',
+  '#416d78', '#8a783d', '#527868', '#a771ac', '#aa635e', '#517cae', '#a78b53', '#698d73', '#77616e',
+];
 
-function dimensionColor(key: string): string {
+function dimensionColor(dimension: Dimension, key: string): string {
   if (key === UNKNOWN || key === 'unknown') return '#a2a7a5';
+  if (dimension === 'category' && Object.hasOwn(CATEGORY_COLORS, key)) return CATEGORY_COLORS[key];
+  if (dimension === 'holdingCount') return holdingCountColors[(Number(key) - 1) % holdingCountColors.length];
   let hash = 0;
   for (let i = 0; i < key.length; i++) hash = (Math.imul(31, hash) + key.charCodeAt(i)) >>> 0;
   return colors[hash % colors.length];
@@ -66,21 +75,36 @@ function labels(build: AnalysisBuild, dimension: Dimension): ReadonlyMap<string,
   return new Map(Object.entries(entries));
 }
 
+function dimensionKey(fact: Fact, dimension: Dimension): string {
+  if (dimension !== 'holdingCount') return fact[dimension];
+  return fact.holdingCount == null ? UNKNOWN : String(fact.holdingCount);
+}
+
+function holdingCountLabels(keys: Iterable<string>): ReadonlyMap<string, string> {
+  const counts = [...keys].filter(key => key !== UNKNOWN).sort((a, b) => Number(a) - Number(b));
+  return new Map([...counts.map(key => [key, key + '点保有'] as const), [UNKNOWN, '保有数不明']]);
+}
+
+function validDimensionKey(build: AnalysisBuild, dimension: Dimension, key: string): boolean {
+  if (dimension !== 'holdingCount') return labels(build, dimension).has(key);
+  return key === UNKNOWN || (positive(Number(key)) !== null && String(Number(key)) === key);
+}
+
 function summarize(build: AnalysisBuild, target: Target, facts: readonly Fact[]): Summary {
   const result: Summary = { ...totals(facts), dimensions: {} };
   for (const dimension of dimensions[target]) {
-    const names = labels(build, dimension);
     const grouped = new Map<string, Fact[]>();
     for (const fact of facts) {
-      const key = fact[dimension];
+      const key = dimensionKey(fact, dimension);
       const members = grouped.get(key) ?? [];
       members.push(fact);
       grouped.set(key, members);
     }
+    const names = dimension === 'holdingCount' ? holdingCountLabels(grouped.keys()) : labels(build, dimension);
     const buckets: Bucket[] = [];
     for (const [key, label] of names) {
       const members = grouped.get(key);
-      if (members) buckets.push({ key, label, color: dimensionColor(key), ...totals(members) });
+      if (members) buckets.push({ key, label, color: dimensionColor(dimension, key), ...totals(members) });
     }
     if (buckets.reduce((count, bucket) => count + bucket.records, 0) !== facts.length) throw new Error('UNKNOWN_ANALYSIS_BUCKET');
     result.dimensions[dimension] = buckets;
@@ -105,7 +129,7 @@ function select(build: AnalysisBuild, request: AnalysisRequest): Selection {
   }
   if (target === 'inventory') {
     if (start || end) return { status: 'error' };
-    return { status: 'ok', period: null, facts: build.inventory };
+    return { status: 'ok', period: null, facts: withCurrentHoldingCounts(build.inventory) };
   }
 
   let period: Period;
@@ -204,7 +228,7 @@ export function drilldownAnalysis(build: AnalysisBuild, request: DrilldownReques
     const limit = request.limit ?? 20;
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) return { status: 'error' };
     if ((dimension === undefined) !== (key === undefined)) return { status: 'error' };
-    if (dimension && (!dimensions[target].includes(dimension) || !labels(build, dimension).has(key!))) return { status: 'error' };
+    if (dimension && (!dimensions[target].includes(dimension) || !validDimensionKey(build, dimension, key!))) return { status: 'error' };
     if (groupKindId && target !== 'inventory' && target !== 'acquisitions') return { status: 'error' };
 
     const signature = JSON.stringify([request.generation, target, selected.period?.start, selected.period?.end, daily, dimension, key, groupKindId]);
@@ -215,7 +239,7 @@ export function drilldownAnalysis(build: AnalysisBuild, request: DrilldownReques
       if (!Array.isArray(parsed) || parsed.length !== 2 || parsed[0] !== signature || !Number.isSafeInteger(parsed[1]) || parsed[1] < 1) return { status: 'error' };
       offset = parsed[1];
     }
-    const filtered = selected.facts.filter(fact => (!dimension || fact[dimension] === key) && (!groupKindId || fact.kindId === groupKindId));
+    const filtered = selected.facts.filter(fact => (!dimension || dimensionKey(fact, dimension) === key) && (!groupKindId || fact.kindId === groupKindId));
     const items = detailItems(filtered, labels(build, 'category'), !groupKindId && (target === 'inventory' || target === 'acquisitions'));
     if (offset > 0 && offset >= items.length) return { status: 'error' };
     const next = offset + limit;

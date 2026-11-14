@@ -12,13 +12,13 @@ test('inventory metrics use the selected denominators and fixed generation',asyn
   if (result.status!=='ok') return;
   assert.equal(result.inventoryValue.total,100_000);
   assert.equal(result.inventoryValue.quantity,9);
-  const group = result.summary.dimensions.holding!;
+  const group = result.summary.dimensions.holdingCount!;
   for (const [metric,value,pct] of [['amount',80000,80],['quantity',8,88.9],['kinds',1,50]] as const) {
-    const row = displayRows(group,metric,false,false,false).rows.find(row=>row.key==='multiple')!;
+    const row = displayRows(group,metric,false,false,false,'inventory','holdingCount').rows.find(row=>row.key==='8')!;
     assert.equal(row.value,value);
     assert.equal(Number(row.percent.toFixed(1)),pct);
   }
-  const request = {target:'inventory',generation:result.metadata.generation,dimension:'holding',key:'multiple'} as const;
+  const request = {target:'inventory',generation:result.metadata.generation,dimension:'holdingCount',key:'8'} as const;
   const drill = await ports.drill(request);
   assert.equal(drill.status,'ok');
   if(drill.status!=='ok') return;

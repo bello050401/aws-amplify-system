@@ -7,12 +7,12 @@ const yen=(n:number)=>'¥'+n.toLocaleString('ja-JP');
 function Breakdown({value:v,metric}:{value:InventoryValue;metric:'amount'|'quantity'}) {
   const amount=metric==='amount',total=amount?v.total:v.quantity;
   const unknown=amount && v.count>0 && v.unpricedCount>=v.count;
-  const title=amount?'在庫金額の割合':'在庫数量の割合';
+  const title=amount?'作業状況別の在庫金額':'作業状況別の在庫数量';
   const display=(n:number)=>amount?yen(n):n.toLocaleString('ja-JP')+'点';
   return <section aria-label={title} className="rounded-2xl border border-slate-200 bg-white px-4 py-5 sm:px-10 sm:py-7">
     <h3 className="text-lg font-semibold">{title}</h3>
     <div className="grid grid-cols-1 items-center gap-4 md:grid-cols-[minmax(0,0.85fr)_1.4fr] md:gap-12">
-      <svg viewBox="0 0 120 120" role="img" aria-label={title+'・カテゴリ別円グラフ'} className="mx-auto w-full max-w-80">
+      <svg viewBox="0 0 120 120" role="img" aria-label={title+'・円グラフ'} className="mx-auto w-full max-w-80">
         <circle cx="60" cy="60" r="45" fill="none" stroke="#eef1ef" strokeWidth="16"/>
         {donutSegments(v.groups,metric).map(g=><circle key={g.key} cx="60" cy="60" r="45" pathLength="100" fill="none" stroke={g.color} strokeWidth="16" strokeDasharray={`${g.length} ${100-g.length}`} strokeDashoffset={-g.offset} transform="rotate(-90 60 60)"><title>{g.label} {display(g[metric])} {g.length.toFixed(1)}%</title></circle>)}
         <text x="60" y="56" textAnchor="middle" fill="#66736d" fontSize="5">{amount?'在庫金額':'在庫数量'}</text>
@@ -56,6 +56,9 @@ export function InventoryValueReport({view,analysis}:{view:InventoryValueView;an
     {analysis}
     <Breakdown value={v} metric="amount"/>
     <Breakdown value={v} metric="quantity"/>
-    {v.unpricedCount>0&&<p className="text-xs leading-6 text-slate-500">購入単価を確認できない{v.unpricedCount}商品は金額に含めず、数量のみ計上しています。</p>}
+    {v.unpricedCount>0&&<details className="text-xs leading-6 text-slate-600">
+      <summary className="cursor-pointer">在庫金額の集計について</summary>
+      <p>購入単価を確認できない在庫記録 {v.unpricedCount.toLocaleString('ja-JP')}件は数量のみ計上しています。</p>
+    </details>}
   </div>;
 }

@@ -1,12 +1,12 @@
 'use client';
 
 import Link from 'next/link';
-import {usePathname,useRouter,useSearchParams} from 'next/navigation';
+import {usePathname,useSearchParams} from 'next/navigation';
 import {useRef,useState,type FormEvent,type ReactNode} from 'react';
 import {formatJstDateTime} from '../../../../../lib/inventory/sales';
 import {
-  analysisRequest,chartBasis,chartContent,firstMonth,formatMetric,groupingFor,jstDay,metricFor,metricLabel,monthChoices,
-  PERIODS,selectedSalesMonth,stateFromQuery,summaryRequest,TABS,unknownAmount,writeQuery,type AnalysisPorts,type AnalysisResult,type AnalysisState,
+  analysisRequest,chartBasis,chartContent,firstMonth,formatMetric,groupingFor,holdingBasisNote,inventoryCompositionNote,jstDay,metricFor,metricLabel,monthChoices,
+  PERIODS,stateFromQuery,summaryRequest,TABS,unknownAmount,writeQuery,type AnalysisPorts,type AnalysisResult,type AnalysisState,
   type DisplayRow,type Metric,type Slice,
 } from '../../../../../lib/inventory/analysisUi/model';
 import {useAnalysis} from '../../../../../lib/inventory/analysisUi/useAnalysis';
@@ -29,10 +29,9 @@ export function SalesAnalysisTabs({today=jstDay()}:{today?:string}) {
   </nav>;
 }
 
-export function SalesAnalysis({ports,today=jstDay(),productLinks=false,management,inventoryFallback,salesGeneration,syncLegacyMonths=false}:{
-  ports?:AnalysisPorts; today?:string; productLinks?:boolean; management?:AnalysisManagementPorts; inventoryFallback?:ReactNode; syncLegacyMonths?:boolean; salesGeneration?:string|null;
+export function SalesAnalysis({ports,today=jstDay(),productLinks=false,management,inventoryFallback,salesGeneration}:{
+  ports?:AnalysisPorts; today?:string; productLinks?:boolean; management?:AnalysisManagementPorts; inventoryFallback?:ReactNode; salesGeneration?:string|null;
 }) {
-  const router = useRouter();
   const query = useSearchParams();
   const pathname = usePathname();
   const state = stateFromQuery(new URLSearchParams(query),today);
@@ -42,7 +41,7 @@ export function SalesAnalysis({ports,today=jstDay(),productLinks=false,managemen
   const pinned = summaryRequest(request,salesGeneration);
   const read = useAnalysis(ports?.load,state.slice ? null : pinned);
   const data = request && !pinned ? {status:'missing' as const} : read.data;
-  const retry = data?.status==='expired' && salesGeneration ? ()=>router.refresh() : read.retry;
+  const retry = read.retry;
   const acquisition = state.tab === 'breakdown' && state.breakdown === 'acquisitions';
   const compare = acquisition && metric === 'amount' && data?.status === 'ok';
   const reference = useAnalysis(ports?.load,state.reference && compare ? {target:'retailReference',generation:data.metadata.generation} : null);
@@ -52,15 +51,6 @@ export function SalesAnalysis({ports,today=jstDay(),productLinks=false,managemen
   function update(change:Partial<AnalysisState>, enterDetail=false) {
     const selection = {...state,slice:null,...change};
     const next = writeQuery(new URLSearchParams(query),selection);
-    if (syncLegacyMonths && state.tab === 'sales' && (change.preset || change.saleMonth)) {
-      const month = selectedSalesMonth(selection,today);
-      if (month) {
-        const [year,number] = month.split('-').map(Number);
-        next.set('y',String(year));next.set('m',String(number));
-        router.replace(pathname+'?'+next,{scroll:false});
-        return;
-      }
-    }
     const href = pathname + '?' + next.toString();
     if (enterDetail) window.history.pushState(null,'',href);
     else window.history.replaceState(null,'',href);
@@ -100,7 +90,7 @@ export function SalesAnalysis({ports,today=jstDay(),productLinks=false,managemen
         <Choices label="在庫内訳の対象" options={[{key:'inventory',label:'現在庫'},{key:'acquisitions',label:'直近30日の仕入れ'}] as const} value={state.breakdown} select={breakdown=>update({breakdown})}/>
         {acquisition
           ? <Choices label="仕入れの集計単位" options={[{key:'amount',label:'仕入原価'},{key:'quantity',label:'仕入数量'},{key:'lots',label:'仕入ロット数'}] as const} value={state.acquisitionUnit} select={acquisitionUnit=>update({acquisitionUnit})}/>
-          : <Choices label="現在庫の集計単位" options={[{key:'quantity',label:'数量'},{key:'kinds',label:'商品種類数'}] as const} value={state.stockUnit} select={stockUnit=>update({stockUnit})}/>
+          : <Choices label="現在庫の集計単位" options={[{key:'quantity',label:'数量'},{key:'kinds',label:'確認済みの商品種類数'}] as const} value={state.stockUnit} select={stockUnit=>update({stockUnit})}/>
         }
       </>}
       {!request ? <p className="analysis-note" role="status">2026年1月1日以降で有効な開始日と終了日を指定してください。</p>
@@ -156,24 +146,26 @@ function AnalysisResultView({data,retry,request,metric,detailed,toggleBands,sele
 
   const {summary,target,period,metadata} = data;
   const {gross,total:chartTotal,returned,net} = chartBasis(summary,metric);
-  const stockKind = target === 'inventory' && metric !== 'amount';
   const acquisition = target === 'acquisitions';
-  const primary = stockKind ? 'quantity' : 'amount';
   const missingAmount = unknownAmount(summary,target);
   const knownAmount = summary.records === 0 || missingAmount < summary.records;
   const totals: {label:string;value:ReactNode}[] = [
-    {label:metricLabel(target,primary),value:primary === 'amount' && !knownAmount ? '—' : formatMetric(summary[primary],primary)},
+    {label:metricLabel(target,'amount'),value:knownAmount ? formatMetric(summary.amount,'amount') : '—'},
   ];
-  if (stockKind) totals.push({label:'確認済みの商品種類数',value:formatMetric(summary.kinds,'kinds')});
   if (acquisition) totals.push({label:'確認できた仕入数量',value:formatMetric(summary.quantity,'quantity')},{label:'仕入ロット数',value:formatMetric(summary.lots,'lots')});
-  const prefix = target === 'retailReference' ? '直近90日の小売実績' : acquisition ? '直近30日の仕入れ' : target === 'sales' ? '選択期間の売上' : stockKind ? '現在庫' : '在庫原価分析';
+  const inventory = target === 'inventory';
+  const prefix = target === 'retailReference' ? '直近90日の小売実績' : acquisition ? '直近30日の仕入れ' : target === 'sales' ? '選択期間の売上' : showSummaryTotal ? '現在庫' : '在庫分析';
   const unknownList = [
     ...(target==='sales' ? [['売上金額未登録',missingAmount] as const] : []),
     ['原価未登録',summary.unknown.cost],['数量未確認',summary.unknown.quantity],['未分類',summary.unknown.category],
     ['種類未判定',summary.unknown.kind],['ロット未判定',summary.unknown.lot],
   ] as const;
   return <section className="analysis-result" aria-label={prefix}>
-    <div className="analysis-summary">
+    {inventory && showSummaryTotal && <p className="analysis-note">
+      {formatJstDateTime(metadata.asOf)} JST 時点
+      {metric === 'kinds' && summary.unknown.kind > 0 && <> · 商品種類が未照合の在庫記録 {summary.unknown.kind.toLocaleString('ja-JP')}件</>}
+    </p>}
+    {!inventory && <div className="analysis-summary">
       <h2>{prefix}</h2>
       {showSummaryTotal && <div className="analysis-totals">{totals.map(total=><div key={total.label}><span>{total.label}</span><strong>{total.value}</strong></div>)}</div>}
       {period && <p>{period.start.replaceAll('-','/')} ～ {period.end.replaceAll('-','/')}{period.partial ? '（途中）' : ''}</p>}
@@ -183,11 +175,14 @@ function AnalysisResultView({data,retry,request,metric,detailed,toggleBands,sele
       {unknownList.some(([,count])=>count>0) && <p>{unknownList.filter(([,count])=>count>0).map(([label,count])=>label+' '+count.toLocaleString('ja-JP')+'件').join(' · ')}</p>}
       {gross && <p>円グラフは返品前の構成です。返品・取消 {formatMetric(returned,metric)} · 差引 {formatMetric(net,metric)}</p>}
       {target === 'retailReference' && <p>確認済みの小売実績の参考配分。販路未確認 {data.referenceExclusions.unknownChannel}件 · 原価未確認 {data.referenceExclusions.unknownCost}件 · 取得元未確認 {data.referenceExclusions.unverifiedOrigin}件 · その他の対象外 {data.referenceExclusions.excluded}件（対象外の売上 {formatMetric(data.referenceExclusions.salesAmount,'amount')}）</p>}
-    </div>
-    {toggleBands && <button type="button" className="analysis-button" aria-pressed={detailed} onClick={toggleBands}>{detailed ? '単品・複数に戻す' : '数量帯を詳しく'}</button>}
+    </div>}
+    {!inventory && toggleBands && <button type="button" className="analysis-button" aria-pressed={detailed} onClick={toggleBands}>{detailed ? '単品・複数に戻す' : '数量帯を詳しく'}</button>}
     <div className="analysis-charts">
       {chartContent(target,metric,detailed).map(({title,dimension})=><AnalysisDonut key={metadata.generation+':'+target+':'+metric+':'+dimension}
-        title={title} target={target} metric={metric} buckets={summary.dimensions[dimension] ?? []}
+        title={title} target={target} metric={metric} dimension={dimension} buckets={summary.dimensions[dimension] ?? []}
+        note={inventory ? dimension === 'holdingCount' ? holdingBasisNote : '商品名による分類を含みます。' : undefined}
+        denominator={inventory ? inventoryCompositionNote(metric) : undefined}
+        unavailable={dimension === 'holdingCount' && summary.dimensions[dimension] === undefined}
         total={chartTotal} gross={gross} records={summary.records} missingAmount={missingAmount}
         onSelect={(row:DisplayRow)=>select({dimension,key:row.key,label:row.label,request:{...request,generation:metadata.generation}})}/>)}
     </div>
