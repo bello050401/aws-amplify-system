@@ -18,7 +18,7 @@ export async function readInventoryAnalysisDetail(request: DrilldownRequest) {
 export async function readInventoryAnalysisMetadata(inventoryId?: string) {
   try {
     const access = await getAnalysisAccess();
-    if (!access) return { status: 'error' as const };
+    if (!access || access.role !== 'ADMIN') return { status: 'error' as const };
     if (isE2EFixtureModeActive()) return { status: 'missing' as const };
     return await getAnalysisMetadataStore().inspect(inventoryId);
   } catch {
@@ -29,7 +29,7 @@ export async function readInventoryAnalysisMetadata(inventoryId?: string) {
 export async function listInventoryAnalysisMetadata(request: { type: 'kind' | 'lot'; cursor?: string }) {
   try {
     const access = await getAnalysisAccess();
-    if (!access || isE2EFixtureModeActive()) return { status: 'error' as const };
+    if (!access || access.role !== 'ADMIN' || isE2EFixtureModeActive()) return { status: 'error' as const };
     return await getAnalysisMetadataStore().list(request.type, request.cursor);
   } catch {
     return { status: 'error' as const };
