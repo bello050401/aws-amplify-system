@@ -1,7 +1,9 @@
 import {CATEGORY_COLORS,TITLE_CATEGORIES} from '../analysis/categoryFromTitle';
+import {drilldownAnalysis,queryAnalysis} from '../analysis/query';
+import {isSkuDimension} from '../analysis/skus';
 import {withCurrentHoldingCounts} from '../analysis/holdings';
 import {VALUE_GROUPS,type InventoryValue} from '../inventoryValue';
-import type {AnalysisResponse,Summary,Totals} from '../analysis/types';
+import type {AnalysisBuild,AnalysisResponse,SkuDimension,Summary,Totals} from '../analysis/types';
 import type {
   AnalysisPorts,AnalysisRequest,Bucket,DetailItem,DetailResult,Dimension,DrilldownRequest,ProductFact,Target,
 } from './model';
@@ -42,7 +44,7 @@ function denseStock() {
 
 function fact(id:string, title:string, category:string, amount:number|null, quantity:number|null, extra:Partial<ProductFact>={}):ProductFact {
   return {
-    id,inventoryId:id,title,category,amount,quantity,
+    id,inventoryId:id,title,category,amount,quantity,sku:'SKU-'+id.toUpperCase(),
     categoryLabel:categories.find(([key])=>key===category)?.[1] ?? '未分類',
     imageRef:null,date:'2026-11-07',kindId:'kind-'+id,
     holding:'single',holdingBand:'1',lot:'single',lotBand:'1',lotId:'lot-'+id,kindCount:1,lotCount:1,
@@ -53,8 +55,8 @@ function fact(id:string, title:string, category:string, amount:number|null, quan
 
 const bench = 'オーク無垢材 ベンチ 木座 ナチュラル 幅120cm 国内家具メーカー仕様';
 const stock = [
-  fact('bench-a',bench,'bench',60_000,6,{kindId:'kind-bench',holding:'multiple',holdingBand:'4-8',imageRef:'fixture/bench',imageUrl:'/bench.jpg'}),
-  fact('bench-b',bench,'bench',20_000,2,{kindId:'kind-bench',holding:'multiple',holdingBand:'4-8',kindCount:0,date:'2026-10-24'}),
+  fact('bench-a',bench,'bench',60_000,6,{sku:'SKU-BENCH',kindId:'kind-bench',holding:'multiple',holdingBand:'4-8',imageRef:'fixture/bench',imageUrl:'/bench.jpg'}),
+  fact('bench-b',bench,'bench',20_000,2,{sku:'SKU-BENCH',kindId:'kind-bench',holding:'multiple',holdingBand:'4-8',kindCount:0,date:'2026-10-24'}),
   fact('chair','成形合板のダイニングチェア ウォルナット色','chair',20_000,1),
 ];
 const recent = [
@@ -81,7 +83,7 @@ function stockWithCurrentCounts(rows:ProductFact[]):ProductFact[] {
 function rowsFor(request:AnalysisRequest, mode:string|null) {
   if (mode==='empty') return [];
   if (mode==='unknown' && request.target==='inventory') return [
-    fact('unpriced','原価未登録の商品','__unknown__',null,1,{kindId:null,kindCount:0,holding:'unknown',holdingBand:'unknown',holdingCount:1,holdingBasis:'inventory-record'}),
+    fact('unpriced','原価未登録の商品','__unknown__',null,1,{sku:null,kindId:null,kindCount:0,holding:'unknown',holdingBand:'unknown',holdingCount:1,holdingBasis:'inventory-record'}),
   ];
   if (mode==='exact-counts' && request.target==='inventory') return stockWithCurrentCounts([
     ...stock, fact('two','在庫数が2点の商品','chair',1000,2,{kindId:null,kindCount:0}),
@@ -148,12 +150,13 @@ function totals(rows:ProductFact[]):Totals {
     }),
   };
 }
-function bucketKey(row:ProductFact,dimension:Dimension) {
+type RecordDimension = Exclude<Dimension,SkuDimension>;
+function bucketKey(row:ProductFact,dimension:RecordDimension) {
   if (dimension!=='holdingCount') return row[dimension];
   return row.holdingCount == null ? '__unknown__' : String(row.holdingCount);
 }
 function summarize(rows:ProductFact[],target:Target):Summary {
-  const dimensions:Dimension[] = ['category','holding','holdingBand','lot','lotBand'];
+  const dimensions:RecordDimension[] = ['category','holding','holdingBand','lot','lotBand'];
   if (target==='inventory') dimensions.push('holdingCount');
   const buckets = Object.fromEntries(dimensions.map(dimension=>{
     const byKey = new Map<string,ProductFact[]>();
@@ -186,6 +189,19 @@ function periodFor(target:Target,request:AnalysisRequest):AnalysisResponse['peri
 
 export function createFixtures(mode:string|null = null):{ports:AnalysisPorts} {
   let failureCount = 0;
+  const inventory = rowsFor({target:'inventory'},mode);
+  const metadata:AnalysisBuild['metadata'] = {
+    version:1,generation,asOf,timezone:'Asia/Tokyo',scopeId:'synthetic-fixture',
+    amountBasis:'集計基準：検証用データ',metadataVersions:{},coverageStart:'2026-10-01',coverageEnd:previewToday,
+    accuracy:'captured-current-source',sourceRecordCount:12,unlocatedAcquisitionRecords:1,
+    ...(mode==='legacy-sku' ? {} : {inventorySkuVersion:1}),
+  };
+  const referenceExclusions = {unknownChannel:1,unknownCost:1,unverifiedOrigin:0,excluded:1,salesAmount:17_500};
+  const build:AnalysisBuild = {
+    inventory, metadata, inventoryValue:stockView(inventory), referenceExclusions,
+    categories:[...new Map(inventory.filter(row=>row.category!=='__unknown__').map(row=>[row.category,{id:row.category,label:row.categoryLabel}])).values()],
+    sales:[],acquisitions:[],retailReference:[],
+  };
   const ports:AnalysisPorts = {
     async load(request) {
       if (mode==='error' && failureCount++===0) return {status:'error'};
@@ -199,20 +215,29 @@ export function createFixtures(mode:string|null = null):{ports:AnalysisPorts} {
       }
       if (request.generation && request.generation!==generation) return {status:'expired'};
       if (mode==='missing' || request.daily || (request.target==='sales' && request.start && request.start<'2026-10-01')) return {status:'missing'};
+      if (request.target==='inventory') return queryAnalysis(build,request);
       return {
         status:'ok',target:request.target,period:periodFor(request.target,request),
         summary:summarize(rowsFor(request,mode),request.target),
-        inventoryValue:stockView(rowsFor({target:'inventory'},mode)),
-        metadata:{version:1,generation,asOf,timezone:'Asia/Tokyo',scopeId:'synthetic-fixture',
-          amountBasis:'集計基準：検証用データ',metadataVersions:{},coverageStart:'2026-10-01',coverageEnd:previewToday,
-          accuracy:'captured-current-source',sourceRecordCount:12,unlocatedAcquisitionRecords:1},
-        referenceExclusions:{unknownChannel:1,unknownCost:1,unverifiedOrigin:0,excluded:1,salesAmount:17_500},
+        inventoryValue:build.inventoryValue, metadata, referenceExclusions,
       };
     },
     async drill(request:DrilldownRequest):Promise<DetailResult> {
       if (request.generation!==generation) return {status:'expired'};
       let rows = rowsFor(request,mode);
       const {dimension,key,groupKindId} = request;
+      if (isSkuDimension(dimension)) {
+        const result = drilldownAnalysis(build,request);
+        if (result.status !== 'ok') return result;
+        const addImage = (record:ProductFact) => ({...record,imageUrl:inventory.find(row=>row.id===record.id)?.imageUrl});
+        return {...result,items:result.items.map(item=>{
+          if (item.type==='record') return {type:'record',record:addImage(item.record)};
+          const representative = addImage(item.group.representative);
+          return item.type==='sku-group'
+            ? {type:'sku-group',group:{...item.group,representative}}
+            : {type:'group',group:{...item.group,representative}};
+        })};
+      }
       if (dimension && key) rows = rows.filter(row=>bucketKey(row,dimension)===key);
       const groups = new Map<string,ProductFact[]>();
       for (const row of rows) {

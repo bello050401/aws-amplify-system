@@ -3,7 +3,7 @@
 import Image from 'next/image';
 import Link from 'next/link';
 import {useEffect,useRef,useState} from 'react';
-import {categoryBasisLabel,formatMetric,holdingBasisLabel,metricLabel,type AnalysisPorts,type DetailItem,type Metric,type ProductFact,type Slice} from '../../../../../lib/inventory/analysisUi/model';
+import {categoryBasisLabel,detailItemKey,formatMetric,holdingBasisLabel,metricLabel,type AnalysisPorts,type DetailGroup,type DetailItem,type Metric,type ProductFact,type Slice} from '../../../../../lib/inventory/analysisUi/model';
 import {AnalysisManagement} from './AnalysisManagement';
 import type {AnalysisManagementPorts} from '../../../../../lib/inventory/analysisUi/management';
 import {useDetail} from '../../../../../lib/inventory/analysisUi/useAnalysis';
@@ -21,12 +21,12 @@ export function AnalysisDetail({slice,drill,onClose,metric,productHref,managemen
   </section>;
 }
 
-function DetailList({slice,drill,groupId,productHref,management}:{
-  slice:Slice; drill:AnalysisPorts['drill']; groupId?:string; productHref?:(id:string)=>string; management?:AnalysisManagementPorts;
+function DetailList({slice,drill,group,productHref,management}:{
+  slice:Slice; drill:AnalysisPorts['drill']; group?:DetailGroup; productHref?:(id:string)=>string; management?:AnalysisManagementPorts;
 }) {
-  const page = useDetail(drill,slice,groupId);
+  const page = useDetail(drill,slice,group);
   return <div className="analysis-details">
-    {page.items.map(item=><ProductCard key={item.type === 'group' ? 'group:'+item.group.kindId : 'record:'+item.record.id}
+    {page.items.map(item=><ProductCard key={detailItemKey(item)}
       item={item} slice={slice} drill={drill} productHref={productHref} management={management}/>)}
     {page.pending && <p role="status">内訳を読み込み中…</p>}
     {page.error && <div role="status">
@@ -42,8 +42,10 @@ function ProductCard({item,slice,drill,productHref,management}:{
   item:DetailItem; slice:Slice; drill:AnalysisPorts['drill']; productHref?:(id:string)=>string; management?:AnalysisManagementPorts;
 }) {
   const [expanded,setExpanded] = useState(false);
-  const group = item.type === 'group' ? item.group : null;
-  const record = item.type === 'group' ? item.group.representative : item.record;
+  const group = item.type !== 'record' ? item.group : null;
+  const record = item.type === 'record' ? item.record : item.group.representative;
+  const groupRef = item.type === 'group' ? {groupKindId:item.group.kindId} : item.type === 'sku-group' ? {groupSku:item.group.groupKey} : undefined;
+  const skuDetail = slice.dimension === 'skuCategory' || slice.dimension === 'skuHoldingCount';
   const basis = slice.dimension === 'holdingCount'
     ? holdingBasisLabel(record.holdingBasis)
     : slice.dimension === 'category' ? categoryBasisLabel(record.categoryBasis) : undefined;
@@ -52,8 +54,9 @@ function ProductCard({item,slice,drill,productHref,management}:{
       <ProductImage key={record.imageUrl || record.id} item={record}/>
       <div className="analysis-product-copy">
         <h3>{record.title}</h3>
-        <p>{record.categoryLabel}{!group && record.date ? ' · '+record.date.replaceAll('-','/') : ''}</p>
-        <p>{(group ? group.quantity : record.quantity) === null ? '数量未確認' : formatMetric((group ? group.quantity : record.quantity)!,'quantity')} · {(group ? group.amount : record.amount) === null ? (slice.request.target === 'sales' ? '売上未確認' : '原価未登録') : formatMetric((group ? group.amount : record.amount)!,'amount')}</p>
+        {record.sku && <p className="analysis-product-sku">管理SKU {record.sku}</p>}
+        <p>{record.categoryLabel}{!skuDetail && !group && record.date ? ' · '+record.date.replaceAll('-','/') : ''}</p>
+        {!skuDetail && <p>{(group ? group.quantity : record.quantity) === null ? '数量未確認' : formatMetric((group ? group.quantity : record.quantity)!,'quantity')} · {(group ? group.amount : record.amount) === null ? (slice.request.target === 'sales' ? '売上未確認' : '原価未登録') : formatMetric((group ? group.amount : record.amount)!,'amount')}</p>}
         {basis && <p>{basis}</p>}
         {group ? <button type="button" className="analysis-button" aria-expanded={expanded} onClick={()=>setExpanded(value=>!value)}>
           {expanded ? '構成レコードを閉じる' : '構成レコードを表示（'+group.count+'件）'}
@@ -61,7 +64,7 @@ function ProductCard({item,slice,drill,productHref,management}:{
       </div>
     </div>
     {!group && management && record.inventoryId && <AnalysisManagement ports={management} inventoryId={record.inventoryId}/>}
-    {group && expanded && <DetailList groupId={group.kindId} slice={slice} drill={drill} productHref={productHref} management={management}/>}
+    {group && expanded && <DetailList group={groupRef} slice={slice} drill={drill} productHref={productHref} management={management}/>}
   </article>;
 }
 

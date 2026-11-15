@@ -3,9 +3,11 @@ import { CATEGORY_COLORS } from './categoryFromTitle';
 import { withCurrentHoldingCounts } from './holdings';
 import { positive } from './normalize';
 import { dateOnly, monthPeriod, requestedPeriod, rollingPeriod } from './period';
-import { UNKNOWN, type AnalysisBuild, type AnalysisRequest, type AnalysisResult, type Bucket, type DetailItem, type DetailRecord, type DetailResult, type Dimension, type DrilldownRequest, type Fact, type Period, type Summary, type Target, type Totals, type UnknownCounts } from './types';
+import { currentSkus, isSkuDimension, isSkuGroupKey, skuDimensionKey, type CurrentSku } from './skus';
+import { UNKNOWN, type AnalysisBuild, type AnalysisRequest, type AnalysisResult, type Bucket, type DetailItem, type DetailRecord, type DetailResult, type Dimension, type DrilldownRequest, type Fact, type Period, type SkuDimension, type Summary, type Target, type Totals, type UnknownCounts } from './types';
 
-const dimensions: Record<Target, readonly Dimension[]> = {
+type RecordDimension = Exclude<Dimension, SkuDimension>;
+const dimensions: Record<Target, readonly RecordDimension[]> = {
   inventory: ['category', 'holding', 'holdingBand', 'holdingCount'],
   sales: ['category', 'lot', 'lotBand'],
   acquisitions: ['category', 'lot', 'lotBand'],
@@ -23,8 +25,8 @@ const holdingCountColors = [
 
 function dimensionColor(dimension: Dimension, key: string): string {
   if (key === UNKNOWN || key === 'unknown') return '#a2a7a5';
-  if (dimension === 'category' && Object.hasOwn(CATEGORY_COLORS, key)) return CATEGORY_COLORS[key];
-  if (dimension === 'holdingCount') return holdingCountColors[(Number(key) - 1) % holdingCountColors.length];
+  if ((dimension === 'category' || dimension === 'skuCategory') && Object.hasOwn(CATEGORY_COLORS, key)) return CATEGORY_COLORS[key];
+  if (dimension === 'holdingCount' || dimension === 'skuHoldingCount') return holdingCountColors[(Number(key) - 1) % holdingCountColors.length];
   let hash = 0;
   for (let i = 0; i < key.length; i++) hash = (Math.imul(31, hash) + key.charCodeAt(i)) >>> 0;
   return colors[hash % colors.length];
@@ -68,14 +70,14 @@ function totals(facts: readonly Fact[]): Totals {
 }
 
 function labels(build: AnalysisBuild, dimension: Dimension): ReadonlyMap<string, string> {
-  if (dimension === 'category') {
+  if (dimension === 'category' || dimension === 'skuCategory') {
     return new Map([...build.categories.map(category => [category.id, category.label] as const), [UNKNOWN, '未分類']]);
   }
   const entries = dimension === 'holding' ? holdingLabels : dimension === 'lot' ? classLabels : bandLabels;
   return new Map(Object.entries(entries));
 }
 
-function dimensionKey(fact: Fact, dimension: Dimension): string {
+function dimensionKey(fact: Fact, dimension: RecordDimension): string {
   if (dimension !== 'holdingCount') return fact[dimension];
   return fact.holdingCount == null ? UNKNOWN : String(fact.holdingCount);
 }
@@ -86,8 +88,27 @@ function holdingCountLabels(keys: Iterable<string>): ReadonlyMap<string, string>
 }
 
 function validDimensionKey(build: AnalysisBuild, dimension: Dimension, key: string): boolean {
-  if (dimension !== 'holdingCount') return labels(build, dimension).has(key);
+  if (dimension !== 'holdingCount' && dimension !== 'skuHoldingCount') return labels(build, dimension).has(key);
   return key === UNKNOWN || (positive(Number(key)) !== null && String(Number(key)) === key);
+}
+
+function skuBuckets(build: AnalysisBuild, groups: readonly CurrentSku[], dimension: SkuDimension): Bucket[] {
+  const grouped = new Map<string, { records: Fact[]; skus: number }>();
+  for (const group of groups) {
+    const key = skuDimensionKey(group, dimension);
+    const bucket = grouped.get(key) ?? { records: [], skus: 0 };
+    for (const record of group.records) bucket.records.push(record);
+    bucket.skus++;
+    grouped.set(key, bucket);
+  }
+  const names = dimension === 'skuHoldingCount' ? holdingCountLabels(grouped.keys()) : labels(build, dimension);
+  const buckets: Bucket[] = [];
+  for (const [key, label] of names) {
+    const bucket = grouped.get(key);
+    if (bucket) buckets.push({ key, label, color: dimensionColor(dimension, key), ...totals(bucket.records), skus: bucket.skus });
+  }
+  if (buckets.length !== grouped.size) throw new Error('UNKNOWN_ANALYSIS_SKU_BUCKET');
+  return buckets;
 }
 
 function summarize(build: AnalysisBuild, target: Target, facts: readonly Fact[]): Summary {
@@ -108,6 +129,13 @@ function summarize(build: AnalysisBuild, target: Target, facts: readonly Fact[])
     }
     if (buckets.reduce((count, bucket) => count + bucket.records, 0) !== facts.length) throw new Error('UNKNOWN_ANALYSIS_BUCKET');
     result.dimensions[dimension] = buckets;
+  }
+  if (target === 'inventory' && build.metadata.inventorySkuVersion === 1) {
+    const { groups, unknownSkuRecords } = currentSkus(facts);
+    result.skus = groups.length;
+    result.unknownSkuRecords = unknownSkuRecords;
+    result.dimensions.skuCategory = skuBuckets(build, groups, 'skuCategory');
+    result.dimensions.skuHoldingCount = skuBuckets(build, groups, 'skuHoldingCount');
   }
   return result;
 }
@@ -179,6 +207,10 @@ function compare(a: Fact, b: Fact): number {
   return a.id === b.id ? 0 : a.id < b.id ? -1 : 1;
 }
 
+function representative(item: DetailItem): DetailRecord {
+  return item.type === 'record' ? item.record : item.group.representative;
+}
+
 function detailItems(facts: Fact[], categoryLabels: ReadonlyMap<string, string>, group: boolean): DetailItem[] {
   const items: DetailItem[] = [];
   const kinds = new Map<string, Fact[]>();
@@ -198,24 +230,44 @@ function detailItems(facts: Fact[], categoryLabels: ReadonlyMap<string, string>,
       amount: unknown.amount > 0 ? null : amount, quantity: unknown.quantity > 0 ? null : quantity,
     } });
   }
-  const representative = (item: DetailItem) => item.type === 'record' ? item.record : item.group.representative;
   return items.sort((a, b) => compare(representative(a), representative(b)));
 }
 
-function publicLotHandle(id: string, generation: string): string {
+function skuDetailItems(groups: readonly CurrentSku[], categoryLabels: ReadonlyMap<string, string>, generation: string, showMembers: boolean): DetailItem[] {
+  const items: DetailItem[] = [];
+  for (const { sku, category, records } of groups) {
+    if (showMembers || records.length === 1) {
+      for (const record of records) items.push({ type: 'record', record: detailRecord(record, categoryLabels) });
+      continue;
+    }
+    const sorted = [...records].sort(compare);
+    const { amount, quantity, unknown } = totals(sorted);
+    const sample = sorted[0];
+    const basis = category === UNKNOWN ? 'unknown' : sorted.some(record => record.category === category && record.categoryBasis === 'confirmed') ? 'confirmed' : 'title';
+    const record = detailRecord({ ...sample, category, categoryBasis: basis }, categoryLabels);
+    items.push({ type: 'sku-group', group: {
+      sku, groupKey: publicHandle('bello-analysis-sku', sku, generation), representative: record, count: records.length,
+      amount: unknown.amount > 0 ? null : amount, quantity: unknown.quantity > 0 ? null : quantity,
+    } });
+  }
+  return items.sort((a, b) => compare(representative(a), representative(b)));
+}
+
+function publicHandle(namespace: 'bello-analysis-lot' | 'bello-analysis-sku', id: string, generation: string): string {
   const hash = new Sha256();
-  hash.update(JSON.stringify(['bello-analysis-lot', generation, id]));
+  hash.update(JSON.stringify([namespace, generation, id]));
   return Array.from(hash.digestSync(), byte => byte.toString(16).padStart(2, '0')).join('');
 }
 
 function publicDetailItem(item: DetailItem, target: Target, generation: string): DetailItem {
-  const record = item.type === 'record' ? item.record : item.group.representative;
+  const record = representative(item);
   const publicRecord = {
     ...record,
-    id: target === 'acquisitions' ? publicLotHandle(record.id, generation) : record.id,
-    lotId: record.lotId ? publicLotHandle(record.lotId, generation) : null,
+    id: target === 'acquisitions' ? publicHandle('bello-analysis-lot', record.id, generation) : record.id,
+    lotId: record.lotId ? publicHandle('bello-analysis-lot', record.lotId, generation) : null,
   };
   if (item.type === 'record') return { type: 'record', record: publicRecord };
+  if (item.type === 'sku-group') return { type: 'sku-group', group: { ...item.group, representative: publicRecord } };
   return { type: 'group', group: { ...item.group, representative: publicRecord } };
 }
 
@@ -224,14 +276,21 @@ export function drilldownAnalysis(build: AnalysisBuild, request: DrilldownReques
     if (typeof request.generation !== 'string' || !request.generation) return { status: 'error' };
     const selected = select(build, request);
     if (selected.status !== 'ok') return selected;
-    const { target, dimension, key, groupKindId, daily, cursor } = request;
+    const { target, dimension, key, groupKindId, groupSku, daily, cursor } = request;
     const limit = request.limit ?? 20;
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) return { status: 'error' };
     if ((dimension === undefined) !== (key === undefined)) return { status: 'error' };
-    if (dimension && (!dimensions[target].includes(dimension) || !validDimensionKey(build, dimension, key!))) return { status: 'error' };
-    if (groupKindId && target !== 'inventory' && target !== 'acquisitions') return { status: 'error' };
+    const skuDimension = isSkuDimension(dimension) ? dimension : undefined;
+    const recordDimension = isSkuDimension(dimension) ? undefined : dimension;
+    if (skuDimension && target !== 'inventory') return { status: 'error' };
+    if (recordDimension && !dimensions[target].includes(recordDimension)) return { status: 'error' };
+    if (dimension && !validDimensionKey(build, dimension, key!)) return { status: 'error' };
+    if (groupKindId && (skuDimension || (target !== 'inventory' && target !== 'acquisitions'))) return { status: 'error' };
+    if (groupSku !== undefined && (!skuDimension || !isSkuGroupKey(groupSku))) return { status: 'error' };
+    if (skuDimension && build.metadata.inventorySkuVersion !== 1) return { status: 'missing' };
 
-    const signature = JSON.stringify([request.generation, target, selected.period?.start, selected.period?.end, daily, dimension, key, groupKindId]);
+    const signature = JSON.stringify([request.generation, target, selected.period?.start, selected.period?.end, daily, dimension, key, groupKindId,
+      ...(skuDimension ? [groupSku] : [])]);
     let offset = 0;
     if (cursor !== undefined) {
       if (cursor.length > 3000) return { status: 'error' };
@@ -239,8 +298,17 @@ export function drilldownAnalysis(build: AnalysisBuild, request: DrilldownReques
       if (!Array.isArray(parsed) || parsed.length !== 2 || parsed[0] !== signature || !Number.isSafeInteger(parsed[1]) || parsed[1] < 1) return { status: 'error' };
       offset = parsed[1];
     }
-    const filtered = selected.facts.filter(fact => (!dimension || dimensionKey(fact, dimension) === key) && (!groupKindId || fact.kindId === groupKindId));
-    const items = detailItems(filtered, labels(build, 'category'), !groupKindId && (target === 'inventory' || target === 'acquisitions'));
+    const categoryLabels = labels(build, 'category');
+    let items: DetailItem[];
+    if (skuDimension) {
+      const { groups } = currentSkus(selected.facts);
+      const filtered = groups.filter(group => skuDimensionKey(group, skuDimension) === key &&
+        (!groupSku || (group.records.length > 1 && publicHandle('bello-analysis-sku', group.sku, request.generation) === groupSku)));
+      items = skuDetailItems(filtered, categoryLabels, request.generation, groupSku !== undefined);
+    } else {
+      const filtered = selected.facts.filter(fact => (!recordDimension || dimensionKey(fact, recordDimension) === key) && (!groupKindId || fact.kindId === groupKindId));
+      items = detailItems(filtered, categoryLabels, !groupKindId && (target === 'inventory' || target === 'acquisitions'));
+    }
     if (offset > 0 && offset >= items.length) return { status: 'error' };
     const next = offset + limit;
     return {

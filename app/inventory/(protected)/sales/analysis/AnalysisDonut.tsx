@@ -2,18 +2,18 @@
 
 import {useId,useState} from 'react';
 import {
-  arcPath,displayRows,formatMetric,formatRecordCount,graphSegments,metricLabel,type Bucket,type Dimension,type DisplayRow,type Metric,type Target,
+  arcPath,displayRows,formatMetric,graphSegments,metricLabel,type Bucket,type Dimension,type DisplayRow,type Metric,type Target,
 } from '../../../../../lib/inventory/analysisUi/model';
 
-export function AnalysisDonut({title,target,metric,dimension,buckets,total,gross,records,missingAmount,note,denominator,unavailable,onSelect}:{
+export function AnalysisDonut({title,target,metric,dimension,buckets,total,gross,records,missingAmount,note,denominator,onSelect}:{
   title:string; target:Target; metric:Metric; dimension:Dimension; buckets:Bucket[]; total:number; gross:boolean;
-  note?:string; denominator?:string; unavailable?:boolean;
+  note?:string; denominator?:string;
   records:number; missingAmount:number; onSelect:(row:DisplayRow)=>void;
 }) {
   const [showAll,setShowAll] = useState(false);
   const [other,setOther] = useState<DisplayRow[]|null>(null);
   const legendId = useId();
-  const category = dimension === 'category';
+  const category = dimension === 'category' || dimension === 'skuCategory';
   const {rows,expandable} = displayRows(buckets,metric,gross,showAll,category,target,dimension);
   const label = metricLabel(target,metric) + (gross ? '（返品前）' : '');
   const unknown = metric === 'amount' && records > 0 && missingAmount >= records;
@@ -22,11 +22,6 @@ export function AnalysisDonut({title,target,metric,dimension,buckets,total,gross
     if (row.categories) setOther(previous=>previous ? null : row.categories!);
     else onSelect(row);
   }
-
-  if (unavailable) return <section className="analysis-card" aria-label={title}>
-    <h3>{title}</h3>
-    <p className="analysis-note">この時点の在庫数別内訳はありません。</p>
-  </section>;
 
   return <section className="analysis-card analysis-chart" aria-label={title}>
     <h3>{title}</h3>
@@ -54,7 +49,6 @@ export function AnalysisDonut({title,target,metric,dimension,buckets,total,gross
           <span className="analysis-legend-label">
             <span>{row.label}</span>
             {row.quantity !== undefined && <small>{formatMetric(row.quantity,'quantity')}</small>}
-            {row.recordCount !== undefined && <small>{formatRecordCount(row.recordCount)}</small>}
           </span>
           <strong className="analysis-legend-value">{row.unknownValue ? '—' : formatMetric(row.value,metric)}</strong>
           <small className="analysis-legend-percent">{total > 0 && !row.unknownValue ? row.percent.toFixed(1)+'%' : '—'}</small>

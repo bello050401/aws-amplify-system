@@ -2,13 +2,14 @@ import { BatchGetCommand, GetCommand, type DynamoDBDocumentClient } from '@aws-s
 import { dateOnly, jstDay } from './period';
 import { ANALYSIS_RETAIN_GENERATIONS, ANALYSIS_TARGETS, dailyKey, generationKey, isAnalysisGeneration, parseAnalysisManifest, parseAnalysisShard, shardKey } from './publicationFormat';
 import { drilldownAnalysis, queryAnalysis } from './query';
+import { isSkuDimension, isSkuGroupKey } from './skus';
 import type { AnalysisBuild, AnalysisRequest, AnalysisResult, DetailResult, Dimension, DrilldownRequest } from './types';
 
 type Db = Pick<DynamoDBDocumentClient, 'send'>;
 type ReadResult = { status: 'ok'; build: AnalysisBuild } | { status: 'missing' | 'error' | 'expired' };
-const dimensions = new Set<Dimension>(['category', 'holding', 'holdingBand', 'holdingCount', 'lot', 'lotBand']);
+const dimensions = new Set<Dimension>(['category', 'holding', 'holdingBand', 'holdingCount', 'lot', 'lotBand', 'skuCategory', 'skuHoldingCount']);
 const summaryKeys = ['target', 'start', 'end', 'daily', 'generation', 'rollingDays'];
-const detailKeys = [...summaryKeys, 'dimension', 'key', 'groupKindId', 'cursor', 'limit'];
+const detailKeys = [...summaryKeys, 'dimension', 'key', 'groupKindId', 'groupSku', 'cursor', 'limit'];
 
 export function analysisRequest(value: unknown, detail: true): DrilldownRequest | null;
 export function analysisRequest(value: unknown, detail: false): AnalysisRequest | null;
@@ -40,7 +41,10 @@ export function analysisRequest(value: unknown, detail: boolean): AnalysisReques
     }
     if (request.limit !== undefined && (typeof request.limit !== 'number' || !Number.isInteger(request.limit) ||
         request.limit < 1 || request.limit > 100)) return null;
-    if (request.groupKindId && request.target !== 'inventory' && request.target !== 'acquisitions') return null;
+    const skuDimension = isSkuDimension(request.dimension as Dimension | undefined);
+    if (skuDimension && request.target !== 'inventory') return null;
+    if (request.groupSku !== undefined && (!skuDimension || !isSkuGroupKey(request.groupSku))) return null;
+    if (request.groupKindId && (skuDimension || (request.target !== 'inventory' && request.target !== 'acquisitions'))) return null;
   }
   return request as unknown as AnalysisRequest | DrilldownRequest;
 }

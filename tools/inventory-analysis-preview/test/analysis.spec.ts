@@ -20,8 +20,8 @@ for (const width of [320,390,768,1280]) {
     await page.setViewportSize({width,height:820});
     await page.goto('/?salesAnalysis=1');
     const tabs = page.getByRole('navigation',{name:'売上・在庫の切り替え'});
-    await expect(tabs.getByRole('link')).toHaveText(['売上','在庫金額','在庫内訳']);
-    for (const name of ['売上','在庫金額','在庫内訳']) {
+    await expect(tabs.getByRole('link')).toHaveText(['売上','在庫金額','SKU内訳']);
+    for (const name of ['売上','在庫金額','SKU内訳']) {
       const tab = tabs.getByRole('link',{name,exact:true});
       const bounds = await tab.boundingBox();
       expect(bounds).toBeTruthy();
@@ -69,21 +69,31 @@ for (const width of [320,390,768,1280]) {
 
     await tabs.getByRole('link',{name:'在庫金額',exact:true}).click();
     await expect(page.getByRole('region',{name:'作業状況別の在庫金額',exact:true})).toHaveCount(1);
-    await expect(page.getByRole('region',{name:'作業状況別の在庫数量',exact:true})).toHaveCount(1);
-    const holding = page.getByRole('region',{name:'在庫数別の内訳',exact:true});
-    await expect(holding.getByRole('button',{name:/8点保有.*¥80,000.*80\.0%/})).toBeVisible();
+    await expect(page.getByRole('region',{name:'作業状況別の在庫数量',exact:true})).toBeHidden();
+    await page.getByText('作業状況別の数量を見る',{exact:true}).click();
+    await expect(page.getByRole('region',{name:'作業状況別の在庫数量',exact:true})).toBeVisible();
+    const amount = page.getByRole('region',{name:'カテゴリー別の在庫金額',exact:true});
+    await expect(amount.getByRole('button',{name:/ベンチ・オットマン.*¥80,000.*80\.0%/})).toBeVisible();
+    await expect(page.getByRole('region',{name:'保有数別のSKU数',exact:true})).toHaveCount(0);
     if(width===390) await screenshot(page,testInfo,'inventory-value-'+width);
-    await holding.getByRole('button',{name:/8点保有.*¥80,000/}).click();
+
+    await tabs.getByRole('link',{name:'SKU内訳',exact:true}).click();
+    const sku = page.getByRole('region',{name:'現在庫のSKU'});
+    await expect(sku.locator('.analysis-sku-total strong')).toHaveText('2 SKU');
+    const holding = sku.getByRole('region',{name:'保有数別のSKU数',exact:true});
+    await expect(holding.getByRole('button',{name:/8点保有.*1 SKU.*50\.0%/})).toBeVisible();
+    await expect(holding.getByText(/商品ページ|種類/)).toHaveCount(0);
+    await holding.getByRole('button',{name:/8点保有.*1 SKU/}).click();
     const group = page.getByRole('region',{name:'8点保有の内訳',exact:true});
+    await expect(group.getByText('管理SKU SKU-BENCH',{exact:true})).toBeVisible();
+    await expect(group.getByText(/¥80,000|数量未確認|8点 ·/)).toHaveCount(0);
     await group.getByRole('button',{name:'構成レコードを表示（2件）'}).click();
     await expect(group.getByText('画像なし',{exact:true})).toBeVisible();
     await expect(group.locator('img').first()).toHaveJSProperty('complete',true);
     if(width===390) await screenshot(page,testInfo,'expanded-detail-'+width);
-
-    await tabs.getByRole('link',{name:'在庫内訳',exact:true}).click();
-    await expect(page.getByRole('region',{name:'在庫数別の内訳',exact:true}).getByRole('button',{name:/8点保有.*8点.*88\.9%/})).toBeVisible();
-    await page.getByRole('button',{name:'確認済みの商品種類数',exact:true}).click();
-    await expect(page.getByRole('region',{name:'在庫数別の内訳',exact:true}).getByRole('button',{name:/8点保有.*1種類.*50\.0%/})).toBeVisible();
+    expect(new URL(page.url()).searchParams.get('dimension')).toBe('skuHoldingCount');
+    await group.getByRole('button',{name:'← グラフに戻る'}).click();
+    await expect(page.getByRole('button',{name:'直近30日の仕入れ',exact:true})).toHaveAttribute('aria-expanded','false');
     await page.getByRole('button',{name:'直近30日の仕入れ',exact:true}).click();
     const acquisitions = page.getByRole('region',{name:'直近30日の仕入れ',exact:true});
     await expect(acquisitions).toContainText('¥270,000');
@@ -98,10 +108,11 @@ for (const width of [320,390,768,1280]) {
     await tabs.getByRole('link',{name:'売上',exact:true}).click();
     await expect(page.getByRole('button',{name:'直近30日',exact:true})).toHaveAttribute('aria-pressed','true');
     await expect(page.getByRole('button',{name:'単品・複数に戻す',exact:true})).toHaveAttribute('aria-pressed','true');
-    await tabs.getByRole('link',{name:'在庫内訳',exact:true}).click();
+    await tabs.getByRole('link',{name:'SKU内訳',exact:true}).click();
     await expect(page.getByRole('button',{name:'仕入ロット数',exact:true})).toHaveAttribute('aria-pressed','true');
-    await page.getByRole('button',{name:'現在庫',exact:true}).click();
-    await expect(page.getByRole('button',{name:'確認済みの商品種類数',exact:true})).toHaveAttribute('aria-pressed','true');
+    await page.getByRole('button',{name:'直近30日の仕入れ',exact:true}).click();
+    await expect(page.getByRole('button',{name:'仕入ロット数',exact:true})).toHaveCount(0);
+    await expect(page.getByRole('region',{name:'現在庫のSKU'})).toBeVisible();
     expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
     expect(external).toEqual([]);
   });
@@ -121,8 +132,8 @@ test('missing, empty, retry, unknown cost and negative net',async ({page,baseURL
   await page.getByRole('button',{name:'集計を再試行'}).click();
   await expect(page.getByRole('region',{name:'選択期間の売上'})).toContainText('¥332,000');
   await page.goto('/?fixture=unknown&view=inventory');
-  await expect(page.getByText('原価未登録のため金額割合を表示できません。',{exact:true})).toHaveCount(2);
-  await expect(page.getByText('在庫数量 1点',{exact:true})).toBeVisible();
+  await expect(page.getByText('原価未登録のため金額割合を表示できません。',{exact:true})).toHaveCount(1);
+  await expect(page.getByText('登録済みの購入単価をもとに集計した在庫原価です。',{exact:true})).toBeVisible();
   await page.goto('/?fixture=negative&salesAnalysis=1');
   await expect(page.getByRole('region',{name:'選択期間の売上'})).toContainText('差引 −¥118,000');
   await expect(page.getByRole('region',{name:'カテゴリー別の売上',exact:true})).toContainText('売上（返品前）¥332,000');
@@ -157,14 +168,13 @@ test('the pure production aggregate renders the same legacy totals and its own d
   await expect(sales).toContainText('売上（返品前）¥125,000');
   const tabs = page.getByRole('navigation',{name:'売上・在庫の切り替え'});
   await tabs.getByRole('link',{name:'在庫金額',exact:true}).click();
-  await expect(page.getByText('在庫数量 9点',{exact:true})).toBeVisible();
+  await expect(page.getByText('登録済みの購入単価をもとに集計した在庫原価です。',{exact:true})).toBeVisible();
   await expect(page.getByRole('heading',{name:'¥100,000',exact:true})).toBeVisible();
-  const holding = page.getByRole('region',{name:'在庫数別の内訳',exact:true});
-  await holding.getByRole('button',{name:/8点保有.*¥80,000.*80\.0%/}).click();
-  await page.getByRole('button',{name:'構成レコードを表示（2件）'}).click();
+  const amount = page.getByRole('region',{name:'カテゴリー別の在庫金額',exact:true});
+  await amount.getByRole('button',{name:/ダイニングチェア.*¥80,000.*80\.0%/}).click();
   await expect(page.getByRole('heading',{name:'サンプル家具 M1 ダイニングチェア',exact:true}).first()).toBeVisible();
   expect(new URL(page.url()).searchParams.get('generation')).toBe('fixture-analysis-20261114');
-  await tabs.getByRole('link',{name:'在庫内訳',exact:true}).click();
+  await tabs.getByRole('link',{name:'SKU内訳',exact:true}).click();
   await page.getByRole('button',{name:'直近30日の仕入れ',exact:true}).click();
   const acquisitions = page.getByRole('region',{name:'直近30日の仕入れ',exact:true});
   await expect(acquisitions).toContainText('¥150,000');
@@ -237,7 +247,7 @@ for (const width of [320,390,1280]) {
   test('inventory shows exact numeric counts in a responsive legend at '+width,async ({page},testInfo)=>{
     await page.setViewportSize({width,height:820});
     await page.goto('/?fixture=exact-counts&view=breakdown');
-    const category = page.getByRole('region',{name:'カテゴリー別の在庫数量'});
+    const category = page.getByRole('region',{name:'カテゴリー別のSKU数'});
     const donut = category.locator('svg');
     const legend = category.locator('.analysis-legend-list');
     await expect(donut).toBeVisible();
@@ -247,18 +257,18 @@ for (const width of [320,390,1280]) {
     if (width >= 680) expect(legendBounds.x).toBeGreaterThan(donutBounds.x + donutBounds.width);
     else expect(legendBounds.y).toBeGreaterThan(donutBounds.y + donutBounds.height);
 
-    const holding = page.getByRole('region',{name:'在庫数別の内訳'});
-    await expect(holding).toContainText('同一商品として確認済みのものは合算、未照合は商品ページごとに集計。');
-    await expect(holding).toContainText('割合の分母は、集計時点の在庫数量の合計です。');
+    const holding = page.getByRole('region',{name:'保有数別のSKU数'});
+    await expect(holding).toContainText('同じSKUの在庫数を合算して区分します。');
+    await expect(holding.getByText('SKU数',{exact:true})).toBeVisible();
     await expect(holding.locator('.analysis-legend-label > span')).toHaveText(['1点保有','2点保有','3点保有','5点保有','8点保有']);
     await expect(holding.getByText(/2〜3点|4〜8点|2点以上/)).toHaveCount(0);
-    await expect(holding.getByRole('button',{name:/2点保有.*1商品ページ.*2点.*10\.5%/})).toBeVisible();
+    await expect(holding.getByRole('button',{name:/2点保有.*1 SKU.*20\.0%/})).toBeVisible();
     expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
     if (width!==320) await screenshot(page,testInfo,'exact-holdings-'+width);
-    await holding.getByRole('button',{name:/2点保有.*10\.5%/}).click();
+    await holding.getByRole('button',{name:/2点保有.*20\.0%/}).click();
     const detail = page.getByRole('region',{name:'2点保有の内訳'});
     await expect(detail.getByRole('heading',{name:'在庫数が2点の商品'})).toBeVisible();
-    await expect(detail.getByText('未照合・商品ページの在庫数')).toBeVisible();
+    await expect(detail.getByText('管理SKU SKU-TWO',{exact:true})).toBeVisible();
     await page.reload();
     await expect(detail.getByRole('heading',{name:'在庫数が2点の商品'})).toBeVisible();
   });
@@ -268,16 +278,25 @@ for (const width of [320,390,1280]) {
   test('dense current inventory keeps every category and exact count visible at '+width,async ({page},testInfo)=>{
     await page.setViewportSize({width,height:820});
     await page.goto('/?fixture=dense-stock&view=breakdown');
-    const category = page.getByRole('region',{name:'カテゴリー別の在庫数量'});
-    const holding = page.getByRole('region',{name:'在庫数別の内訳'});
+    const category = page.getByRole('region',{name:'カテゴリー別のSKU数'});
+    const holding = page.getByRole('region',{name:'保有数別のSKU数'});
     await expect(category.locator('.analysis-legend')).toHaveCount(13);
     await expect(holding.locator('.analysis-legend')).toHaveCount(16);
-    await expect(holding.getByRole('button',{name:/2点保有.*31商品ページ.*62点/})).toBeVisible();
-    await expect(holding.getByRole('button',{name:/94点保有.*1商品ページ.*94点/})).toBeVisible();
+    await expect(holding.getByRole('button',{name:/2点保有.*31 SKU/})).toBeVisible();
+    await expect(holding.getByRole('button',{name:/94点保有.*1 SKU/})).toBeVisible();
     expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
     expect(await holding.locator('path').evaluateAll(paths=>new Set(paths.map(path=>path.getAttribute('stroke'))).size)).toBeGreaterThan(12);
     await screenshot(page,testInfo,'dense-inventory-'+width);
-    await page.getByRole('button',{name:'確認済みの商品種類数',exact:true}).click();
-    await expect(holding.getByText('31商品ページ',{exact:true})).toHaveCount(0);
+    await expect(holding.getByText(/商品ページ|62点/)).toHaveCount(0);
   });
 }
+
+test('legacy and missing-SKU inventory distinguish unavailable analysis from zero registered SKU',async ({page})=>{
+  await page.goto('/?fixture=legacy-sku&view=breakdown&stockUnit=kinds');
+  await expect(page.getByRole('status')).toContainText('SKU集計がありません');
+  await expect(page.getByText('0 SKU',{exact:true})).toHaveCount(0);
+  await page.goto('/?fixture=unknown&view=breakdown');
+  await expect(page.locator('.analysis-sku-total strong')).toHaveText('0 SKU');
+  await page.getByText('SKUの集計方法',{exact:true}).click();
+  await expect(page.getByText('管理SKUが未登録の在庫 1件は集計の対象外です。',{exact:true})).toBeVisible();
+});

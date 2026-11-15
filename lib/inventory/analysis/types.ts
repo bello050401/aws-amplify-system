@@ -5,8 +5,9 @@ export const UNKNOWN = '__unknown__';
 export type Confirmation = 'confirmed' | 'candidate' | 'unknown';
 export type Band = '1' | '2-3' | '4-8' | '9+' | 'unknown';
 export type Target = 'inventory' | 'sales' | 'acquisitions' | 'retailReference';
-export type Metric = 'amount' | 'quantity' | 'kinds' | 'lots';
-export type Dimension = 'category' | 'holding' | 'holdingBand' | 'holdingCount' | 'lot' | 'lotBand';
+export type Metric = 'amount' | 'quantity' | 'kinds' | 'lots' | 'skus';
+export type SkuDimension = 'skuCategory' | 'skuHoldingCount';
+export type Dimension = 'category' | 'holding' | 'holdingBand' | 'holdingCount' | 'lot' | 'lotBand' | SkuDimension;
 export interface ProductCategory { id:string; label:string; mergedInto?:string }
 export interface Taxonomy { type:'taxonomy'; categories:ProductCategory[] }
 export interface ProductKind {
@@ -46,14 +47,17 @@ export interface Totals {
   amount:number; gross:number; returns:number;
   quantity:number; grossQuantity:number; returnedQuantity:number; kinds:number; lots:number;
   records:number; unknown:UnknownCounts;
+  skus?:number;
 }
 export interface Bucket extends Totals { key:string; label:string; color:string }
 export interface Summary extends Totals {
   dimensions:Partial<Record<Dimension,Bucket[]>>;
+  unknownSkuRecords?:number;
 }
 /** Minimal immutable generation projection; images contain a storage reference only. */
 export interface Fact {
   id:string; inventoryId:string|null; title:string; imageRef:string|null;
+  sku?:string|null;
   date:string|null; category:string; kindId:string|null;
   categoryBasis?:'confirmed'|'title'|'unknown';
   holding:'single'|'multiple'|'unknown'; holdingBand:Band;
@@ -69,6 +73,7 @@ export interface AnalysisMetadata {
   amountBasis:string; metadataVersions:Record<string,number>; metadataEpoch?:number;
   coverageStart:string; coverageEnd:string; accuracy:'captured-current-source';
   sourceRecordCount:number; unlocatedAcquisitionRecords:number; unlocatedSalesRecords?:number;
+  inventorySkuVersion?:1;
 }
 export interface AnalysisBuild {
   metadata:AnalysisMetadata; inventoryValue:InventoryValue;
@@ -85,12 +90,13 @@ export interface AnalysisResponse {
 export type AnalysisResult = AnalysisResponse | {status:'missing'|'error'|'expired'};
 export interface DrilldownRequest extends AnalysisRequest {
   generation:string; dimension?:Dimension; key?:string; groupKindId?:string;
-  cursor?:string; limit?:number;
+  groupSku?:string; cursor?:string; limit?:number;
 }
 export type DetailRecord = Fact & { categoryLabel: string };
 export type DetailItem =
   | { type: 'record'; record: DetailRecord }
-  | { type: 'group'; group: { kindId: string; representative: DetailRecord; count: number; amount: number | null; quantity: number | null } };
+  | { type: 'group'; group: { kindId: string; representative: DetailRecord; count: number; amount: number | null; quantity: number | null } }
+  | { type: 'sku-group'; group: { sku: string; groupKey: string; representative: DetailRecord; count: number; amount: number | null; quantity: number | null } };
 export type DetailResult =
   | { status: 'ok'; items: DetailItem[]; nextCursor?: string | null }
   | { status: 'missing' | 'error' | 'expired' };

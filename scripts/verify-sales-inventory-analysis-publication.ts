@@ -15,7 +15,9 @@ const SECOND = '2026-11-14T06:00:00.000Z';
 const workflow = [{ id: 'for-sale', name: '販売中' }];
 const rows = [{ id: 'chair', sku: 'C-1', name: '椅子', quantity: 5, purchasePrice: 1500, categoryId: 'for-sale' }];
 const firstBuild = buildAnalysis(rows, workflow, [], FIRST, FIRST);
-const first = { ...firstBuild, inventory: firstBuild.inventory.map(({ holdingCount: _count, holdingBasis: _basis, ...fact }) => fact) };
+const { inventorySkuVersion: _version, ...legacyMetadata } = firstBuild.metadata;
+const first = { ...firstBuild, metadata: legacyMetadata,
+  inventory: firstBuild.inventory.map(({ holdingCount: _count, holdingBasis: _basis, sku: _sku, ...fact }) => fact) };
 const second = buildAnalysis(rows.map(row => ({ ...row, quantity: 2 })), workflow, [], SECOND, SECOND);
 const legacy = buildMonthlyAggregates([{ id: 'sales-fixture', displayId: 'S-1', sku: 'S-1', name: '椅子',
   saleEndDate: '2026-11-10', salePrice: 5000, purchasePrice: 1500, shippingCost: 0 }]);
@@ -129,6 +131,24 @@ async function publication() {
   const pinnedSummary = await reader.summary(pinnedRequest);
   assert(pinnedSummary.status === 'ok');
   assert.equal(pinnedSummary.summary.dimensions.holdingCount?.[0].key, '5');
+  assert.equal(pinnedSummary.summary.skus, undefined);
+  assert.equal(pinnedSummary.summary.unknownSkuRecords, undefined);
+  assert.equal(pinnedSummary.summary.dimensions.skuHoldingCount, undefined);
+  assert.equal((await reader.detail({ ...pinnedRequest, dimension: 'skuHoldingCount', key: '5' })).status, 'missing');
+  const latestRequest = { ...pinnedRequest, generation: SECOND };
+  const latestSummary = await reader.summary(latestRequest);
+  assert(latestSummary.status === 'ok');
+  assert.deepEqual(latestSummary.summary.dimensions.skuHoldingCount?.map(bucket => [bucket.key, bucket.skus]), [['2', 1]]);
+  assert.equal(latestSummary.summary.skus, 1);
+  assert.equal(latestSummary.summary.unknownSkuRecords, 0);
+  const skuDetail = await reader.detail({ ...latestRequest, dimension: 'skuHoldingCount', key: '2' });
+  assert(skuDetail.status === 'ok');
+  assert.deepEqual(skuDetail.items.map(item => item.type === 'record' && [item.record.id, item.record.sku]), [['chair', 'C-1']]);
+  assert.equal(analysisRequest({ ...latestRequest, dimension: 'holdingCount', key: '2', groupSku: 'C-1' }, true), null);
+  assert.equal(analysisRequest({ target: 'sales', generation: SECOND, dimension: 'skuCategory', key: 'chairs' }, true), null);
+  assert.equal(analysisRequest({ ...latestRequest, dimension: 'skuHoldingCount', key: '2', groupSku: 'C-1' }, true), null);
+  assert.equal(analysisRequest({ ...latestRequest, dimension: 'skuHoldingCount', key: '2', groupKindId: 'chair' }, true), null);
+  assert(analysisRequest({ ...latestRequest, dimension: 'skuHoldingCount', key: '2', groupSku: 'a'.repeat(64) }, true));
   const pinnedDetail = await reader.detail({ ...pinnedRequest, dimension: 'holdingCount', key: '5' });
   assert(pinnedDetail.status === 'ok');
   assert.deepEqual(pinnedDetail.items.map(item => item.type === 'record' && [item.record.id, item.record.holdingCount, item.record.holdingBasis]), [['chair', 5, 'inventory-record']]);

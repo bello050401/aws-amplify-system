@@ -9,7 +9,16 @@ type CoreGroup = Extract<CoreDetailItem,{type:'group'}>['group'];
 export interface ProductGroup extends CoreGroup {
   representative: ProductFact;
 }
-export type DetailItem = {type:'record'; record:ProductFact} | {type:'group'; group:ProductGroup};
+type CoreSkuGroup = Extract<CoreDetailItem,{type:'sku-group'}>['group'];
+export interface SkuGroup extends CoreSkuGroup {
+  representative: ProductFact;
+}
+export type DetailItem = {type:'record'; record:ProductFact} | {type:'group'; group:ProductGroup} | {type:'sku-group'; group:SkuGroup};
+export type DetailGroup = Pick<DrilldownRequest,'groupKindId'|'groupSku'>;
+export function detailItemKey(item:DetailItem) {
+  if (item.type === 'record') return 'record:'+item.record.id;
+  return item.type === 'group' ? 'kind:'+item.group.kindId : 'sku:'+item.group.groupKey;
+}
 export type DetailResult =
   | (Omit<Extract<CoreDetailResult,{status:'ok'}>,'items'> & {items:DetailItem[]})
   | Exclude<CoreDetailResult,{status:'ok'}>;
@@ -24,7 +33,7 @@ export interface AnalysisPorts {
 export const TABS = [
   {key:'sales', label:'売上'},
   {key:'inventory', label:'在庫金額'},
-  {key:'breakdown', label:'在庫内訳'},
+  {key:'breakdown', label:'SKU内訳'},
 ] as const;
 export type Tab = typeof TABS[number]['key'];
 
@@ -119,9 +128,12 @@ export function stateFromQuery(query:URLSearchParams, today:string):AnalysisStat
   const dimension = get('dimension');
   const generation = get('generation').slice(0,128);
   const key = get('slice').slice(0,160);
-  const request = get('detailTarget') === 'retailReference' && state.tab === 'breakdown' && state.breakdown === 'acquisitions' && state.reference
-    ? {target:'retailReference' as const}
-    : analysisRequest(state,today);
+  const skuDimension = dimension === 'skuCategory' || dimension === 'skuHoldingCount';
+  const request = skuDimension && state.tab === 'breakdown'
+    ? {target:'inventory' as const}
+    : get('detailTarget') === 'retailReference' && state.tab === 'breakdown' && state.breakdown === 'acquisitions' && state.reference
+      ? {target:'retailReference' as const}
+      : analysisRequest(state,today);
   if (request && generation && key && isDimension(dimension)) {
     const start = get('detailStart'), end = get('detailEnd');
     const exact = request.target === 'sales' && validDay(start) && validDay(end) && start <= end ? {...request,start,end} : request;
@@ -131,7 +143,7 @@ export function stateFromQuery(query:URLSearchParams, today:string):AnalysisStat
 }
 
 function isDimension(value:string):value is Dimension {
-  return ['category','holding','holdingBand','holdingCount','lot','lotBand'].includes(value);
+  return ['category','holding','holdingBand','holdingCount','skuCategory','skuHoldingCount','lot','lotBand'].includes(value);
 }
 
 export function writeQuery(query:URLSearchParams, state:AnalysisState) {
@@ -195,14 +207,22 @@ export function unknownAmount(totals:Totals,target:Target) {
 
 export function metricFor(state:AnalysisState):Metric {
   if (state.tab !== 'breakdown') return 'amount';
-  return state.breakdown === 'inventory' ? state.stockUnit : state.acquisitionUnit;
+  return state.breakdown === 'inventory' ? 'skus' : state.acquisitionUnit;
 }
 export function groupingFor(state:AnalysisState) {
   const key = state.tab === 'breakdown' && state.breakdown === 'acquisitions' ? 'acquisitions' : state.tab;
   return {key,detailed:state.detailed[key]};
 }
 
+export function detailMetricFor(slice:Slice, state:AnalysisState):Metric {
+  if (slice.dimension === 'skuCategory' || slice.dimension === 'skuHoldingCount') return 'skus';
+  if (slice.request.target === 'retailReference') return 'amount';
+  if (slice.request.target === 'inventory' && state.tab === 'breakdown') return state.stockUnit;
+  return metricFor(state);
+}
+
 export function metricLabel(target:Target,metric:Metric) {
+  if (metric === 'skus') return 'SKU数';
   if (metric === 'quantity') return target === 'acquisitions' ? '仕入数量' : target === 'inventory' ? '在庫数量' : '数量';
   if (metric === 'kinds') return '商品種類数';
   if (metric === 'lots') return '仕入ロット数';
@@ -213,7 +233,7 @@ export function metricLabel(target:Target,metric:Metric) {
 export function formatMetric(value:number, metric:Metric) {
   return metric === 'amount'
     ? (value < 0 ? '−' : '') + '¥' + Math.abs(value).toLocaleString('ja-JP')
-    : value.toLocaleString('ja-JP') + (metric === 'quantity' ? '点' : metric === 'kinds' ? '種類' : 'ロット');
+    : value.toLocaleString('ja-JP') + (metric === 'skus' ? ' SKU' : metric === 'quantity' ? '点' : metric === 'kinds' ? '種類' : 'ロット');
 }
 
 export interface DisplayRow {
@@ -223,28 +243,26 @@ export interface DisplayRow {
   value: number;
   percent: number;
   quantity?: number;
-  recordCount?: number;
   unknownValue?:boolean;
   categories?: DisplayRow[];
 }
 const unknownKey = '__unknown__';
 function compositionValue(totals:Totals,metric:Metric,gross:boolean) {
-  if (!gross) return totals[metric];
-  if (metric==='amount') return totals.gross;
-  if (metric==='quantity') return totals.grossQuantity ?? Math.max(0,totals.quantity);
-  return totals[metric];
+  if (gross && metric==='amount') return totals.gross;
+  if (gross && metric==='quantity') return totals.grossQuantity ?? Math.max(0,totals.quantity);
+  return totals[metric] ?? 0;
 }
 
 export function chartBasis(summary:Totals,metric:Metric) {
   const returned = metric==='amount' ? Math.abs(summary.returns) : metric==='quantity' ? summary.returnedQuantity ?? 0 : 0;
   const gross = returned>0 && (metric==='amount' || metric==='quantity');
-  return {gross,total:compositionValue(summary,metric,gross),returned,net:summary[metric]};
+  return {gross,total:compositionValue(summary,metric,gross),returned,net:summary[metric] ?? 0};
 }
 
 export function displayRows(buckets:Bucket[], metric:Metric, gross:boolean, showAll:boolean, category:boolean,target:Target='inventory',dimension?:Dimension) {
   const value = (bucket:Bucket) => compositionValue(bucket,metric,gross);
-  const exact = dimension === 'holdingCount';
-  const inventoryCategory = target === 'inventory' && dimension === 'category';
+  const exact = dimension === 'holdingCount' || dimension === 'skuHoldingCount';
+  const inventoryCategory = target === 'inventory' && (dimension === 'category' || dimension === 'skuCategory');
   const sorted = inventoryCategory ? buckets : [...buckets].sort(exact
     ? (a,b)=>(a.key===unknownKey ? Infinity : Number(a.key))-(b.key===unknownKey ? Infinity : Number(b.key))
     : (a,b)=>value(b)-value(a));
@@ -254,8 +272,7 @@ export function displayRows(buckets:Bucket[], metric:Metric, gross:boolean, show
     color:bucket.color,
     value:value(bucket),
     percent:total > 0 ? Math.max(0,value(bucket))/total*100 : 0,
-    ...(metric === 'amount' && bucket.quantity > 0 ? {quantity:bucket.quantity} : {}),
-    ...(exact && metric === 'quantity' ? {recordCount:bucket.records} : {}),
+    ...(metric === 'amount' && target !== 'inventory' && bucket.quantity > 0 ? {quantity:bucket.quantity} : {}),
     unknownValue:metric === 'amount' && bucket.records > 0 && unknownAmount(bucket,target) >= bucket.records,
   }));
   const classified = rows.filter(row=>row.key!==unknownKey);
@@ -272,10 +289,6 @@ export function displayRows(buckets:Bucket[], metric:Metric, gross:boolean, show
   return {rows:[...classified.slice(0,5),other,...rows.filter(row=>row.key===unknownKey)],expandable:true};
 }
 
-export function formatRecordCount(count:number) {
-  return count.toLocaleString('ja-JP') + '商品ページ';
-}
-
 export function graphSegments(rows:DisplayRow[]) {
   let offset = 0;
   return rows.filter(row=>row.percent>0).map(row=>{
@@ -285,9 +298,10 @@ export function graphSegments(rows:DisplayRow[]) {
   });
 }
 
-export const holdingBasisNote = '同一商品として確認済みのものは合算、未照合は商品ページごとに集計。';
+export const skuHoldingNote = '同じSKUの在庫数を合算して区分します。';
 
 export function inventoryCompositionNote(metric:Metric) {
+  if (metric === 'skus') return '割合は在庫のSKU数全体に対する比率です。';
   if (metric === 'amount') return '割合の分母は、購入単価が確認できる在庫の金額合計です。';
   if (metric === 'kinds') return '割合の分母は、確認済みの商品種類数の合計です。';
   return '割合の分母は、集計時点の在庫数量の合計です。';
@@ -316,10 +330,11 @@ export function chartContent(target:Target,metric:Metric,bands:boolean):{title:s
     {title:'単品と複数の仕入ロット配分',dimension:bands ? 'lotBand' : 'lot'},
   ];
   if (target === 'retailReference') return [{title:'カテゴリー別の小売実績の参考配分',dimension:'category'}];
-  return [
-    {title:'カテゴリー別の'+metricLabel(target,metric),dimension:'category'},
-    {title:'在庫数別の内訳',dimension:'holdingCount'},
+  if (metric === 'skus') return [
+    {title:'カテゴリー別のSKU数',dimension:'skuCategory'},
+    {title:'保有数別のSKU数',dimension:'skuHoldingCount'},
   ];
+  return [{title:'カテゴリー別の在庫金額',dimension:'category'}];
 }
 
 

@@ -3,8 +3,8 @@ import {ActivityIndicator,Image,Pressable,StyleSheet,Text,useWindowDimensions,Vi
 import Svg,{Circle,Path,Text as SvgText} from 'react-native-svg';
 import {formatJstDateTime} from '../../../lib/inventory/sales';
 import {
-  analysisRequest,arcPath,categoryBasisLabel,chartBasis,chartContent,displayRows,formatMetric,formatRecordCount,graphSegments,groupingFor,holdingBasisLabel,holdingBasisNote,inventoryCompositionNote,jstDay,metricFor,metricLabel,
-  unknownAmount,type AnalysisPorts,type AnalysisState,type Bucket,type Dimension,type DisplayRow,type Metric,type ProductFact,type Slice,type Target,
+  analysisRequest,arcPath,categoryBasisLabel,chartBasis,chartContent,detailItemKey,detailMetricFor,displayRows,formatMetric,graphSegments,groupingFor,holdingBasisLabel,skuHoldingNote,inventoryCompositionNote,jstDay,metricFor,metricLabel,
+  unknownAmount,type AnalysisRequest,type AnalysisPorts,type AnalysisState,type Bucket,type DetailGroup,type DetailItem,type Dimension,type DisplayRow,type Metric,type ProductFact,type Slice,type Target,
 } from '../../../lib/inventory/analysisUi/model';
 import {useAnalysis,useDetail} from '../../../lib/inventory/analysisUi/useAnalysis';
 
@@ -23,25 +23,36 @@ const button = (label:string,press:()=>void,selected?:boolean) =>
     onPress={press} style={[s.button,selected&&s.active]}><Text style={[s.buttonText,selected&&s.activeText]}>{label}</Text></Pressable>;
 
 export function NativeAnalysis({state,change,ports,offline,onOpen,today=jstDay(),inventoryRead}:NativeAnalysisProps) {
-  const request = analysisRequest(state,today);
-  const metric = metricFor(state);
+  const skuTab = state.tab === 'breakdown';
+  const request = analysisRequest(skuTab ? {...state,breakdown:'inventory'} : state,today);
+  const metric = skuTab ? 'skus' : metricFor(state);
   const {key,detailed} = groupingFor(state);
   const read = useAnalysis(ports?.load,inventoryRead || state.slice ? null : request,!offline);
   const api = inventoryRead ?? read;
-  const {data,retry} = api;
   const acquisition = state.tab === 'breakdown' && state.breakdown === 'acquisitions';
-  const compare = acquisition && metric === 'amount' && data?.status === 'ok';
-  const reference = useAnalysis(ports?.load,state.reference && compare ? {target:'retailReference',generation:data.metadata.generation} : null,!offline);
+  const acquisitionRequest = {target:'acquisitions'} as const;
+  const purchase = useAnalysis(ports?.load,acquisition && !state.slice ? acquisitionRequest : null,!offline);
+  const purchaseGeneration = purchase.data?.status === 'ok' ? purchase.data.metadata.generation : null;
+  const compare = acquisition && state.acquisitionUnit === 'amount' && !!purchaseGeneration;
+  const reference = useAnalysis(ports?.load,state.reference && compare && purchaseGeneration ? {target:'retailReference',generation:purchaseGeneration} : null,!offline);
+  const [showSkuNotes,setShowSkuNotes] = useState(false);
   if (state.slice) {
     const slice = state.slice;
     return <View style={s.section}>{button('← グラフに戻る',()=>change({slice:null}))}
       <Text accessibilityRole="header" style={s.heading}>{slice.label}の内訳</Text>
-      <Text style={s.note}>{metricLabel(slice.request.target,slice.request.target==='retailReference'?'amount':metric)}{slice.request.start && slice.request.end ? ' · '+slice.request.start.replace(/-/g,'/')+' ～ '+slice.request.end.replace(/-/g,'/') : ''}</Text>
+      <Text style={s.note}>{metricLabel(slice.request.target,detailMetricFor(slice,state))}{slice.request.start && slice.request.end ? ' · '+slice.request.start.replace(/-/g,'/')+' ～ '+slice.request.end.replace(/-/g,'/') : ''}</Text>
       {offline ? <Text style={s.note}>通信できる状態で内訳を確認してください。</Text> : <NativeDetails key={slice.request.generation+':'+slice.dimension+':'+slice.key} slice={slice} drill={ports?.drill} onOpen={onOpen}/>}
     </View>;
   }
-  const graphs = (value:Extract<NonNullable<typeof data>,{status:'ok'}>, selected:Metric, isReference=false) => {
-    const {summary,target,period,metadata} = value;
+  function renderResult({data,retry}:ReturnType<typeof useAnalysis>, selected:Metric, selection:AnalysisRequest) {
+    if (!data) return <ActivityIndicator accessibilityLabel="集計を読み込み中"/>;
+    if (data.status !== 'ok') return <View style={s.card}>
+      <Text accessibilityRole="alert" style={s.note}>{data.status==='missing' ? '集計データなし' : data.status==='expired' ? 'この集計版は参照期限を過ぎました。' : '集計を取得できませんでした。'}</Text>
+      {data.status!=='missing' && button('集計を再試行',retry)}
+    </View>;
+    const {summary,target,period,metadata} = data;
+    if (selected === 'skus' && summary.skus === undefined) return <Text style={s.note}>この時点のデータにSKU集計がありません。次の集計後に表示します。</Text>;
+    const isReference = target === 'retailReference';
     const {gross,total,returned,net} = chartBasis(summary,selected);
     const inventory = target === 'inventory';
     const label = isReference ? '直近90日の小売実績' : target === 'sales' ? '選択期間の売上' : target === 'acquisitions' ? '直近30日の仕入れ' : '現在庫';
@@ -53,10 +64,11 @@ export function NativeAnalysis({state,change,ports,offline,onOpen,today=jstDay()
       ['種類未判定',summary.unknown.kind],['ロット未判定',summary.unknown.lot],
     ] as const;
     return <View style={s.section}>
-      {inventory && state.tab !== 'inventory' && <Text style={s.note}>
-        {formatJstDateTime(metadata.asOf)} JST 時点
-        {selected === 'kinds' && summary.unknown.kind > 0 && ' · 商品種類が未照合の在庫記録 '+summary.unknown.kind.toLocaleString('ja-JP')+'件'}
-      </Text>}
+      {selected === 'skus' && <View>
+        <Text accessibilityRole="header" style={s.heading}>現在庫のSKU</Text>
+        <Text style={s.total}>{formatMetric(total,'skus')}</Text>
+        <Text style={s.note}>{formatJstDateTime(metadata.asOf)} JST 時点</Text>
+      </View>}
       {!inventory && <View style={[s.card,s.summary]}>
         <Text accessibilityRole="header" style={s.heading}>{label}</Text>
         <Text style={s.total}>{unknown ? '—' : formatMetric(summary.amount,'amount')}</Text>
@@ -69,40 +81,44 @@ export function NativeAnalysis({state,change,ports,offline,onOpen,today=jstDay()
         <Text style={s.note}>{metadata.amountBasis}</Text>
         {unknownList.some(([,count])=>count>0) && <Text style={s.note}>{unknownList.filter(([,count])=>count>0).map(([name,count])=>name+' '+count+'件').join(' · ')}</Text>}
         {gross && <Text style={s.note}>円グラフは返品前の構成です。返品・取消 {formatMetric(returned,selected)} · 差引 {formatMetric(net,selected)}</Text>}
-        {isReference && <Text style={s.note}>確認済みの小売実績の参考配分。販路未確認 {value.referenceExclusions.unknownChannel}件 · 原価未確認 {value.referenceExclusions.unknownCost}件 · 取得元未確認 {value.referenceExclusions.unverifiedOrigin}件 · その他の対象外 {value.referenceExclusions.excluded}件（対象外の売上 {formatMetric(value.referenceExclusions.salesAmount,'amount')}）</Text>}
+        {isReference && <Text style={s.note}>確認済みの小売実績の参考配分。販路未確認 {data.referenceExclusions.unknownChannel}件 · 原価未確認 {data.referenceExclusions.unknownCost}件 · 取得元未確認 {data.referenceExclusions.unverifiedOrigin}件 · その他の対象外 {data.referenceExclusions.excluded}件（対象外の売上 {formatMetric(data.referenceExclusions.salesAmount,'amount')}）</Text>}
       </View>}
       {!inventory && !isReference && button(detailed ? '単品・複数に戻す' : '数量帯を詳しく',()=>change({detailed:{...state.detailed,[key]:!detailed}}),detailed)}
       {chartContent(target,selected,detailed).map(({title,dimension})=><NativeDonut
         key={metadata.generation+':'+target+':'+selected+':'+dimension} title={title} target={target} metric={selected} dimension={dimension}
-        note={inventory ? dimension === 'holdingCount' ? holdingBasisNote : '商品名による分類を含みます。' : undefined}
-        denominator={inventory ? inventoryCompositionNote(selected) : undefined}
-        unavailable={dimension === 'holdingCount' && summary.dimensions[dimension] === undefined}
+        note={dimension === 'skuHoldingCount' ? skuHoldingNote : inventory ? '商品名による分類を含みます。' : undefined}
+        denominator={inventory && selected === 'amount' ? inventoryCompositionNote(selected) : undefined}
         buckets={summary.dimensions[dimension]??[]} total={total} gross={gross} records={summary.records} unknown={unknown && selected==='amount'}
-        select={row=>change({slice:{dimension,key:row.key,label:row.label,request:{...(isReference ? {target} : request!),generation:metadata.generation}}})}
+        select={row=>change({slice:{dimension,key:row.key,label:row.label,request:{...selection,generation:metadata.generation}}})}
       />)}
+      {selected === 'skus' && <View style={s.section}>
+        <Pressable accessibilityRole="button" aria-expanded={showSkuNotes} accessibilityState={{expanded:showSkuNotes}} onPress={()=>setShowSkuNotes(value=>!value)} style={s.button}>
+          <Text style={s.buttonText}>SKUの集計方法</Text>
+        </Pressable>
+        {showSkuNotes && <View>
+          <Text style={s.note}>管理SKUごとに1 SKUとして集計します。</Text>
+          {(summary.unknownSkuRecords ?? 0) > 0 && <Text style={s.note}>管理SKUが未登録の在庫 {summary.unknownSkuRecords?.toLocaleString('ja-JP')}件は集計の対象外です。</Text>}
+        </View>}
+      </View>}
     </View>;
-  };
+  }
 
+  if (offline) return <Text style={s.note}>通信できる状態で集計を確認してください。</Text>;
   return <View style={s.section}>
-    {state.tab === 'breakdown' && <>
-      <Choices label="在庫内訳の対象" value={state.breakdown} options={[{key:'inventory',label:'現在庫'},{key:'acquisitions',label:'直近30日の仕入れ'}] as const} select={breakdown=>change({breakdown})}/>
-      {acquisition
-        ? <Choices label="仕入れの集計単位" value={state.acquisitionUnit} options={[{key:'amount',label:'仕入原価'},{key:'quantity',label:'仕入数量'},{key:'lots',label:'仕入ロット数'}] as const} select={acquisitionUnit=>change({acquisitionUnit})}/>
-        : <Choices label="現在庫の集計単位" value={state.stockUnit} options={[{key:'quantity',label:'数量'},{key:'kinds',label:'確認済みの商品種類数'}] as const} select={stockUnit=>change({stockUnit})}/>}
-    </>}
-    {offline ? <Text style={s.note}>通信できる状態で集計を確認してください。</Text>
-      : !request ? <Text style={s.note}>2026年1月1日以降で有効な開始日と終了日を指定してください。</Text>
-      : !data ? <ActivityIndicator accessibilityLabel="集計を読み込み中"/>
-      : data.status === 'ok' ? graphs(data,metric)
-      : <View style={s.card}><Text accessibilityRole="alert" style={s.note}>{data.status==='missing' ? '集計データなし' : data.status==='expired' ? 'この集計版は参照期限を過ぎました。' : '集計を取得できませんでした。'}</Text>
-        {data.status!=='missing' && button('集計を再試行',retry)}</View>}
-    {compare && <>
-      {button('小売実績の参考配分と比較',()=>change({reference:!state.reference}),state.reference)}
-      {state.reference && (!reference.data ? <ActivityIndicator accessibilityLabel="参考配分を読み込み中"/>
-        : reference.data.status === 'ok' ? graphs(reference.data,'amount',true)
-        : <View style={s.card}><Text style={s.note}>{reference.data.status==='missing' ? '集計データなし' : '参考配分を取得できませんでした。'}</Text>
-          {reference.data.status!=='missing' && button('参考配分を再試行',reference.retry)}</View>)}
-    </>}
+    {request && renderResult(api,metric,request)}
+    {skuTab && <View style={s.section}>
+      <Pressable accessibilityRole="button" aria-expanded={acquisition} accessibilityState={{expanded:acquisition}} onPress={()=>change({breakdown:acquisition?'inventory':'acquisitions'})} style={s.button}>
+        <Text style={s.buttonText}>直近30日の仕入れ</Text>
+      </Pressable>
+      {acquisition && <>
+        <Choices label="仕入れの集計単位" value={state.acquisitionUnit} options={[{key:'amount',label:'仕入原価'},{key:'quantity',label:'仕入数量'},{key:'lots',label:'仕入ロット数'}] as const} select={acquisitionUnit=>change({acquisitionUnit})}/>
+        {renderResult(purchase,state.acquisitionUnit,acquisitionRequest)}
+        {compare && <>
+          {button('小売実績の参考配分と比較',()=>change({reference:!state.reference}),state.reference)}
+          {state.reference && renderResult(reference,'amount',{target:'retailReference'})}
+        </>}
+      </>}
+    </View>}
   </View>;
 }
 
@@ -114,24 +130,20 @@ function Choices<K extends string>({label,value,options,select}:{
   </React.Fragment>)}</View>;
 }
 
-function NativeDonut({title,target,metric,dimension,buckets,total,gross,records,unknown,note,denominator,unavailable,select}:{
+function NativeDonut({title,target,metric,dimension,buckets,total,gross,records,unknown,note,denominator,select}:{
   title:string; target:Target; metric:Metric; dimension:Dimension; buckets:Bucket[]; total:number; gross:boolean; records:number;
-  unknown:boolean; note?:string; denominator?:string; unavailable?:boolean; select:(row:DisplayRow)=>void;
+  unknown:boolean; note?:string; denominator?:string; select:(row:DisplayRow)=>void;
 }) {
   const [showAll,setShowAll] = useState(false);
   const [other,setOther] = useState<DisplayRow[]|null>(null);
   const wide = useWindowDimensions().width >= 700;
-  const {rows,expandable} = displayRows(buckets,metric,gross,showAll,dimension==='category',target,dimension);
+  const {rows,expandable} = displayRows(buckets,metric,gross,showAll,dimension==='category' || dimension==='skuCategory',target,dimension);
   const label = metricLabel(target,metric)+(gross ? '（返品前）' : '');
   const radius = 88;
   function open(row:DisplayRow) {
     if (row.categories) setOther(previous=>previous ? null : row.categories!);
     else select(row);
   }
-  if (unavailable) return <View style={s.card}>
-    <Text accessibilityRole="header" style={s.heading}>{title}</Text>
-    <Text style={s.note}>この時点の在庫数別内訳はありません。</Text>
-  </View>;
   return <View style={s.card}>
     <Text accessibilityRole="header" style={s.heading}>{title}</Text>
     {note && <Text style={s.note}>{note}</Text>}
@@ -153,7 +165,6 @@ function NativeDonut({title,target,metric,dimension,buckets,total,gross,records,
         <View style={s.grow}>
           <Text style={s.label}>{row.label}</Text>
           {row.quantity !== undefined && <Text style={s.note}>{formatMetric(row.quantity,'quantity')}</Text>}
-          {row.recordCount !== undefined && <Text style={s.note}>{formatRecordCount(row.recordCount)}</Text>}
         </View>
         <Text style={s.value}>{row.unknownValue ? '—' : formatMetric(row.value,metric)}</Text>
         <Text style={[s.note,s.percent]}>{total>0 && !row.unknownValue ? row.percent.toFixed(1)+'%' : '—'}</Text>
@@ -166,12 +177,12 @@ function NativeDonut({title,target,metric,dimension,buckets,total,gross,records,
   </View>;
 }
 
-function NativeDetails({slice,drill,onOpen,groupId}:{slice:Slice; drill:AnalysisPorts['drill']|undefined; onOpen:(id:string)=>void; groupId?:string}) {
-  const page = useDetail(drill,slice,groupId);
+function NativeDetails({slice,drill,onOpen,group}:{slice:Slice; drill:AnalysisPorts['drill']|undefined; onOpen:(id:string)=>void; group?:DetailGroup}) {
+  const page = useDetail(drill,slice,group);
   return <View style={s.section}>
-    {page.items.map(item=>item.type==='group'
-      ? <NativeGroup key={'group:'+item.group.kindId} group={item.group} slice={slice} drill={drill} onOpen={onOpen}/>
-      : <NativeProduct key={item.record.id} record={item.record} amount={item.record.amount} quantity={item.record.quantity}
+    {page.items.map(item=>item.type!=='record'
+      ? <NativeGroup key={detailItemKey(item)} item={item} slice={slice} drill={drill} onOpen={onOpen}/>
+      : <NativeProduct key={detailItemKey(item)} record={item.record} amount={item.record.amount} quantity={item.record.quantity}
           action={item.record.inventoryId ? button('商品詳細',()=>onOpen(item.record.inventoryId!)) : undefined} date={item.record.date} sales={slice.request.target==='sales'} dimension={slice.dimension}/>)}
     {page.pending && <ActivityIndicator accessibilityLabel="内訳を読み込み中"/>}
     {page.error && <View style={s.section}><Text accessibilityRole="alert" style={s.note}>
@@ -182,13 +193,15 @@ function NativeDetails({slice,drill,onOpen,groupId}:{slice:Slice; drill:Analysis
   </View>;
 }
 
-function NativeGroup({slice,drill,onOpen,group}:{slice:Slice;drill:AnalysisPorts['drill']|undefined;onOpen:(id:string)=>void;group:import('../../../lib/inventory/analysisUi/model').ProductGroup}) {
+function NativeGroup({slice,drill,onOpen,item}:{slice:Slice;drill:AnalysisPorts['drill']|undefined;onOpen:(id:string)=>void;item:Exclude<DetailItem,{type:'record'}>}) {
   const [open,setOpen] = useState(false);
+  const {group} = item;
+  const groupRef = item.type==='sku-group' ? {groupSku:item.group.groupKey} : {groupKindId:item.group.kindId};
   return <View style={s.section}>
     <NativeProduct record={group.representative} amount={group.amount} quantity={group.quantity}
       action={button(open?'構成レコードを閉じる':'構成レコードを表示（'+group.count+'件）',()=>setOpen(value=>!value),open)}
       sales={slice.request.target==='sales'} dimension={slice.dimension}/>
-    {open && <View style={{marginLeft:10}}><NativeDetails slice={slice} drill={drill} onOpen={onOpen} groupId={group.kindId}/></View>}
+    {open && <View style={{marginLeft:10}}><NativeDetails slice={slice} drill={drill} onOpen={onOpen} group={groupRef}/></View>}
   </View>;
 }
 
@@ -196,6 +209,7 @@ function NativeProduct({record,amount,quantity,action,date,sales,dimension}:{
   record:ProductFact; amount:number|null; quantity:number|null; action?:React.ReactNode; date?:string|null; sales:boolean; dimension:Dimension;
 }) {
   const [failed,setFailed] = useState(false);
+  const skuDetail = dimension === 'skuCategory' || dimension === 'skuHoldingCount';
   const basis = dimension === 'holdingCount'
     ? holdingBasisLabel(record.holdingBasis)
     : dimension === 'category' ? categoryBasisLabel(record.categoryBasis) : undefined;
@@ -205,8 +219,9 @@ function NativeProduct({record,amount,quantity,action,date,sales,dimension}:{
       : <View style={s.image}><Text style={s.imageText}>{record.imageRef ? '画像を表示できません' : '画像なし'}</Text></View>}
     <View style={s.grow}>
       <Text accessibilityRole="header" style={s.heading}>{record.title}</Text>
-      <Text style={s.note}>{record.categoryLabel}{date ? ' · '+date.replace(/-/g,'/') : ''}</Text>
-      <Text style={s.note}>{quantity===null?'数量未確認':formatMetric(quantity,'quantity')} · {amount===null ? sales?'売上未確認':'原価未登録' : formatMetric(amount,'amount')}</Text>
+      {record.sku && <Text style={s.productSku}>管理SKU {record.sku}</Text>}
+      <Text style={s.note}>{record.categoryLabel}{!skuDetail && date ? ' · '+date.replace(/-/g,'/') : ''}</Text>
+      {!skuDetail && <Text style={s.note}>{quantity===null?'数量未確認':formatMetric(quantity,'quantity')} · {amount===null ? sales?'売上未確認':'原価未登録' : formatMetric(amount,'amount')}</Text>}
       {basis && <Text style={s.note}>{basis}</Text>}
       {action}
     </View>
@@ -226,6 +241,7 @@ const s=StyleSheet.create({
   legend:{flexDirection:'row',minHeight:44,alignItems:'center',gap:8,borderBottomWidth:1,borderColor:'#e8eeea',paddingVertical:6},
   dot:{height:10,width:10,borderRadius:5},grow:{flex:1,minWidth:0},label:{color:'#243b32',fontSize:14},
   value:{color:'#243b32',fontSize:15,fontWeight:'700',fontVariant:['tabular-nums']},
+  productSku:{color:'#214d41',fontWeight:'700'},
   product:{flexDirection:'row',alignItems:'flex-start'},image:{width:68,height:68,borderRadius:6,backgroundColor:'#eef2ef',alignItems:'center',justifyContent:'center'},
   imageText:{fontSize:10,textAlign:'center',color:'#526359'},
 });

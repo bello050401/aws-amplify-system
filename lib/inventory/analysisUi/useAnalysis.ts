@@ -1,5 +1,5 @@
 import {useEffect,useState} from 'react';
-import type {AnalysisPorts, AnalysisRequest, AnalysisResult, DetailItem, DetailResult, Slice} from './model';
+import type {AnalysisPorts, AnalysisRequest, AnalysisResult, DetailGroup, DetailItem, DetailResult, Slice} from './model';
 
 export function useAnalysis(load:AnalysisPorts['load']|undefined, request:AnalysisRequest|null, available=true) {
   const key = request ? JSON.stringify(request) : '';
@@ -25,14 +25,14 @@ export function useAnalysis(load:AnalysisPorts['load']|undefined, request:Analys
   };
 }
 
-export function useDetail(drill:AnalysisPorts['drill']|undefined, slice:Slice, groupKindId?:string) {
+export function useDetail(drill:AnalysisPorts['drill']|undefined, slice:Slice, group?:DetailGroup) {
   const {request,dimension,key} = slice;
   const [items,setItems] = useState<DetailItem[]>([]);
   const [next,setNext] = useState<string|null>(null);
   const [pending,setPending] = useState(true);
   const [error,setError] = useState<Exclude<DetailResult['status'],'ok'>|null>(null);
   const [page,setPage] = useState<{cursor?:string}>({});
-  const query = JSON.stringify({ ...request,dimension,key,groupKindId });
+  const query = JSON.stringify({ ...request,dimension,key,...group });
   useEffect(()=>{
     if (!drill) {setError('error');setPending(false);return;}
     let active = true;

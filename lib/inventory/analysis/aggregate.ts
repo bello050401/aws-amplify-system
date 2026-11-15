@@ -4,6 +4,7 @@ import { categoryFromTitle, TITLE_CATEGORIES, TITLE_CATEGORY_VERSION } from './c
 import { fields, hasEvidence, imageReference, importedLot, integer, nonnegative, positive, productCategories, quantityBand, quantityClass, readSources, sourceKey, text } from './normalize';
 import { jstDay, recordedDay, rollingPeriod, shiftDay, sourceDay } from './period';
 import { normalizedCapturedSalesRecords } from './salesProjection';
+import { inventorySku } from './skus';
 import { ANALYSIS_VERSION, UNKNOWN, type AcquisitionLot, type AnalysisBuild, type AnalysisSource, type Fact, type InventoryMetadata, type MetadataRow, type ProductKind } from './types';
 
 const SALES_START = '2026-01-01';
@@ -228,7 +229,7 @@ export function buildAnalysis(
       amountBasis: '金額は円表示。在庫は登録購入単価、売上は確定販売総額、仕入れ・小売原価は確認済み金額で集計。',
       metadataVersions: Object.fromEntries(metadata.versions),
       coverageStart, coverageEnd: today, accuracy: 'captured-current-source',
-      sourceRecordCount: rows.length, unlocatedAcquisitionRecords: 0, unlocatedSalesRecords: 0,
+      sourceRecordCount: rows.length, unlocatedAcquisitionRecords: 0, unlocatedSalesRecords: 0, inventorySkuVersion: 1,
     },
     inventoryValue,
     categories: taxonomy.categories,
@@ -261,6 +262,7 @@ export function buildAnalysis(
         id: row.id, row, date: origin?.date ?? null, assignment, lot,
         amount: value.validPrice ? value.amount : null, quantity: value.quantity,
       });
+      stock.sku = inventorySku(row.sku);
       stock.categoryBasis = stock.category === UNKNOWN ? 'unknown' : 'confirmed';
       // Current-stock display only; reviewed metadata always wins and raw inventory is unchanged.
       // A confirmed kind must never be split among category buckets by per-row title guesses.

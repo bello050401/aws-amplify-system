@@ -44,10 +44,14 @@ async function signedRecord(record: DetailRecord): Promise<DetailRecord & { imag
 
 export type SignedDetailItem =
   | (Extract<DetailItem, { type: 'record' }> & { record: Awaited<ReturnType<typeof signedRecord>> })
-  | { type: 'group'; group: Extract<DetailItem, { type: 'group' }>['group'] & { representative: Awaited<ReturnType<typeof signedRecord>> } };
+  | { type: 'group'; group: Extract<DetailItem, { type: 'group' }>['group'] & { representative: Awaited<ReturnType<typeof signedRecord>> } }
+  | { type: 'sku-group'; group: Extract<DetailItem, { type: 'sku-group' }>['group'] & { representative: Awaited<ReturnType<typeof signedRecord>> } };
 
 export async function signAnalysisItems(items: DetailItem[]): Promise<SignedDetailItem[]> {
-  return Promise.all(items.map(async item => item.type === 'record'
-    ? { type: 'record', record: await signedRecord(item.record) }
-    : { type: 'group', group: { ...item.group, representative: await signedRecord(item.group.representative) } }));
+  return Promise.all(items.map(async item => {
+    if (item.type === 'record') return { type: 'record', record: await signedRecord(item.record) };
+    const representative = await signedRecord(item.group.representative);
+    if (item.type === 'group') return { type: 'group', group: { ...item.group, representative } };
+    return { type: 'sku-group', group: { ...item.group, representative } };
+  }));
 }

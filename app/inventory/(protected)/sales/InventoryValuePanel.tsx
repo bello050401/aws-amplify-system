@@ -20,7 +20,7 @@ function Breakdown({value:v,metric}:{value:InventoryValue;metric:'amount'|'quant
       </svg>
       <dl>{v.groups.map(g=><div key={g.key} className="flex items-center gap-3 border-b border-slate-100 py-4 last:border-0">
         <span aria-hidden="true" style={{backgroundColor:g.color}} className="h-3 w-3 shrink-0 rounded-full"/>
-        <dt className="flex-1 font-medium">{g.label}{amount&&<span className="mt-1 block text-xs font-normal text-slate-500">{g.quantity.toLocaleString()}点</span>}</dt>
+        <dt className="flex-1 font-medium">{g.label}</dt>
         <dd className="text-right"><span className="block text-xl font-semibold tabular-nums">{unknown ? '—' : display(g[metric])}</span><span className="mt-1 block text-xs text-slate-500 tabular-nums">{unknown ? '—' : (total>0?(g[metric]/total*100).toFixed(1):'0.0')+'%'}</span></dd>
       </div>)}</dl>
     </div>
@@ -50,12 +50,15 @@ export function InventoryValueReport({view,analysis}:{view:InventoryValueView;an
     <div className="flex flex-wrap items-end justify-between gap-3">
       <div><p className="text-sm text-slate-500">{v.month?v.month.replace('-','年')+'月末の在庫金額':'集計時点の在庫金額'}</p>
         <h2 className="mt-1 text-4xl font-semibold tracking-tight tabular-nums text-teal-900">{v.count > 0 && v.unpricedCount >= v.count ? '—' : yen(v.total)}</h2>
-        <p className="mt-2 text-sm text-slate-500">在庫数量 {v.quantity.toLocaleString()}点</p></div>
+        <p className="mt-2 text-sm text-slate-600">登録済みの購入単価をもとに集計した在庫原価です。</p></div>
       <p className="text-right text-xs leading-6 text-slate-500">{formatJstDateTime(v.asOf)} 時点<br/>{v.month?'月末の記録':'12時間ごとに自動集計'}</p>
     </div>
     {analysis}
     <Breakdown value={v} metric="amount"/>
-    <Breakdown value={v} metric="quantity"/>
+    <details className="text-sm text-slate-600">
+      <summary className="cursor-pointer py-2">作業状況別の数量を見る</summary>
+      <Breakdown value={v} metric="quantity"/>
+    </details>
     {v.unpricedCount>0&&<details className="text-xs leading-6 text-slate-600">
       <summary className="cursor-pointer">在庫金額の集計について</summary>
       <p>購入単価を確認できない在庫記録 {v.unpricedCount.toLocaleString('ja-JP')}件は数量のみ計上しています。</p>

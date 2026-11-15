@@ -18,6 +18,12 @@
 .analysis-totals div{min-width:0;display:grid;gap:1px}
 .analysis-totals span{color:#4f645a;font-size:.85rem}
 .analysis-totals strong{color:#214d41;font-size:clamp(1.35rem,3vw,1.9rem);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.analysis-secondary{display:grid;gap:10px;justify-items:start}
+.analysis-secondary .analysis-result{width:100%}
+.analysis-sku-total{display:grid;gap:2px;margin-block:4px 8px}
+.analysis-sku-total strong{font-size:clamp(1.75rem,5vw,2.5rem);font-variant-numeric:tabular-nums;color:#214d41;line-height:1.2}
+.analysis-sku-notes{color:#4f645a;font-size:.85rem}
+.analysis-sku-notes summary{cursor:pointer;padding-block:8px}
 .analysis-charts{display:grid;gap:14px;align-items:start;min-width:0}
 .analysis-chart-body{display:grid;gap:12px;align-items:center;min-width:0}
 .analysis-chart p.analysis-chart-note{margin-top:6px}
@@ -51,6 +57,7 @@
 .analysis-details,.analysis-detail{display:grid;gap:10px}
 .analysis-product{min-width:0;padding:10px;border:1px solid #e0e8e2;border-radius:12px;background:#fcfdfc}
 .analysis-product-row{display:grid;grid-template-columns:minmax(62px,88px) minmax(0,1fr);gap:10px;align-items:start}
+.analysis-product-copy .analysis-product-sku{color:#214d41;font-weight:700;overflow-wrap:anywhere}
 .analysis-product-copy p{color:#4f645a;font-size:.83rem;margin-top:5px}
 .analysis-product-image{display:grid;width:100%;height:auto;aspect-ratio:1;place-content:center;text-align:center;border-radius:7px;background:#eef2ef;object-fit:cover;color:#586961;font-size:.7rem}
 .analysis-product .analysis-details{margin-top:10px}

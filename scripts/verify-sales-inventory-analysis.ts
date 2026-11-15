@@ -29,6 +29,11 @@ const bucket = (model: AnalysisBuild, target: Target, dimension: Dimension, key:
 function verifiesSums(model: AnalysisBuild, target: Target) {
   const { summary } = take(model, target);
   for (const [dimension, buckets] of Object.entries(summary.dimensions)) {
+    if (dimension === 'skuCategory' || dimension === 'skuHoldingCount') {
+      assert.equal(buckets.reduce((total, bucket) => total + (bucket.skus ?? 0), 0), summary.skus, dimension);
+      assert.equal(buckets.reduce((total, bucket) => total + bucket.records, 0), summary.records - (summary.unknownSkuRecords ?? 0), dimension);
+      continue;
+    }
     for (const metric of ['amount', 'gross', 'returns', 'quantity', 'grossQuantity', 'returnedQuantity', 'records'] as const) {
       assert.equal(buckets.reduce((total, value) => total + value[metric], 0), summary[metric], dimension + ': ' + metric);
     }
@@ -120,6 +125,85 @@ assert.equal(bucket(missingCount, 'inventory', 'holdingCount', UNKNOWN)?.unknown
 const unknownDetail = drilldownAnalysis(missingCount, { ...exactRequest, key: UNKNOWN });
 assert(unknownDetail.status === 'ok');
 assert.deepEqual(unknownDetail.items.map(item => item.type === 'record' && [item.record.id, item.record.holdingCount, item.record.holdingBasis]), [['unknown-kind', null, 'unknown']]);
+
+const skuStock = build([
+  fixtureInventory('duplicate-a', 2, 100, { sku: ' B000001 ' }),
+  fixtureInventory('duplicate-b', 3, 200, { sku: 'B000001', categoryId: 'trade' }),
+  fixtureInventory('same-kind-a', 3, 100, { sku: 'B000002' }),
+  fixtureInventory('same-kind-b', 1, 100, { sku: 'B000003' }),
+  fixtureInventory('case-is-preserved', 5, 100, { sku: 'b000003' }),
+  fixtureInventory('blank-sku', 6, 100, { sku: '  ', sourceSystem: 'ZAICO', sourceInventoryId: 'legacy-id' }),
+  fixtureInventory('absent-sku', 1, 100),
+  fixtureInventory('closed-with-qty', 8, 100, { sku: 'B000001', categoryId: 'sold', saleEndDate: '2026-11-02', salePrice: 5100 }),
+  fixtureInventory('deleted-with-qty', 10, 100, { sku: 'B000005', deletedAt: '2026-11-01' }),
+  fixtureInventory('zero-with-sku', 0, 100, { sku: 'B000006' }),
+  fixtureInventory('missing-qty-with-sku', null, 100, { sku: 'B000007' }),
+], [
+  fixtureAssignment('duplicate-a', null, { categoryId: 'chairs', categoryState: 'confirmed' }),
+  fixtureAssignment('duplicate-b', null, { categoryId: 'tables', categoryState: 'confirmed' }),
+  fixtureKind('same-kind', 'chairs'), fixtureAssignment('same-kind-a', 'same-kind'), fixtureAssignment('same-kind-b', 'same-kind'),
+  fixtureAssignment('case-is-preserved', null, { categoryId: 'tables', categoryState: 'confirmed' }),
+  fixtureAssignment('blank-sku', null, { categoryId: 'chairs', categoryState: 'confirmed' }),
+]);
+const stockSummary = take(skuStock, 'inventory').summary;
+assert.deepEqual([stockSummary.skus, stockSummary.unknownSkuRecords, stockSummary.records, stockSummary.kinds], [4, 2, 7, 1]);
+assert.deepEqual([stockSummary.amount, stockSummary.quantity], [skuStock.inventoryValue.total, skuStock.inventoryValue.quantity]);
+assert.deepEqual(stockSummary.dimensions.skuHoldingCount?.map(bucket => [bucket.key, bucket.skus, bucket.records]), [['1', 1, 1], ['3', 1, 1], ['5', 2, 3]]);
+assert.deepEqual(stockSummary.dimensions.skuCategory?.map(bucket => [bucket.key, bucket.skus, bucket.records]), [['chairs', 2, 2], ['tables', 1, 1], [UNKNOWN, 1, 2]]);
+assert.equal(stockSummary.dimensions.holdingCount?.find(bucket => bucket.key === '4')?.kinds, 1);
+assert.equal(stockSummary.dimensions.category?.find(bucket => bucket.key === 'chairs')?.records, 4);
+assert.equal(skuStock.sales[0].sku, undefined);
+assert.equal(take(skuStock, 'sales').summary.amount, 5100);
+assert.equal(take(skuStock, 'sales').summary.skus, undefined);
+verifiesSums(skuStock, 'inventory');
+
+const skuRequest = { target: 'inventory', generation, dimension: 'skuHoldingCount', key: '5' } as const;
+const skuDetails = drilldownAnalysis(skuStock, skuRequest);
+assert(skuDetails.status === 'ok');
+assert.deepEqual(skuDetails.items.map(item => item.type === 'record' ? item.record.sku : item.group.representative.sku), ['b000003', 'B000001']);
+const repeatedSku = skuDetails.items[1];
+assert(repeatedSku.type === 'sku-group');
+assert.deepEqual([repeatedSku.group.sku, repeatedSku.group.count, repeatedSku.group.amount, repeatedSku.group.quantity], ['B000001', 2, 800, 5]);
+assert.equal(repeatedSku.group.representative.categoryLabel, '未分類');
+const skuMembers = { ...skuRequest, groupSku: repeatedSku.group.groupKey, limit: 1 };
+const skuPageOne = drilldownAnalysis(skuStock, skuMembers);
+assert(skuPageOne.status === 'ok' && skuPageOne.nextCursor);
+assert.deepEqual(skuPageOne.items.map(item => item.type === 'record' && [item.record.id, item.record.category]), [['duplicate-a', 'chairs']]);
+const skuPageTwo = drilldownAnalysis(skuStock, { ...skuMembers, cursor: skuPageOne.nextCursor });
+assert(skuPageTwo.status === 'ok');
+assert.deepEqual(skuPageTwo.items.map(item => item.type === 'record' && [item.record.id, item.record.category]), [['duplicate-b', 'tables']]);
+assert.equal(drilldownAnalysis(skuStock, { ...skuMembers, cursor: skuPageOne.nextCursor, groupSku: 'a'.repeat(64) }).status, 'error');
+assert.equal(drilldownAnalysis(skuStock, { ...skuMembers, cursor: skuPageOne.nextCursor, dimension: 'skuCategory', key: UNKNOWN }).status, 'error');
+assert.equal(drilldownAnalysis(skuStock, { ...skuMembers, generation: 'different-generation' }).status, 'expired');
+assert.equal(drilldownAnalysis(skuStock, { ...skuMembers, dimension: 'holdingCount' }).status, 'error');
+const excludedSkuCategory = drilldownAnalysis(skuStock, { ...skuMembers, dimension: 'skuCategory', key: 'chairs' });
+assert(excludedSkuCategory.status === 'ok');
+assert.equal(excludedSkuCategory.items.length, 0);
+assert.equal(take(build([]), 'inventory').summary.skus, 0);
+
+const longSku = 'SKU-' + '椅子'.repeat(200);
+const longSkuStock = build([
+  fixtureInventory('long-sku-a', 1, 100, { sku: longSku }),
+  fixtureInventory('long-sku-b', 1, 100, { sku: ` ${longSku} ` }),
+]);
+assert.equal(take(longSkuStock, 'inventory').summary.skus, 1);
+assert.equal(take(longSkuStock, 'inventory').summary.unknownSkuRecords, 0);
+const longSkuRequest = { ...skuRequest, key: '2' };
+const longSkuDetails = drilldownAnalysis(longSkuStock, longSkuRequest);
+assert(longSkuDetails.status === 'ok');
+const longSkuGroup = longSkuDetails.items[0];
+assert(longSkuGroup.type === 'sku-group');
+assert.equal(longSkuGroup.group.sku, longSku);
+assert.match(longSkuGroup.group.groupKey, /^[0-9a-f]{64}$/);
+const longSkuMembers = drilldownAnalysis(longSkuStock, { ...longSkuRequest, groupSku: longSkuGroup.group.groupKey });
+assert(longSkuMembers.status === 'ok');
+assert.deepEqual(longSkuMembers.items.map(item => item.type === 'record' && [item.record.id, item.record.sku]), [['long-sku-a', longSku], ['long-sku-b', longSku]]);
+assert.equal(drilldownAnalysis(longSkuStock, { ...longSkuRequest, groupSku: longSku }).status, 'error');
+const nextGeneration = 'next-generation';
+const nextStock = { ...longSkuStock, metadata: { ...longSkuStock.metadata, generation: nextGeneration } };
+const mismatchedHandle = drilldownAnalysis(nextStock, { ...longSkuRequest, generation: nextGeneration, groupSku: longSkuGroup.group.groupKey });
+assert(mismatchedHandle.status === 'ok');
+assert.equal(mismatchedHandle.items.length, 0);
 
 // Fixed example 4: 20 acquired, 12 remain, 8 sold wholesale. Warehouse image is source-specific.
 const twenty = build([

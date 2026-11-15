@@ -56,7 +56,9 @@ export function NativeAnalysisPreview() {
           if(result.status !== 'ok') return result;
           return {...result,items:result.items.map(item=>item.type==='record'
             ? {type:'record' as const,record:nativeFact(item.record)}
-            : {type:'group' as const,group:{...item.group,representative:nativeFact(item.group.representative)}})};
+            : item.type === 'group'
+              ? {type:'group' as const,group:{...item.group,representative:nativeFact(item.group.representative)}}
+              : {type:'sku-group' as const,group:{...item.group,representative:nativeFact(item.group.representative)}})};
         },
       },
     };

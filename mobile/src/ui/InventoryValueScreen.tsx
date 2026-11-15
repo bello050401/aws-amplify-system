@@ -21,7 +21,7 @@ function Breakdown({value:v,metric}:{value:InventoryValue;metric:'amount'|'quant
     </Svg></View>
     <View>{v.groups.map((g,i)=><View key={g.key} style={[s.row,i===v.groups.length-1&&{borderBottomWidth:0}]}>
       <View style={[s.dot,{backgroundColor:g.color}]}/>
-      <View style={{flex:1}}><Text style={s.label}>{g.label}</Text>{amount&&<Text style={s.date}>{g.quantity.toLocaleString()}点</Text>}</View>
+      <View style={{flex:1}}><Text style={s.label}>{g.label}</Text></View>
       <View style={{alignItems:'flex-end'}}><Text style={s.amount}>{unknown ? '—' : display(g[metric])}</Text><Text style={s.date}>{unknown ? '—' : (total?(g[metric]/total*100).toFixed(1):'0.0')+'%'}</Text></View>
     </View>)}</View>
   </View>;
@@ -34,22 +34,26 @@ export function InventoryValueScreen({load,offline,month,setMonth,analysis,analy
   return <ScrollView contentContainerStyle={s.body}>
     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{gap:8}}>{[undefined,...inventoryMonthOptions()].map(m=><Pressable key={m??'current'} accessibilityRole="button" accessibilityState={{selected:month===m}} onPress={()=>setMonth(m)} style={[s.month,month===m&&s.monthSelected]}><Text style={{color:month===m?'white':'#264e47',fontWeight:'600'}}>{m?m.replace('-','年')+'月末':'現在の在庫'}</Text></Pressable>)}</ScrollView>
     {offline?<Text style={s.note}>通信できる状態で在庫金額を確認してください。</Text>:!view?<ActivityIndicator accessibilityLabel="在庫金額を読み込み中"/>:!v?<View style={s.card}><Text style={s.title}>{view.status==='missing'?'在庫金額はまだ集計されていません':'在庫金額を取得できませんでした'}</Text><Text style={s.note}>在庫が0円という意味ではありません。</Text><Pressable accessibilityRole="button" onPress={()=>setRetry(n=>n+1)} style={s.button}><Text style={s.buttonText}>再読み込み</Text></Pressable></View>:<>
-      <View><Text style={s.note}>{v.month?v.month.replace('-','年')+'月末の在庫金額':'集計時点の在庫金額'}</Text><Text style={s.total}>{v.count>0 && v.unpricedCount>=v.count ? '—' : yen(v.total)}</Text><Text style={s.note}>在庫数量 {v.quantity.toLocaleString()}点</Text><Text style={s.date}>{formatJstDateTime(v.asOf)} 時点 · {v.month?'月末の記録':'12時間ごとに自動集計'}</Text></View>
+      <View><Text style={s.note}>{v.month?v.month.replace('-','年')+'月末の在庫金額':'集計時点の在庫金額'}</Text><Text style={s.total}>{v.count>0 && v.unpricedCount>=v.count ? '—' : yen(v.total)}</Text><Text style={s.note}>登録済みの購入単価をもとに集計した在庫原価です。</Text><Text style={s.date}>{formatJstDateTime(v.asOf)} 時点 · {v.month?'月末の記録':'12時間ごとに自動集計'}</Text></View>
       {analysis}
       <Breakdown value={v} metric="amount"/>
-      <Breakdown value={v} metric="quantity"/>
-      {v.unpricedCount>0&&<InventoryValueNotes unpriced={v.unpricedCount}/>}
+      <InventoryValueDisclosure label="作業状況別の数量を見る">
+        <Breakdown value={v} metric="quantity"/>
+      </InventoryValueDisclosure>
+      {v.unpricedCount>0&&<InventoryValueDisclosure label="在庫金額の集計について">
+        <Text style={s.note}>購入単価を確認できない在庫記録 {v.unpricedCount.toLocaleString('ja-JP')}件は数量のみ計上しています。</Text>
+      </InventoryValueDisclosure>}
     </>}
     {!v && analysis}
   </ScrollView>;
 }
-function InventoryValueNotes({unpriced}:{unpriced:number}) {
+function InventoryValueDisclosure({label,children}:{label:string;children:React.ReactNode}) {
   const [expanded,setExpanded] = useState(false);
   return <View>
-    <Pressable accessibilityRole="button" accessibilityState={{expanded}} onPress={()=>setExpanded(value=>!value)} style={s.button}>
-      <Text style={s.buttonText}>在庫金額の集計について</Text>
+    <Pressable accessibilityRole="button" aria-expanded={expanded} accessibilityState={{expanded}} onPress={()=>setExpanded(value=>!value)} style={s.button}>
+      <Text style={s.buttonText}>{label}</Text>
     </Pressable>
-    {expanded && <Text style={s.note}>購入単価を確認できない在庫記録 {unpriced.toLocaleString('ja-JP')}件は数量のみ計上しています。</Text>}
+    {expanded && children}
   </View>;
 }
 const s=StyleSheet.create({
