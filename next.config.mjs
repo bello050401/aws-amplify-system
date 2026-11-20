@@ -144,6 +144,16 @@ const nextConfig = {
         ],
       },
       {
+        // Next's global headers override the route-handler Referrer-Policy.
+        // Apply the same capability protection to JSON and direct image views.
+        source: "/api/shared-inventory/:path*",
+        headers: [
+          { key: "Cache-Control", value: "private, no-store, max-age=0" },
+          { key: "Referrer-Policy", value: "no-referrer" },
+          { key: "X-Robots-Tag", value: "noindex, nofollow, noarchive, noimageindex" },
+        ],
+      },
+      {
         // Authenticated staff views are embedded only by our own PWA.
         source: "/:staffView(staff-messages|staff-inventory-edit)",
         headers: [
