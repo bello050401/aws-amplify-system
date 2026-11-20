@@ -7,7 +7,9 @@ import {
   allocateYen,
   yahooPurchaseId,
   yahooPurchaseQuery,
+  normalizeProcurementTitle,
 } from "../lib/procurement/yahoo";
+import publicTitles from "./fixtures/yahoo-procurement-public-titles.json";
 import {
   parseYahooPublicItem,
   parseYahooStore,
@@ -155,6 +157,32 @@ test("quota errors do not falsely demand Gmail reauthorization", () => {
     "GMAIL_RATE_LIMIT",
   );
   assert.equal(gmailResponseError(401, {}), "GMAIL_AUTH_REQUIRED");
+});
+
+test("public JSON-LD titles decode entities once without interpreting title markup", () => {
+  const imageUrl = "https://auctions.c.yimg.jp/images.auctions.yahoo.co.jp/image/test/first.jpg";
+  const html = (id: string, name: string, image = imageUrl) =>
+    `<script type="application/ld+json">${JSON.stringify({
+      "@type": "Product", url: `https://auctions.yahoo.co.jp/jp/auction/${id}`,
+      name, image: [image, imageUrl.replace("first", "second")],
+      offers: { priceValidUntil: "2026-11-18T00:00:00+09:00" },
+    })}</script>`;
+  for (const fixture of publicTitles) {
+    const h = html(fixture.auctionId, fixture.encodedTitle);
+    const parsed = parseYahooPublicItem(h, fixture.auctionId);
+    assert.equal(parsed.name, fixture.title);
+    assert.equal(normalizeProcurementTitle(parsed.name), normalizeProcurementTitle(fixture.title));
+    assert.equal(parsed.imageUrl, imageUrl);
+    assert.equal(parsed.date, "2026-11-18");
+    assert.throws(() => parseYahooPublicItem(h, "z9999999999"));
+    assert.throws(() => parseYahooPublicItem(h + h, fixture.auctionId));
+    assert.throws(() => parseYahooPublicItem(html(fixture.auctionId, fixture.encodedTitle, "https://evil.example/first.jpg"), fixture.auctionId));
+  }
+  const decoded = (value: string) => parseYahooPublicItem(html("a1234567890", value), "a1234567890").name;
+  assert.equal(decoded('R&amp;D &#38; &#x26; &quot;Oak&quot; &apos;A&apos; &nbsp;'), 'R&D & & "Oak" \'A\' \u00a0');
+  assert.equal(decoded("<Oak> &lt;Walnut&gt; </textarea><img src=x>"), "<Oak> <Walnut> </textarea><img src=x>");
+  assert.equal(decoded("R&amp;amp;D &unknown;"), "R&amp;D &unknown;");
+  assert.notEqual(normalizeProcurementTitle(decoded("R&amp;amp;D")), normalizeProcurementTitle("R&D"));
 });
 test("seller shipping separate from item price; later mail fills gaps without duplicate sale", () => {
   const m = {

@@ -48,6 +48,10 @@ function load(code, mods) {
   const ledger = load(await bundle("lib/procurement/ledgerDetails.ts"), {});
   const ranges = load(await bundle("lib/procurement/yahooRange.ts"), {});
   const amounts = load(await bundle("lib/procurement/yahooAmounts.ts"), {});
+  const stockTitles = load(await bundle("lib/inventory/managedStockTitle.ts"), {});
+  const publicParser = load(await bundle("lib/procurement/yahooPublic.ts"), {});
+  const titleFixtures = require("../fixtures/yahoo-procurement-public-titles.json");
+  let publicHtml;
   let role = "ADMIN",
     who = "owner",
     records = new Map(),
@@ -165,14 +169,15 @@ function load(code, mods) {
     "@/lib/procurement/yahoo": domain,
     "@/lib/procurement/yahooRange": ranges,
     "@/lib/procurement/yahooAmounts": amounts,
+    "@/lib/inventory/managedStockTitle": stockTitles,
       "@/lib/procurement/ledgerDetails": ledger,
     "@/lib/procurement/yahooPublic": {
-      yahooPublicItem: async () => ({
+      yahooPublicItem: async (auctionId) => publicHtml === undefined ? ({
         name: lot.name,
         date: "2026-10-15",
         imageUrl: "original.jpg",
         storeUrl: seller.url,
-      }),
+      }) : publicParser.parseYahooPublicItem(publicHtml, auctionId),
       yahooStore: async () => seller,
       yahooImage: async () => {
         if (fail === "image") throw Error("写真を取得できません。");
@@ -193,6 +198,7 @@ function load(code, mods) {
     existing = [];
     queries = [];
     fail = "";
+    publicHtml = undefined;
     who = "owner";
     role = "ADMIN";
     records.set(key("YAHOO_RUN#" + runId, "STATE"), {
@@ -438,6 +444,59 @@ function load(code, mods) {
   assert((await register()).ok);
   assert.equal(created[0].input.purchaseQuantity, 6);
   assert.equal(created[0].input.dailyPurchaseTotal, 53300);
+  // Exercise real public parsing through the real preparation and registration actions.
+  const photo = "https://auctions.c.yimg.jp/images.auctions.yahoo.co.jp/image/test/first.jpg";
+  const productHtml = (fixture, { sourceId = fixture.auctionId, title = fixture.encodedTitle, image = photo } = {}) =>
+    `<script type="application/ld+json">${JSON.stringify({ "@type": "Product", url: `https://auctions.yahoo.co.jp/jp/auction/${sourceId}`, name: title, image: [image], offers: { priceValidUntil: "2026-11-18T21:00:00+09:00" } })}</script><a href="${seller.url}">ストア情報</a>`;
+  const seedPhotoPreparation = (fixture) => {
+    reset();
+    const purchase = { ...copy(lot), auctionId: fixture.auctionId, name: fixture.title, date: "2026-11-18", quantity: 1, itemTotal: 3740, shipping: 0, orderTotal: 3740 };
+    const state = records.get(key("YAHOO_RUN#" + runId, "STATE"));
+    Object.assign(state, { from: "2026-11-17", to: "2026-11-21", events: [{ kind: "ORDER", orderId: purchase.orderId, auctionIds: [purchase.auctionId], at: purchase.receivedAt, lots: [purchase] }] });
+    records.delete(key("YAHOO_RUN#" + runId, "LOT#" + id));
+    records.set(key("YAHOO_RUN#" + runId, "LOT#" + fixture.auctionId), { lot: purchase, sourceReady: false, defaults: { categoryId: "repair-master", locationId: "office-master" } });
+    publicHtml = productHtml(fixture);
+    return [{ auctionId: fixture.auctionId, quantity: 1, itemTotal: 3740, shipping: 0, amountConfirmed: true, distinctConfirmed: false }];
+  };
+  for (const fixture of titleFixtures) {
+    const confirmation = seedPhotoPreparation(fixture);
+    const prepared = await action.prepareYahooProcurementPhotoAction(runId, fixture.auctionId);
+    assert.equal(prepared.ok, true, `${fixture.auctionId}: ${prepared.error}`);
+    assert.equal(prepared.imageUrl, photo);
+    assert.equal(prepared.storeInfo.name, seller.name);
+    const saved = records.get(key("YAHOO_RUN#" + runId, "LOT#" + fixture.auctionId));
+    assert.equal(saved.sourceReady, true);
+    assert.equal(saved.lot.name, fixture.title);
+    assert.equal(saved.lot.quantity, 1);
+    assert.equal(saved.lot.itemTotal, 3740);
+    assert.equal(saved.lot.shipping, 0);
+    assert.equal(created.length, 0); // Preparation must never register stock.
+    assert.equal(uploads.length, 0);
+    const registered = await action.registerYahooProcurementAction(runId, fixture.auctionId, confirmation);
+    assert.equal(registered.ok, true, registered.error);
+    assert.equal(created[0].input.name, fixture.title);
+    assert.equal(created[0].input.purchasePrice, 3740);
+    assert.equal(created[0].input.quantity, 1);
+    assert((await action.registerYahooProcurementAction(runId, fixture.auctionId, confirmation)).ok);
+    assert.equal(created.length, 1);
+  }
+  const failingFixture = titleFixtures[0];
+  for (const change of [{ title: failingFixture.encodedTitle + " ウォールナット仕様" }, { sourceId: "z9999999999" }, { image: "https://evil.example/first.jpg" }]) {
+    const confirmation = seedPhotoPreparation(failingFixture);
+    publicHtml = productHtml(failingFixture, change);
+    assert.equal((await action.prepareYahooProcurementPhotoAction(runId, failingFixture.auctionId)).ok, false);
+    assert.equal(records.get(key("YAHOO_RUN#" + runId, "LOT#" + failingFixture.auctionId)).sourceReady, false);
+    assert.equal((await action.registerYahooProcurementAction(runId, failingFixture.auctionId, confirmation)).ok, false);
+    assert.equal(uploads.length, 0);
+    assert.equal(created.length, 0);
+  }
+  seedPhotoPreparation(failingFixture);
+  role = "VIEWER";
+  await assert.rejects(() => action.prepareYahooProcurementPhotoAction(runId, failingFixture.auctionId), /権限/);
+  role = "ADMIN";
+  who = "another";
+  await assert.rejects(() => action.prepareYahooProcurementPhotoAction(runId, failingFixture.auctionId), /有効期限/);
+  console.log("PASS: encoded Yahoo titles — four real title fixtures prepare and register once; wrong title, wrong ID and hostile image stay blocked; preparation preserves amounts and never registers; role and run-owner checks remain enforced.");
   console.log(
     "PASS: Yahoo procurement actions — existing registration safety scenarios plus default/date retrieval, fetched-but-unregistered retry, registered/deleted exclusion, duplicate-source isolation, partial shared orders, immutable legacy purchase amounts.",
   );

@@ -1,4 +1,4 @@
-import { parse } from "parse5";
+import { parse, parseFragment } from "parse5";
 import { auctionIdValid } from "./yahoo";
 type Node = {
   nodeName?: string;
@@ -12,6 +12,10 @@ const attr = (n: Node, k: string) =>
   n.attrs?.find((a) => a.name === k)?.value || "";
 const text = (n: Node): string =>
   n.value ?? (n.childNodes || []).map(text).join("");
+// Yahoo JSON-LD names contain HTML entities. Decode once in a text-only context;
+// escaping literal '<' preserves title text such as '<Oak>' rather than parsing tags.
+const productTitle = (value: string) =>
+  text(parseFragment(`<textarea>${value.replace(/</g, "&lt;")}</textarea>`));
 export type YahooStore = {
   name: string;
   address: string;
@@ -99,7 +103,7 @@ export function parseYahooPublicItem(
   const end = String(p.offers?.priceValidUntil || "");
   return {
     imageUrl,
-    name: String(p.name || ""),
+    name: productTitle(String(p.name || "")),
     date: /^\d{4}-\d{2}-\d{2}T/.test(end) ? end.slice(0, 10) : "",
     storeUrl: stores[0] || null,
   };
