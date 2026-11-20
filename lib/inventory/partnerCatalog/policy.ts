@@ -59,21 +59,23 @@ const dimension = (value: unknown): string | null => typeof value === 'string' &
 export function publicCatalogItem(row: Row, categories: CatalogCategories, token: string): PublicCatalogItem | null {
   const stage = eligibleStage(row, categories);
   if (!stage) return null;
-  const images = catalogPhotos(row).map((_, index) => `/api/shared-inventory/${token}/image/${row.id}?index=${index}`);
+  const previews = catalogPhotos(row).map((_, index) => `/api/shared-inventory/${token}/image/${row.id}?index=${index}`);
+  const images = previews.map(url => `${url}&size=full`);
   return {
     id: String(row.id), name: publicProductName(row.name),
     managementNumber: typeof row.sku === 'string' ? row.sku.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 80) : '',
     quantity: row.quantity as number,
     dimensions: { width: dimension(row.width), depth: dimension(row.depth), height: dimension(row.height) },
     stage, stageLabel: STAGES.find(entry => entry.stage === stage)!.name,
-    imageUrl: images[0] ?? null, images,
+    imageUrl: previews[0] ?? null, images,
   };
 }
 
-export function catalogImageKey(row: Row, index: number): string | null {
+export function catalogImageKey(row: Row, index: number, full = false): string | null {
   if (!Number.isSafeInteger(index) || index < 0 || index >= 20) return null;
   const photo = catalogPhotos(row)[index];
   if (!photo) return null;
-  const key = effectiveHeroKey(photo);
+  // Gallery originals are selected from this authorized inventory photo only.
+  const key = full ? photo.storageKey : effectiveHeroKey(photo);
   return validStorageKey(key) ? key : null;
 }

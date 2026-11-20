@@ -33,19 +33,19 @@ export function createPartnerCatalogService(ports: PartnerCatalogPorts) {
     return { ok: true, title: allowed.title, expiresAt: allowed.expiresAt, checkedAt: new Date(now()).toISOString(),
       updatedAt: new Date(Math.max(Date.parse(allowed.updatedAt), ...timestamps)).toISOString(), items };
   }
-  async function image(token: string, id: string, index: number) {
+  async function image(token: string, id: string, index: number, full = false) {
     await grant(token);
     if (!validInventoryId(id) || !Number.isSafeInteger(index) || index < 0 || index >= 20) throw missing();
     const categories = await ports.categories();
     const row = await ports.one(id);
     if (!row || row.id !== id || !eligibleStage(row, categories)) throw missing();
-    const key = catalogImageKey(row, index);
+    const key = catalogImageKey(row, index, full);
     if (!key) throw missing();
     const result = await ports.image(key);
     await grant(token);
     // Stock/category/photo changes during the object read revoke that response too.
     const current = await ports.one(id);
-    if (!current || !eligibleStage(current, categories) || catalogImageKey(current, index) !== key) throw missing();
+    if (!current || !eligibleStage(current, categories) || catalogImageKey(current, index, full) !== key) throw missing();
     return result;
   }
   return { read, image };
