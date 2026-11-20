@@ -134,6 +134,16 @@ const nextConfig = {
         ],
       },
       {
+        // Partner links carry a scoped capability. Do not cache or send it in
+        // referrers, including when a recipient follows another same-site link.
+        source: "/share/inventory/:path*",
+        headers: [
+          { key: "Cache-Control", value: "private, no-store, max-age=0" },
+          { key: "Referrer-Policy", value: "no-referrer" },
+          { key: "X-Robots-Tag", value: "noindex, nofollow, noarchive, noimageindex" },
+        ],
+      },
+      {
         // Authenticated staff views are embedded only by our own PWA.
         source: "/:staffView(staff-messages|staff-inventory-edit)",
         headers: [

@@ -330,6 +330,7 @@ export function InventoryToolbar({ role, q, categoryIds, locationId, statusId, a
             インポート
           </button>
         )}
+        {role === 'ADMIN' && <Link href="/inventory/share" prefetch={false} onClick={(e) => handleGuardedLinkClick(e, '/inventory/share')} className="whitespace-nowrap border border-gray-300 px-3 py-1.5 text-[13px] hover:bg-gray-50">取引先に共有</Link>}
         <ExportMenu
           currentFilterParams={{
             ...Object.fromEntries(new URLSearchParams(resultQuery)),

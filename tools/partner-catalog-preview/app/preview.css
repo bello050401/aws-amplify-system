@@ -1,0 +1,4 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+body{margin:0;font-family:Arial,'Yu Gothic',sans-serif}*{box-sizing:border-box}button,input{font:inherit}button:disabled{cursor:not-allowed;opacity:.5} .qa-banner{background:#fff8de;color:#71550b;padding:8px 18px;font-size:11px;display:flex;gap:20px;flex-wrap:wrap}.qa-banner a{text-decoration:underline}

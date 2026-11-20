@@ -1,0 +1,1 @@
+{"name":"bello-partner-catalog-private-preview","private":true,"scripts":{"dev":"node next-preview.mjs dev --port 3127"}}
