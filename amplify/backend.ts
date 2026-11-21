@@ -357,6 +357,15 @@ if (process.env.AWS_APP_ID === "d4hkkg7dty2du" &&
   backend.addOutput({custom:{yahooHttps:{region:yahooStack.region,secretArn:yahooSession.secretArn,stateTable:yahooState.tableName}}});
 
   const procurementStack = backend.createStack("ProcurementImport");
+  // Fixed diagnostic labels only; no business payloads. The local subscription
+  // worker uses its existing AWS profile, never a public polling/claim endpoint.
+  const systemErrorsTable = new Table(procurementStack, 'SystemErrors', {
+    partitionKey:{name:'pk',type:AttributeType.STRING}, sortKey:{name:'sk',type:AttributeType.STRING},
+    billingMode:BillingMode.PAY_PER_REQUEST, encryption:TableEncryption.AWS_MANAGED,
+    timeToLiveAttribute:'expiresAt', removalPolicy:RemovalPolicy.RETAIN,
+  });
+  backend.addOutput({custom:{systemErrors:{tableName:systemErrorsTable.tableName,region:procurementStack.region,
+    release:/^[a-f0-9]{7,40}$/.test(process.env.AWS_COMMIT_ID || '') ? process.env.AWS_COMMIT_ID : 'unknown'}}});
   const inquiryStack=backend.createStack('InquiryRuntime');
   const inquiryTable=new Table(inquiryStack,'Inbox',{partitionKey:{name:'pk',type:AttributeType.STRING},sortKey:{name:'sk',type:AttributeType.STRING},
     billingMode:BillingMode.PAY_PER_REQUEST,encryption:TableEncryption.AWS_MANAGED,pointInTimeRecovery:true,timeToLiveAttribute:'ttl',removalPolicy:RemovalPolicy.RETAIN});
@@ -407,7 +416,8 @@ if (process.env.AWS_APP_ID === "d4hkkg7dty2du" &&
   new ManagedPolicy(procurementStack,"RuntimeAccess",{
     roles:[Role.fromRoleName(procurementStack,"RuntimeRole","BelloAmplifyStagingComputeRole")],
     statements:[new PolicyStatement({actions:["secretsmanager:GetSecretValue"],resources:[`${restageSecret.secretArn}-??????`,`arn:aws:secretsmanager:${procurementStack.region}:${procurementStack.account}:secret:bello/trefac-readonly-credentials-??????`]}),
-      new PolicyStatement({actions:["dynamodb:GetItem","dynamodb:PutItem","dynamodb:UpdateItem","dynamodb:DeleteItem","dynamodb:Query"],resources:[procurementTable.tableArn]})],
+      new PolicyStatement({actions:["dynamodb:GetItem","dynamodb:PutItem","dynamodb:UpdateItem","dynamodb:DeleteItem","dynamodb:Query"],resources:[procurementTable.tableArn]}),
+      new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:PutItem','dynamodb:UpdateItem'],resources:[systemErrorsTable.tableArn]})],
   });
   backend.addOutput({custom:{procurement:{region:procurementStack.region,secretArn:restageSecret.secretArn,tableName:procurementTable.tableName}}});
   // Source extraction is driven by completed imports / explicit requests. It

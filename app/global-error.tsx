@@ -1,4 +1,6 @@
 "use client";
+import { useEffect, useState } from 'react';
+import { reportSystemError, safeErrorClass, safeErrorDigest } from '@/lib/systemErrors/client';
 
 /**
  * 第六ラウンド P0-1 (§27回帰Gate/§28セキュリティ): このアプリには
@@ -16,6 +18,13 @@
  * 画面に出さない)。
  */
 export default function GlobalError({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
+  const [reported, setReported] = useState(false);
+  useEffect(() => {
+    let active = true;
+    setReported(false);
+    void reportSystemError({ code: 'UI_RENDER_FAILED', surface: 'web', component: 'app', operation: 'render', errorClass: safeErrorClass(error), digest: safeErrorDigest(error) }).then(ok => { if (active) setReported(ok); });
+    return () => { active = false; };
+  }, [error]);
   return (
     <html lang="ja">
       <body className="flex min-h-screen items-center justify-center bg-white px-6 text-gray-900">
@@ -25,6 +34,7 @@ export default function GlobalError({ error, reset }: { error: Error & { digest?
             お手数ですが、時間をおいて再試行してください。問題が続く場合は、下記の参照番号を添えてサポートへご連絡ください。
           </p>
           {error.digest && <p className="mt-3 text-[11px] text-gray-400">参照番号: {error.digest}</p>}
+          {reported && <p role="status" className="mt-3 text-xs text-gray-600">エラーを修復受付へ送信しました。</p>}
           <button
             type="button"
             onClick={() => reset()}

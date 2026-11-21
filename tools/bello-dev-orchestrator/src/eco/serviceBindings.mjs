@@ -1017,6 +1017,12 @@ export function createServiceBindings({
     safetyGate,
     prepareTask,
     refreshProbes,
+    systemErrorRepairContract: {
+      profileId: profile.id, repoPath: profile.repoPath, allowedPaths: profile.allowedPaths,
+      stagingMode: profile.staging.mode, implementationProvider,
+      verificationRequired: profile.verification?.required === true,
+      requiresFrozenBundleReview: !!profile.staging.hostBundle,
+    },
     stop: () => delivery.stop?.(),
     stopRun: run => delivery.stopTask?.(run.task_id),
   };

@@ -1,3 +1,5 @@
+import { createSystemErrorReporter, safeErrorClass, safeErrorDigest } from '../../../lib/systemErrors/client';
+import type { SystemErrorSignal } from '../../../lib/systemErrors/contract';
 import type { InventorySearchInput } from "../domain/search";
 import { Amplify } from "aws-amplify";
 import { Platform, Linking, Share } from "react-native";
@@ -44,7 +46,7 @@ async function jsonRequest(path: string, cookie?: string, retry = false): Promis
     return await readJson(`${API_ORIGIN}${path}`, {
       headers: { Accept: "application/json", ...(cookie ? { Cookie: cookie } : {}) },
       credentials: "same-origin", redirect: "error",
-    }, { retry });
+    }, { retry, fetcher: monitoredFetch });
   } catch (error) {
     if (error instanceof ReadHttpError) {
       if (error.status === 401 || error.status === 403) throw new StaffSessionError(error.status === 401 ? "ログインが必要です。" : "スタッフ用アプリの利用権限がありません。");
@@ -90,11 +92,40 @@ const authenticationFlight=singleFlight(async () => {
 });
 async function authenticatedSession(){return authenticationFlight.run();}
 
+const mobileErrorReporter = createSystemErrorReporter({
+  url: API_ORIGIN + '/api/system-errors',
+  online: () => !isWeb || typeof navigator === 'undefined' || navigator.onLine !== false,
+  headers: async () => {
+    const session = await authenticatedSession();
+    return { 'X-Bello-Mobile': '1', ...(session.cookie ? { Cookie: session.cookie } : {}) };
+  },
+});
+export const reportMobileSystemError = (signal: SystemErrorSignal) => mobileErrorReporter(signal);
+export function reportMobileRuntimeError(error: unknown, code: 'UI_RENDER_FAILED' | 'UI_UNHANDLED' = 'UI_UNHANDLED') {
+  return mobileErrorReporter({ code, surface: isWeb ? 'web' : 'native', component: 'staff-app', operation: 'render', errorClass: safeErrorClass(error), digest: safeErrorDigest(error) });
+}
+async function monitoredFetch(...args: Parameters<typeof fetch>): Promise<Response> {
+  const response = await fetch(...args);
+  if (response.status >= 500) {
+    try {
+      const input=args[0], raw=typeof input==='string'?input:input instanceof URL?input.href:input.url;
+      const url=new URL(raw,API_ORIGIN);
+      if(url.origin===new URL(API_ORIGIN).origin &&
+         (url.pathname.startsWith('/api/mobile/') || url.pathname.startsWith('/api/inventory/partner-catalog')) &&
+         !['/api/mobile/config','/api/mobile/session'].includes(url.pathname)) {
+        void mobileErrorReporter({ code:'API_SERVER_ERROR', surface:isWeb?'web':'native', component:'staff-app', operation:'request' });
+      }
+    } catch { /* The original response must remain usable even if reporting fails. */ }
+  }
+  return response;
+}
+
+
 async function catalogRequest(path: string, body?: unknown) {
   const session = await authenticatedSession();
   const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 20000);
   try {
-    const response = await fetch(API_ORIGIN + path, { method: body ? 'POST' : 'GET', credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal: controller.signal,
+    const response = await monitoredFetch(API_ORIGIN + path, { method: body ? 'POST' : 'GET', credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal: controller.signal,
       headers: { Accept: 'application/json', ...(session.cookie ? { Cookie: session.cookie } : {}), ...(body ? { 'Content-Type': 'application/json', 'X-Bello-Mobile': '1' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
     if (response.status === 401 || response.status === 403) throw new StaffSessionError('管理者でログインし直してください。');
     if (response.status === 409) throw new CatalogSelectionError('conflict', '別の端末で更新されました。');
@@ -160,7 +191,7 @@ export async function syncInventorySearchCatalog(hashes?:string[],fresh=false):P
  const session=await authenticatedSession();
  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),20000);
  try{
-  const response=await fetch(`${API_ORIGIN}/api/mobile/search-catalog`,{method:'POST',credentials:'same-origin',redirect:'error',cache:'no-store',signal:controller.signal,
+  const response=await monitoredFetch(`${API_ORIGIN}/api/mobile/search-catalog`,{method:'POST',credentials:'same-origin',redirect:'error',cache:'no-store',signal:controller.signal,
    headers:{Accept:'application/json','Content-Type':'application/json',...(session.cookie?{Cookie:session.cookie}:{})},body:JSON.stringify({hashes,fresh})});
   if(!response.ok)throw new ReadHttpError(response.status);
   const value=await response.json() as CatalogDelta&{owner?:string};
@@ -194,7 +225,7 @@ export async function sellInventory(request:SoldOutRequest):Promise<SoldOutSaved
   const session=await authenticatedSession();
   const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),60000);
   try {
-    const response=await fetch(`${API_ORIGIN}/api/mobile/inventory/${encodeURIComponent(request.inventoryId)}/sold-out`,{method:'POST',credentials:'same-origin',redirect:'error',signal:controller.signal,headers:{Accept:'application/json','Content-Type':'application/json','X-Bello-Mobile':'1',...(session.cookie?{Cookie:session.cookie}:{})},body:JSON.stringify(request)});
+    const response=await monitoredFetch(`${API_ORIGIN}/api/mobile/inventory/${encodeURIComponent(request.inventoryId)}/sold-out`,{method:'POST',credentials:'same-origin',redirect:'error',signal:controller.signal,headers:{Accept:'application/json','Content-Type':'application/json','X-Bello-Mobile':'1',...(session.cookie?{Cookie:session.cookie}:{})},body:JSON.stringify(request)});
     const value=await response.json() as {ok?:boolean;code?:string;error?:string;owner?:string;mutationId?:string;result?:SoldOutResult};
     if(!response.ok||!value.ok)throw new MobileSoldOutError(value.code??(response.status===403?'FORBIDDEN':'UNCONFIRMED'),value.error??'登録結果を確認できません。同じ内容で再確認してください。');
     if(value.owner!==session.owner||value.mutationId!==request.mutationId||value.result?.sourceId!==request.inventoryId)throw Error('登録結果を確認できません。');
@@ -214,7 +245,7 @@ export async function saveInventory(request: SaveRequest): Promise<InventoryItem
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 20000);
   try {
-    const response = await fetch(`${API_ORIGIN}/api/mobile/inventory/${encodeURIComponent(request.id)}`, {
+    const response = await monitoredFetch(`${API_ORIGIN}/api/mobile/inventory/${encodeURIComponent(request.id)}`, {
       method: request.create ? "POST" : "PATCH", credentials: "same-origin", headers: { Accept: "application/json", "Content-Type": "application/json", "X-Bello-Mobile": "1", ...(session.cookie ? { Cookie: session.cookie } : {}) },
       body: JSON.stringify(request), signal: controller.signal, redirect: "error",
     });
@@ -266,7 +297,7 @@ export async function removeInventory(request: DeleteRequest): Promise<void> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 20000);
   try {
-    const response = await fetch(`${API_ORIGIN}/api/mobile/inventory/${encodeURIComponent(request.id)}`, {
+    const response = await monitoredFetch(`${API_ORIGIN}/api/mobile/inventory/${encodeURIComponent(request.id)}`, {
       method: "DELETE", credentials: "same-origin", redirect: "error", signal: controller.signal,
       headers: { "Content-Type": "application/json", "X-Bello-Mobile": "1", ...(session.cookie ? { Cookie: session.cookie } : {}) }, body: JSON.stringify(request),
     });
@@ -294,11 +325,11 @@ export async function readFilterCategories():Promise<CategoryChoice[]> {
 }
 export async function uploadInventoryPhoto(photo:PendingPhoto):Promise<UploadedPhoto> {
   if(!mobileWritesEnabled())throw new InventoryWriteError("forbidden");
-  const session=await authenticatedSession(); const blob=await (await fetch(photo.uri)).blob();
+  const session=await authenticatedSession(); const blob=await (await monitoredFetch(photo.uri)).blob();
   if(blob.size>3*1024*1024)throw new Error("写真が大きすぎます。");
   const controller=new AbortController(); const timeout=setTimeout(()=>controller.abort(),60000);
   try {
-    const response=await fetch(API_ORIGIN+"/api/mobile/images",{method:"POST",credentials:"same-origin",redirect:"error",signal:controller.signal,
+    const response=await monitoredFetch(API_ORIGIN+"/api/mobile/images",{method:"POST",credentials:"same-origin",redirect:"error",signal:controller.signal,
       headers:{"Content-Type":"image/jpeg","X-Bello-Mobile":"1","X-Photo-Id":photo.id,...(session.cookie?{Cookie:session.cookie}:{})},body:blob});
     if(!response.ok)throw new Error("写真を保存できませんでした。");
     const value=await response.json();
@@ -317,7 +348,7 @@ async function readAnalysis<T>(input:AnalysisTransport):Promise<T> {
   const controller = new AbortController();
   const timeout = setTimeout(()=>controller.abort(),20_000);
   try {
-    const response = await fetch(API_ORIGIN+'/api/mobile/sales/analysis',{
+    const response = await monitoredFetch(API_ORIGIN+'/api/mobile/sales/analysis',{
       method:'POST',credentials:'same-origin',redirect:'error',cache:'no-store',signal:controller.signal,
       headers:{Accept:'application/json','Content-Type':'application/json','X-Bello-Mobile':'1',...(session.cookie?{Cookie:session.cookie}:{})},
       body:JSON.stringify(input),
@@ -346,7 +377,7 @@ async function quantityPlanningRequest<T extends QuantityPlanningReadResult | Qu
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 20_000);
   try {
-    const response = await fetch(`${API_ORIGIN}/api/mobile/inventory/${encodeURIComponent(id)}/quantity-planning`, {
+    const response = await monitoredFetch(`${API_ORIGIN}/api/mobile/inventory/${encodeURIComponent(id)}/quantity-planning`, {
       method: action ? "POST" : "GET",
       credentials: "same-origin", redirect: "error", cache: "no-store", signal: controller.signal,
       headers: {
@@ -386,7 +417,7 @@ export async function readInventoryValue(month?:string):Promise<import('../../..
 export async function removeInventoryPhotoAsset(id:string,photoId:string):Promise<void>{
  if(!mobileWritesEnabled())throw new Error('写真を削除する権限がありません。');
  const session=await authenticatedSession();const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),20000);
- try{const response=await fetch(API_ORIGIN+'/api/mobile/inventory/'+encodeURIComponent(id)+'/photos/'+encodeURIComponent(photoId),{method:'DELETE',credentials:'same-origin',redirect:'error',signal:controller.signal,headers:{'X-Bello-Mobile':'1',...(session.cookie?{Cookie:session.cookie}:{})}});
+ try{const response=await monitoredFetch(API_ORIGIN+'/api/mobile/inventory/'+encodeURIComponent(id)+'/photos/'+encodeURIComponent(photoId),{method:'DELETE',credentials:'same-origin',redirect:'error',signal:controller.signal,headers:{'X-Bello-Mobile':'1',...(session.cookie?{Cookie:session.cookie}:{})}});
  const result=await response.json();if(!response.ok)throw new Error(result.message||'写真を削除できませんでした。ログインと通信を確認してください。');
  if(result.owner!==session.owner||result.deletedId!==photoId)throw new Error('削除結果を確認できません。詳細を開き直してください。');
  }finally{clearTimeout(timeout);}
@@ -400,7 +431,7 @@ export async function splitInventory(request:StockSplitRequest):Promise<StockSpl
  if(!mobileWritesEnabled())throw new StockSplitError('FORBIDDEN','在庫を分ける権限がありません。');
  const session=await authenticatedSession(),controller=new AbortController(),timer=setTimeout(()=>controller.abort(),60000);
  try{
-  const response=await fetch(API_ORIGIN+'/api/mobile/inventory/'+encodeURIComponent(request.inventoryId)+'/split',{method:'POST',credentials:'same-origin',redirect:'error',signal:controller.signal,headers:{'Content-Type':'application/json','X-Bello-Mobile':'1',...(session.cookie?{Cookie:session.cookie}:{})},body:JSON.stringify(request)});
+  const response=await monitoredFetch(API_ORIGIN+'/api/mobile/inventory/'+encodeURIComponent(request.inventoryId)+'/split',{method:'POST',credentials:'same-origin',redirect:'error',signal:controller.signal,headers:{'Content-Type':'application/json','X-Bello-Mobile':'1',...(session.cookie?{Cookie:session.cookie}:{})},body:JSON.stringify(request)});
   const value=await response.json() as {ok?:boolean;code?:StockSplitError['code'];error?:string;owner?:string;mutationId?:string;result?:StockSplitResult};
   if(!response.ok||!value.ok)throw new StockSplitError(value.code??'UNCONFIRMED',value.error??'保存結果を確認できません。');
   if(value.owner!==session.owner||value.mutationId!==request.mutationId||value.result?.sourceId!==request.inventoryId)throw Error('保存結果を確認できません。');

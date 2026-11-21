@@ -1,4 +1,5 @@
 'use server';
+import { reportProcurementError } from '@/lib/systemErrors/procurement';
 import {randomUUID,createHash} from 'node:crypto';
 import {cookies} from 'next/headers';
 import {uploadData} from 'aws-amplify/storage/server';
@@ -37,7 +38,7 @@ export async function fetchRestageAction(date:string){
       if(row&&ledger){try{needsUpdate=Object.keys(restageSupplement(row,completeRestageDraft(lot),ledger,defaults)).length>0;}catch{needsUpdate=true;}}
       return {...lot,inventoryId,needsUpdate,deleted:!!inventoryId&&!row};}));
     return {ok:true as const,runId,lots,ledger,errors:fetched.errors};
-  }catch(e){resetRestageConnection();return{ok:false as const,error:safeError(e)};}
+  }catch(e){await reportProcurementError(e,'restage','fetch');resetRestageConnection();return{ok:false as const,error:safeError(e)};}
   finally{await releaseFetchLock(lease);}
 }
 
@@ -66,7 +67,7 @@ export async function prepareRestageRunAction(runId:string,edits:RestageEdit[]){
     // STATE is written last: a partial snapshot can never authorize registration.
     await putImportRecord({pk:'RUN#'+preparedId,sk:'STATE',ids,date:state.date,defaults:state.defaults,errors:[],ready:true,createdBy:who,ttl});
     return {ok:true as const,runId:preparedId,ledger,lots};
-  }catch(e){return{ok:false as const,error:safeError(e)};}
+  }catch(e){await reportProcurementError(e,'restage','register');return{ok:false as const,error:safeError(e)};}
 }
 
 export async function registerRestageLotAction(runId:string,goodsId:string){
@@ -106,7 +107,7 @@ export async function registerRestageLotAction(runId:string,goodsId:string){
       await logInventoryHistory(inventoryId,who,[...Object.entries(changes).filter(([key])=>key!=='customFields').map(([key,value])=>diffField('リステージ取込：'+key,existing[key]==null?null:String(existing[key]),Array.isArray(value)?value.join(' / '):String(value)))].filter((v):v is NonNullable<typeof v>=>v!==null));
       revalidatePath('/inventory');revalidatePath('/inventory/'+inventoryId);
       return{ok:true as const,id:inventoryId,skipped:true,updated:true};
-    }catch(e){return{ok:false as const,error:safeError(e)};}finally{await releaseImport(repairPk,sk,owner);}
+    }catch(e){await reportProcurementError(e,'restage','register');return{ok:false as const,error:safeError(e)};}finally{await releaseImport(repairPk,sk,owner);}
   }
   const lease=await claimImport(pk,sk);if(!lease)return{ok:false as const,error:'この商品は登録処理中です。再取得で結果を確認できます。'};
   const complete=()=>releaseImport(pk,sk,lease,{status:'REGISTERED',goodsId,inventoryId:id,lot,registeredAt:new Date().toISOString()});
@@ -119,6 +120,7 @@ export async function registerRestageLotAction(runId:string,goodsId:string){
     await createInventory({...restageInventoryFields(lot),...ledgerFields(ledger),categoryId:defaults.categoryId,categoryIds:[defaults.categoryId],locationId:defaults.locationId,customFields:{...restageInventoryFields(lot).customFields,__restageImport:{date:lot.date,goodsId:lot.goodsId,hammerPrice:lot.hammerPrice,quantity:lot.quantity,multiplier:'1.188',rounding:'HALF_UP',isBundle:lot.isBundle,ledger,defaults}},images:[{kind:'uploaded',storageKey,sortOrder:0,type:'NORMAL',isPrimary:true,sourceSystem:null,sourceUrl:lot.imageUrl,thumbnailKey:null,mediumKey:null,originalHash:createHash('sha256').update(image.bytes).digest('hex'),classification:null}]},{skipRedirect:true,id});
     await complete();return{ok:true as const,id,skipped:false};
   }catch(e){
+    await reportProcurementError(e,'restage','register');
     // A response may be lost after the inventory transaction committed. Never
     // remove its image or create a different ID when retrying.
     const existing=await getInventoryRaw(id).catch(()=>undefined);

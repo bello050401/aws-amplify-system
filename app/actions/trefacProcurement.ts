@@ -1,4 +1,5 @@
 'use server';
+import { reportProcurementError } from '@/lib/systemErrors/procurement';
 import {randomUUID,createHash} from 'node:crypto';
 import {cookies} from 'next/headers';
 import {uploadData} from 'aws-amplify/storage/server';
@@ -21,7 +22,7 @@ const matches=(row:Record<string,unknown>|undefined,lot:TrefacLot)=>!!row&&impor
 export async function fetchTrefacAction(){
  const who=await actor();try{const client=await trefacConnection(),lots=await client.fetchLots(),runId=randomUUID(),defaults=resolveRestageDefaults(...await Promise.all([listCategories(),listLocations()])),ttl=Math.floor(Date.now()/1000)+86400;const rows=[];
  for(const lot of lots){const k=receipt(lot),prior=await getImportRecord(k.pk,k.sk);if(prior?.status==='REGISTERED')continue;await putImportRecord({pk:'TF_RUN#'+runId,sk:lot.goodsId,lot,createdBy:who,ttl,defaults});rows.push(lot);}
- return{ok:true as const,runId,lots:rows};}catch(e){return{ok:false as const,error:safe(e)};}
+ return{ok:true as const,runId,lots:rows};}catch(e){await reportProcurementError(e,'trefac','fetch');return{ok:false as const,error:safe(e)};}
 }
 export async function registerTrefacAction(runId:string,goodsId:string,pieces:number){
  const who=await actor();if(!/^[0-9a-f-]{36}$/.test(runId)||!/^\d{1,12}$/.test(goodsId))return{ok:false as const,error:'取得結果が不正です。'};
@@ -39,5 +40,5 @@ export async function registerTrefacAction(runId:string,goodsId:string,pieces:nu
   const ledger=procurementLedgerDetails(lot.name),defaults=preview.defaults,title=importedStockTitle(lot.name,lot.quantity!,'点','TREFAC');
   await createInventory({name:title.name,quantity:lot.quantity!,unit:'点',purchasePrice:lot.purchasePrice!,purchaseQuantity:lot.quantity!,transactionDate:lot.date,transactionType:'買受',usedGoodsItemType:classifyItem(lot.name),...ledger,counterpartyName:'トレファクライブネットオークション',note:lot.description?'【仕入先記載／トレファク】\n'+lot.description:'',adminMemo:`トレファク 商品ID:${lot.goodsId} 出品番号:${lot.lotNumber}\n落札日時:${lot.soldAt}\n落札単価:${lot.hammerPrice}円／落札数量:${lot.sourceQuantity}組／1組:${lot.pieces}点\n仕入れ合計:${lot.purchaseTotal}円（落札額×1.21）\n購入単価:${lot.purchasePrice}円（点数で割り、四捨五入）`,categoryId:defaults.categoryId,categoryIds:[defaults.categoryId],locationId:defaults.locationId,customFields:{...ledger.customFields,__belloStockTitle:title.metadata,__trefacImport:{...lot,multiplier:'1.21',rounding:'HALF_UP',defaults}},images:[{kind:'uploaded',storageKey,sortOrder:0,type:'NORMAL',isPrimary:true,sourceSystem:null,sourceUrl:lot.imageUrl,thumbnailKey:null,mediumKey:null,originalHash:createHash('sha256').update(image.bytes).digest('hex'),classification:null}]},{id,skipRedirect:true});
   await done();return{ok:true as const,id,skipped:false};
- }catch(e){const existing=await getInventoryRaw(id).catch(()=>undefined);if(matches(existing,lot)){await done();return{ok:true as const,id,skipped:false};}await releaseImport(k.pk,k.sk,owner,{status:'FAILED',lastError:safe(e)});return{ok:false as const,error:safe(e)};}
+ }catch(e){await reportProcurementError(e,'trefac','register');const existing=await getInventoryRaw(id).catch(()=>undefined);if(matches(existing,lot)){await done();return{ok:true as const,id,skipped:false};}await releaseImport(k.pk,k.sk,owner,{status:'FAILED',lastError:safe(e)});return{ok:false as const,error:safe(e)};}
 }

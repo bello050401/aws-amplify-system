@@ -1,3 +1,4 @@
+import { SystemErrorBoundary } from './src/ui/SystemErrorBoundary';
 import {NativePartnerCatalogPreview} from './src/preview/NativePartnerCatalogPreview';
 import {ListPreferences} from './src/domain/listPreferences';
 import React, { useMemo, useRef, useState } from "react";
@@ -148,5 +149,5 @@ function Preview() {
 
 export default function App() {
   const preview = __DEV__ && process.env.EXPO_PUBLIC_UI_PREVIEW === "1";
-  return <SafeAreaProvider><StatusBar style="dark" />{preview ? (typeof window!=='undefined'&&new URLSearchParams(window.location.search).has('partner-catalog-test')?<NativePartnerCatalogPreview/>:<Preview />) : <LiveApp />}</SafeAreaProvider>;
+  return <SafeAreaProvider><StatusBar style="dark" />{preview ? (typeof window!=='undefined'&&new URLSearchParams(window.location.search).has('partner-catalog-test')?<NativePartnerCatalogPreview/>:<Preview />) : <SystemErrorBoundary><LiveApp /></SystemErrorBoundary>}</SafeAreaProvider>;
 }

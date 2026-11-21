@@ -3,7 +3,7 @@ import {ListPreferences} from '../domain/listPreferences';
 import {readInventoryValue,readInventoryAnalysis,inventoryQuantityPlanning} from '../runtime/service';
 import { settingsPath } from "../../../lib/inventory/quantityPlanning/presentation";
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Linking, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Linking, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { signIn, signOut, confirmSignIn, getCurrentUser } from "aws-amplify/auth";
 import * as Network from "expo-network";
 import * as Crypto from "expo-crypto";
@@ -24,6 +24,9 @@ import type { InventorySearchInput } from "../domain/search";
 import {DetailReadAhead} from '../domain/detailReadAhead';
 import {readInventoryGallery} from '../runtime/service';
 import {readFilterCategories} from '../runtime/service';
+import { monitorBrowserErrors } from '../../../lib/systemErrors/client';
+import { reportMobileSystemError, reportMobileRuntimeError } from '../runtime/service';
+import { monitorNativeErrors, type NativeErrorUtils } from '../../../lib/systemErrors/native';
 
 function connected(state: Network.NetworkState) { return state.isConnected !== false && state.isInternetReachable !== false; }
 const loginModeKey = `bello.login-mode.${API_ORIGIN}`;
@@ -40,6 +43,11 @@ export function LiveApp() {
   const [challenge, setChallenge] = useState<"password" | "code" | null>(null); const [answer, setAnswer] = useState("");
   const [message, setMessage] = useState<string | null>(null); const [busy, setBusy] = useState(false);
   const mounted = useRef(true);
+  useEffect(() => {
+    if (!access || offline) return;
+    if (Platform.OS !== 'web') return monitorNativeErrors(reportMobileRuntimeError, (globalThis as typeof globalThis & { ErrorUtils?: NativeErrorUtils }).ErrorUtils);
+    return monitorBrowserErrors(reportMobileSystemError, { observeFetch: false });
+  }, [access, offline]);
   const setupBusy=useRef(false);
   const setup = async () => {
     if(setupBusy.current)return;setupBusy.current=true;

@@ -55,3 +55,13 @@ export async function register() {
     photoCacheTelemetry.registerProcess();
   } catch { /* Optional measurement must never prevent SSR startup. */ }
 }
+
+/** Capture only authenticated staff failures and fixed diagnostic labels. */
+export const onRequestError: import('next').Instrumentation.onRequestError = async (error, request, context) => {
+  if (process.env.NEXT_RUNTIME === 'nodejs') {
+    try {
+      const { reportInstrumentedRequestError } = await import('./lib/systemErrors/request');
+      await reportInstrumentedRequestError(error, request, context);
+    } catch { /* Reporting must never replace the original failure. */ }
+  }
+};

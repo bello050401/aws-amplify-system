@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { reportSystemError, safeErrorClass, safeErrorDigest } from '@/lib/systemErrors/client';
 
 /**
  * 第六ラウンド P0-1: /inventory以下(保護route含む — layout.tsxの認証
@@ -14,11 +15,16 @@ import { useEffect } from "react";
  * 表示する)に晒さないための、業務ドメインに合わせた安全な着地点。
  */
 export default function InventoryError({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
+  const [reported, setReported] = useState(false);
   useEffect(() => {
     // クライアント側でも一言記録しておく(実際の完全なstackはNext.js自身が
     // サーバー側stderrへ既に出力済み——ここでは開発者コンソールでの
     // 追跡補助のみ、secretは一切含まれない)。
-    console.error("[InventoryError boundary]", { digest: error.digest, message: error.message });
+    let active = true;
+    setReported(false);
+    console.error("[InventoryError boundary]", { digest: safeErrorDigest(error), errorClass: safeErrorClass(error) });
+    void reportSystemError({ code: 'UI_RENDER_FAILED', surface: 'web', component: 'inventory', operation: 'render', errorClass: safeErrorClass(error), digest: safeErrorDigest(error) }).then(ok => { if (active) setReported(ok); });
+    return () => { active = false; };
   }, [error]);
 
   return (
@@ -29,6 +35,7 @@ export default function InventoryError({ error, reset }: { error: Error & { dige
           お手数ですが、再試行するか一覧画面へ戻ってください。問題が続く場合は、下記の参照番号を添えてサポートへご連絡ください。
         </p>
         {error.digest && <p className="mt-3 text-[11px] text-gray-400">参照番号: {error.digest}</p>}
+        {reported && <p role="status" className="mt-3 text-xs text-gray-600">エラーを修復受付へ送信しました。</p>}
         <div className="mt-4 flex justify-center gap-2">
           <button type="button" onClick={() => reset()} className="border border-gray-900 px-4 py-1.5 text-xs font-bold text-gray-900 hover:bg-gray-50">
             再試行

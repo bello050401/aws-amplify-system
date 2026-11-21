@@ -12,6 +12,7 @@ import { STATES } from "../core/states.mjs";
 import { EcoEngine } from "./engine.mjs";
 import { EcoStore } from "./store.mjs";
 import { EcoApi, disconnected } from "./api.mjs";
+import { registerSystemErrorRepair } from "../intake/systemErrors.mjs";
 
 const REQUIRED_BINDINGS = [
   "capabilities",
@@ -84,7 +85,7 @@ export function createEcoRuntime({
    * すべて「task.state===QUEUED のときだけ許可する」に一本化している
    * (running/preflight 中の task は state が QUEUED ではないため自動的に拒否される)。
    */
-  function startRun(input = {}) {
+  function startRun(input = {}, { heldSystemError = false } = {}) {
     if (!connected || !engine) throw Error("Cooperative worker is not connected");
     if (!ecoStore.installed) throw Error("Eco migration not installed");
     const { taskId, revision, acIds, risk = "low", expectedVersion, idempotencyKey, profileId = null } = input;
@@ -103,7 +104,7 @@ export function createEcoRuntime({
           throw Error("Cooperative mode required");
         const task = repo.getTask(taskId);
         if (!task) throw Error("Unknown task");
-        if (task.state !== STATES.QUEUED)
+        if (task.state !== STATES.QUEUED && !(heldSystemError && task.state === STATES.PAUSED && task.source === 'system'))
           throw Error("Task must be queued to start a cooperative run");
         if (activeRunForTask(taskId)) throw Error("A cooperative run is already active for this task");
         // Host-owned, synchronous worktree/isolation preparation. Runs inside the
@@ -112,7 +113,8 @@ export function createEcoRuntime({
         bindings.prepareTask(task, { revision, acIds, risk, profileId });
         // Removes the task from the legacy queue (claimNextTask only selects
         // state=queued) without touching orchestrator.pause()/repo.getPaused().
-        repo.setState(taskId, STATES.PAUSED, "Cooperative eco run started", "eco", {});
+        if (task.state === STATES.QUEUED) repo.setState(taskId, STATES.PAUSED, "Cooperative eco run started", "eco", {});
+        else repo.audit('eco','system_error.start_held',taskId,'ok',run.id);
         return run;
       },
     );
@@ -175,6 +177,11 @@ export function createEcoRuntime({
           "eco",
           { git_end_commit: run.headSHA || task.git_end_commit },
         );
+    }
+    if (['FAILED','CANCELLED'].includes(run.state)) {
+      const task = repo.getTask(run.task_id);
+      if (task?.state === STATES.PAUSED && task.idempotency_key?.startsWith('explicit:system-error:'))
+        repo.setState(task.id, run.state === 'FAILED' ? STATES.FAILED : STATES.CANCELLED, `System error cooperative run ended (${run.id})`, 'eco', {});
     }
   }
 
@@ -244,7 +251,9 @@ export function createEcoRuntime({
     if (failure) throw failure.reason;
   }
 
-  const api = new EcoApi({ store, operatorToken, capabilities, implementationProvider, engine, startRun, getRun, onControl: reflectFinishedRun });
+  const submitSystemError = input => registerSystemErrorRepair({input, repo, config, contract: bindings?.systemErrorRepairContract,
+    settings: () => ecoStore.settings(), startHeldRun: input => startRun(input, {heldSystemError: true})});
+  const api = new EcoApi({ store, operatorToken, capabilities, implementationProvider, engine, startRun, getRun, onControl: reflectFinishedRun, submitSystemError });
 
   return {
     connected,

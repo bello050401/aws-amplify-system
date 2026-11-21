@@ -7,6 +7,7 @@ import { InventoryNavRail } from "../InventoryNavRail";
 import { MobileBottomNav } from "../MobileBottomNav";
 import { UnsavedChangesProvider } from "../UnsavedChangesProvider";
 import { InventoryAuthTemporarilyUnavailable } from "./InventoryAuthTemporarilyUnavailable";
+import { SystemErrorMonitor } from '../SystemErrorMonitor';
 
 // The root layout (app/layout.tsx) sets title: "特集ページ" for the
 // Feature system — there is only one <html>/<body> for the whole app, so
@@ -48,6 +49,7 @@ export default async function ProtectedInventoryLayout({ children }: { children:
     // in this Client Component provider doesn't change that.
     <UnsavedChangesProvider><InventorySelectionProvider editable={status.role!=="VIEWER"}>
       <InventoryPreferenceSync/>
+      <SystemErrorMonitor/>
       <div className="flex h-screen bg-white text-gray-900">
         <InventoryNavRail canIssueDocuments={status.role==="ADMIN"} />
         {/* Each page renders its own InventoryHeader (spec O/P/Q — see

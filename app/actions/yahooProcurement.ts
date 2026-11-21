@@ -1,4 +1,5 @@
 "use server";
+import { reportProcurementError } from "@/lib/systemErrors/procurement";
 import { randomUUID, createHash } from "node:crypto";
 import { cookies } from "next/headers";
 import { uploadData } from "aws-amplify/storage/server";
@@ -106,6 +107,7 @@ export async function startYahooProcurementAction(from?: string, to?: string) {
     });
     return { ok: true as const, runId: id, count: ids.length, from, to };
   } catch (e) {
+    await reportProcurementError(e,'yahoo','fetch');
     return { ok: false as const, error: message(e) };
   }
 }
@@ -134,6 +136,7 @@ export async function readYahooProcurementAction(id: string) {
       total: r.ids.length,
     };
   } catch (e) {
+    await reportProcurementError(e,'yahoo','fetch');
     await releaseImport(pk, "STATE", owner);
     return { ok: false as const, error: message(e) };
   }
@@ -226,6 +229,7 @@ export async function previewYahooProcurementAction(id: string) {
       unrecognized: Number(r.unrecognized || 0),
     };
   } catch (e) {
+    await reportProcurementError(e,'yahoo','fetch');
     return { ok: false as const, error: message(e) };
   }
 }
@@ -270,6 +274,7 @@ export async function prepareYahooProcurementPhotoAction(
     });
     return { ok: true as const, imageUrl: item.imageUrl, storeInfo, date };
   } catch (e) {
+    await reportProcurementError(e,'yahoo','enrich');
     return { ok: false as const, error: message(e) };
   }
 }
@@ -303,7 +308,8 @@ export async function excludeYahooProcurementAction(id: string, auctionId: strin
       });
     } catch (e) { await releaseImport(pk, auctionId, owner); throw e; }
     return { ok: true as const };
-  } catch (e) { return { ok: false as const, error: message(e) }; }
+  } catch (e) {
+    await reportProcurementError(e,'yahoo','register'); return { ok: false as const, error: message(e) }; }
 }
 export async function registerYahooProcurementAction(
   id: string,
@@ -511,6 +517,7 @@ export async function registerYahooProcurementAction(
       throw e;
     }
   } catch (e) {
+    await reportProcurementError(e,'yahoo','register');
     return { ok: false as const, error: message(e) };
   }
 }

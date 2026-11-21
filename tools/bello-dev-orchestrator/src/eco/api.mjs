@@ -34,6 +34,7 @@ export class EcoApi {
     startRun = null,
     getRun = null,
     onControl = null,
+    submitSystemError = null,
   }) {
     this.repo = new EcoStore({ store, capabilities, implementationProvider });
     this.store = store;
@@ -45,6 +46,7 @@ export class EcoApi {
     this.startRun = startRun;
     this.getRun = getRun;
     this.onControl = onControl;
+    this.submitSystemError = submitSystemError;
   }
   handle(method, route, body = {}, token = "") {
     if (method === "GET" && route === "/api/eco/settings") {
@@ -91,6 +93,10 @@ export class EcoApi {
         body.expectedVersion,
         body.idempotencyKey,
       );
+    if (route === '/api/eco/system-error') {
+      if (!this.submitSystemError) throw Error('System error repair is not connected');
+      return this.submitSystemError(body);
+    }
     if (route === "/api/eco/runs") {
       if (!this.startRun) throw Error("Cooperative worker is not connected");
       return this.startRun(body);
