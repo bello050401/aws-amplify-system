@@ -8,6 +8,10 @@ import {fingerprint} from '../src/pipeline/verification.mjs';
 import {CUA_CSP_SHA256} from '../src/pipeline/cuaBoundary.mjs';
 import {FROZEN_HTTP_MODE,FROZEN_HTTP_ACTIONS,FIXTURE_OPERATIONS,SALE_FIXTURE_SCHEMA_SHA256,SALE_FIXTURE_PATHS_SHA256} from '../src/pipeline/frozenHttpFixture.mjs';
 const sha=b=>crypto.createHash('sha256').update(b).digest('hex');
+/** The actual generated connection profile, also checked by runtime-contract regression tests. */
+export function saleHttpRuntimeProfile({repo,allowedPaths,verification,qaUrl,desktopCua,staging}){
+ return {targetApp:'inventory_web',repoPath:repo,allowedPaths,implementationProvider:'codex',models:{codex:{model:'gpt-6.1-sol',reasoningEffort:'medium'}},verification,qaUrl,allowedDomains:['127.0.0.1'],desktopCua,staging,qaSteps:{sequence:[{type:'navigate'},{type:'reload'},{type:'screenshot'}],maxTotalSeconds:120}};
+}
 /** Trusted host assembly only. Input names exact reviewed files and already-built assets. */
 export function prepareSaleHttpFixture(input){
  const root=path.resolve(input.output),repo=fs.realpathSync(input.repoPath),head=spawnSync('git',['rev-parse','HEAD'],{cwd:repo,encoding:'utf8',windowsHide:true});
@@ -30,7 +34,7 @@ export function prepareSaleHttpFixture(input){
  const qaUrl='http://127.0.0.1:'+input.port+'/',desktopCua={driver:'desktop-cua',frozenReviewedFixture:true,bundleSha256:sha(fs.readFileSync(descriptorPath)),cspSha256:CUA_CSP_SHA256,servedPathsSha256:SALE_FIXTURE_PATHS_SHA256,postSchemaSha256:SALE_FIXTURE_SCHEMA_SHA256,allowedActions:[...FROZEN_HTTP_ACTIONS],requiredFixtureOperations:[...FIXTURE_OPERATIONS],directory,sessionPath:path.join(directory,'session.json')};
  const staging={...base,mode:FROZEN_HTTP_MODE,framework:'frozen-http-fixture',port:input.port,qaUrl,dataRoot,hostAdapterPath:path.join(hostDir,'mxc-host.cjs'),hostAdapterSha256:sha(host),hostBundle:{descriptorPath,sha256:desktopCua.bundleSha256},environmentId:'sale-desktop-frozen-http',dataScopeId:'sale-desktop-synthetic-memory',dataAdapter:{kind:'fixture',id:'sale-desktop-synthetic-memory'},desktopCua,fixtureContract};delete staging.hostApproval;
  staging.hostApproval={...staging,approved:true,approvalId:input.taskId+'-reviewed-frozen-http'};
- const profile={targetApp:'inventory_web',repoPath:repo,allowedPaths:input.allowedPaths,implementationProvider:'codex',models:{codex:{model:'gpt-6.1-sol',reasoningEffort:'medium'}},verification,qaUrl,allowedDomains:['127.0.0.1'],desktopCua,staging};
+ const profile=saleHttpRuntimeProfile({repo,allowedPaths:input.allowedPaths,verification,qaUrl,desktopCua,staging});
  const profileFile=path.join(root,'eco-runtime-cua.json');fs.writeFileSync(profileFile,JSON.stringify({schemaVersion:1,profiles:{inventory_web:profile}},null,2));
  const receipt={profileFile,source,fixtureContract,hostAdapterPath:staging.hostAdapterPath,hostAdapterSha256:staging.hostAdapterSha256,bundleSha256:desktopCua.bundleSha256,projection:{originalServeExecuted:false,excluded:['esbuild startup','postcss startup','original listen(43143)'],included:'unchanged synthetic globals and HTTP handler; exact frozen assets'},coverage:'Production desktop UI with synthetic memory handler only; not Next or backend integration'};fs.writeFileSync(path.join(root,'assembly.json'),JSON.stringify(receipt,null,2));return receipt;
 }
