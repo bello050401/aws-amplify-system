@@ -6,6 +6,8 @@ import { isDeepStrictEqual } from 'node:util';
 import { NextStagingDelivery, verifiedSource, validateRevisionPath, revisionIdentity, readRevision } from './nextStaging.mjs';
 import { digest } from './staticStaging.mjs';
 import { runGit } from '../core/git.mjs';
+import {CUA_CSP,cuaBoundaryProof} from './cuaBoundary.mjs';
+import {FROZEN_HTTP_MODE,validateSaleFixtureContract,isIsolatedLocalMode} from './frozenHttpFixture.mjs';
 
 export const isLoopback = hostname => hostname === '127.0.0.1' || hostname === '[::1]';
 const nonempty = value => typeof value === 'string' && !!value.trim();
@@ -21,7 +23,8 @@ export function assertLocalNextSource(task, git = runGit) {
 }
 
 export function validateLocalNextSettings(s) {
-  if (s?.mode !== 'local-next-isolated' || s.enabled !== true || s.framework !== 'nextjs' || s.isolatedDataConfirmed !== true || s.service !== 'inventory_web')
+  const http=s?.mode===FROZEN_HTTP_MODE;if(http)validateSaleFixtureContract(s);
+  if (!isIsolatedLocalMode(s?.mode) || s.enabled !== true || s.framework !== (http?'frozen-http-fixture':'nextjs') || s.isolatedDataConfirmed !== true || s.service !== 'inventory_web')
     throw Error('Explicit local-next-isolated Next.js inventory mode is required');
   if (!isLoopback(s.hostname) || !Number.isInteger(s.port) || s.port < 1024 || s.port > 65535) throw Error('Host-approved loopback address and dedicated unprivileged port are required');
   if (!path.isAbsolute(s.dataRoot || '') || !path.isAbsolute(s.hostAdapterPath || '') || !/^[a-f0-9]{64}$/.test(s.hostAdapterSha256 || '')) throw Error('Dedicated dataRoot and pinned absolute host adapter are required');
@@ -31,6 +34,7 @@ export function validateLocalNextSettings(s) {
   if (!Array.isArray(s.operationalPorts) || !s.operationalPorts.length || !s.operationalPorts.every(Number.isInteger) || s.operationalPorts.includes(s.port)) throw Error('Dedicated port must differ from operational ports');
   if (!Array.isArray(s.operationalDataScopeIds) || !s.operationalDataScopeIds.length || !s.operationalDataScopeIds.every(nonempty) || s.operationalDataScopeIds.includes(s.dataScopeId)) throw Error('Dedicated data scope must differ from operational scopes');
   const approval = s.hostApproval;
+  if(http&&(!isDeepStrictEqual(s.fixtureContract,approval?.fixtureContract)||s.mode!==approval.mode||s.framework!==approval.framework))throw Error('Frozen HTTP fixture/mode differs from exact host approval');
   const fields = ['hostname','port','dataRoot','hostAdapterPath','hostAdapterSha256','executionPolicyId','environmentId','dataScopeId','qaUrl','revisionPath','dataAdapter','operationalDataRoots','operationalPorts','operationalDataScopeIds','hostBundle'];
   if (approval?.approved !== true || !nonempty(approval.approvalId) || !fields.every(key => isDeepStrictEqual(s[key], approval[key]))) throw Error('Local target does not match host approval');
   if (s.hostBundle !== undefined && (!path.isAbsolute(s.hostBundle?.descriptorPath || '') || !/^[a-f0-9]{64}$/.test(s.hostBundle?.sha256 || ''))) throw Error('Pinned host bundle descriptor is invalid');
@@ -76,7 +80,7 @@ export function assertIsolationProof(proof, settings) {
       proof.network?.outbound !== 'deny' || proof.network?.loopback !== `${s.hostname}:${s.port}` || !nonempty(proof.network.evidenceId) ||
       proof.filesystem?.productionConfig !== 'deny' || proof.filesystem?.operationalData !== 'deny' || !nonempty(proof.filesystem.evidenceId) ||
       proof.credentials?.inheritance !== 'deny' || proof.credentials?.defaultAwsFiles !== 'deny' || proof.credentials?.metadata !== 'deny' || !nonempty(proof.credentials.evidenceId) ||
-      proof.runtime?.framework !== 'nextjs' || proof.runtime?.dataAdapterId !== s.dataAdapter.id || proof.runtime?.dataAdapterKind !== s.dataAdapter.kind)
+      proof.runtime?.framework !== s.framework || proof.runtime?.dataAdapterId !== s.dataAdapter.id || proof.runtime?.dataAdapterKind !== s.dataAdapter.kind)
     throw Error('Host-enforced network/filesystem/credentials isolation evidence is missing');
   return proof;
 }
@@ -156,6 +160,15 @@ export class LocalNextDelivery extends NextStagingDelivery {
     await this.inspect(task, saved);
     if (this.isStopping(task.id)) throw Error('QA deployment is stopping');
     return result.session;
+  }
+  /** Application remains MXC-isolated. The native CUA browser has a distinct, honest boundary. */
+  async inspectCuaBoundary(task){
+    this.checkHost();const row=this.row(task.id);if(row?.state!=='succeeded'||this.isStopping(task.id))throw Error('No verified CUA fixture deployment');
+    this.validateReceipt(task,row);const saved=JSON.parse(row.config_json);await this.inspect(task,saved);
+    const response=await this.request(this.settings.qaUrl,{method:'GET',credentials:'omit',redirect:'manual',cache:'no-store',signal:AbortSignal.timeout(6000)});
+    try{if(response.status!==200||response.redirected||response.headers.get('content-security-policy')!==CUA_CSP||response.headers.get('x-bello-cua-paths')!==this.settings.desktopCua?.servedPathsSha256)throw Error('Pinned read-only CUA CSP/path scope is not enforced');}finally{await response.body?.cancel().catch(()=>{});}
+    const observed=await this.inspect(task,saved);if(this.row(task.id)?.job_id!==row.job_id)throw Error('CUA deployment changed');
+    return {...cuaBoundaryProof({origin:new URL(this.settings.qaUrl).origin,applicationIsolation:saved.process.isolation,settings:this.settings}),...(this.settings.mode===FROZEN_HTTP_MODE?{fixtureActions:observed.fixtureActions??[]}:{})};
   }
   prepare(task) {
     const existing = this.row(task.id);

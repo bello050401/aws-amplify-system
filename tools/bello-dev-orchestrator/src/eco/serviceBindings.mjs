@@ -16,6 +16,9 @@ import { modelKey } from "./taskRouting.mjs";
 import { existingAdapters } from "./existingAdapters.mjs";
 import { subscriptionTextWorker } from "./subscriptionTextWorker.mjs";
 import { createBrowserQaWorker, probeBrowserLaunch, ALLOWED_ACTIONS } from "./browserWorker.mjs";
+import {CuaQaBridge} from './cuaQaBridge.mjs';
+import {validateCuaProfile,CUA_ACTIONS} from '../pipeline/cuaBoundary.mjs';
+import {FROZEN_HTTP_MODE,isIsolatedLocalMode} from '../pipeline/frozenHttpFixture.mjs';
 
 /**
  * 常駐サービス結線。
@@ -150,7 +153,7 @@ function validateTargetAppProfile(profileId, entry, config) {
   } catch {
     throw Error("Profile qaUrl must be a valid URL");
   }
-  const localNext = entry.staging?.mode === "local-next-isolated";
+  const localNext = isIsolatedLocalMode(entry.staging?.mode);
   if ((localNext ? qaUrl.protocol !== "http:" || !isLoopback(qaUrl.hostname) : qaUrl.protocol !== "https:") || qaUrl.search || qaUrl.hash || qaUrl.username || qaUrl.password)
     throw Error("Profile qaUrl must be a bare HTTPS URL without credentials or query");
   if (!Array.isArray(entry.allowedDomains) || !entry.allowedDomains.length || !entry.allowedDomains.includes(qaUrl.hostname))
@@ -180,7 +183,10 @@ function validateTargetAppProfile(profileId, entry, config) {
   if (st.qaUrl !== entry.qaUrl) throw Error('Next.js QA URL does not match the approved target');
   }
   if (entry.allowedDomains.length !== 1 || entry.allowedDomains[0] !== qaUrl.hostname) throw Error('Next.js QA must use only its approved origin');
-  if (
+  if(entry.desktopCua){
+    validateCuaProfile(entry);
+    if(entry.playwright!==undefined)throw Error('CUA profile cannot declare a Playwright fallback');
+  }else if (
     !entry.playwright ||
     typeof entry.playwright.modulePath !== "string" ||
     !path.isAbsolute(entry.playwright.modulePath) ||
@@ -194,6 +200,7 @@ function validateTargetAppProfile(profileId, entry, config) {
     throw Error("Profile qaSteps.sequence must navigate first, include a reload, and end with a screenshot");
   if (sequence.some((s) => !validateStepShape(s)))
     throw Error("Profile qaSteps.sequence contains an unsupported or malformed step");
+  if(entry.desktopCua&&sequence.some(s=>!entry.desktopCua.allowedActions.includes(s.type)||s.target!==undefined))throw Error('CUA fixture QA action is outside explicit host-approved scope');
   if (!Number.isFinite(entry.qaSteps.maxTotalSeconds) || entry.qaSteps.maxTotalSeconds <= 0 || entry.qaSteps.maxTotalSeconds > 120)
     throw Error("Profile qaSteps.maxTotalSeconds must be within the bounded QA time budget (<=120s)");
   return { id: profileId, ...entry, configurationScope: "bounded-main", targetApp: profileId, evidenceMode: "staging" };
@@ -487,7 +494,7 @@ export function createStagingDelivery(options) {
   if (mode === 'local-build-evidence') return new LocalEvidenceDelivery(options);
   if (mode === 'static-smoke') return new AmplifyStaticDelivery(options);
   if (mode === 'real-staging') return new NextStagingDelivery(options);
-  if (mode === 'local-next-isolated') return new LocalNextDelivery(options);
+  if (isIsolatedLocalMode(mode)) return new LocalNextDelivery(options);
   throw Error('Unknown staging mode; no static or production fallback is permitted');
 }
 
@@ -559,7 +566,11 @@ export function createServiceBindings({
 
   const verifier = new IndependentVerifier({ config: effectiveConfig, paths, repo });
   const delivery = buildDelivery({ config: effectiveConfig, repo, verifier });
-  if (profile.staging.mode === 'local-next-isolated') {
+  const cuaBridge=profile.desktopCua?new CuaQaBridge({settings:profile.desktopCua,url:profile.qaUrl,evidenceRoot,verifyDeployment:async run=>{
+    const proof=await makeVerifyDeployedBuild({repo,delivery,assertIsolated,request})(run);if(!proof.ok)return proof;
+    try{const {fixtureActions,...boundary}=await delivery.inspectCuaBoundary(repo.getTask(run.task_id));return {...proof,boundary,fixtureActions};}catch(error){return {ok:false,reason:error.message};}
+  }}):null;
+  if (isIsolatedLocalMode(profile.staging.mode)) {
     verifier.assertSource = task => assertLocalNextSource(task);
     // Independently executed repository tests share the same enforced sandbox;
     // a stripped environment alone is insufficient filesystem/network isolation.
@@ -614,13 +625,13 @@ export function createServiceBindings({
   function capabilities() {
     const probes = readProbes();
     const stagingAvailable = delivery.available?.() ?? !delivery.revisionContract;
-    const localHostAvailable = profile.staging.mode !== 'local-next-isolated' || stagingAvailable;
+    const localHostAvailable = !isIsolatedLocalMode(profile.staging.mode) || stagingAvailable;
     return {
       implementationProvider,
       ...(implementationProvider === "codex" && { modelPolicy }),
       browserQa:
-        localHostAvailable && freshOk(probes.browser) && freshOk(probes.codex) && probes.codex.account === "chatgpt"
-          ? { connected: true, sessionScoped: false }
+        localHostAvailable && freshOk(probes.browser) && freshOk(probes.codex) && probes.codex.account === "chatgpt" && (!cuaBridge||cuaBridge.probe().ok)
+          ? { connected: true, sessionScoped: !!cuaBridge, ...(cuaBridge?{driver:'CUA',browserOsIsolation:'not-asserted'}:{}) }
           : { connected: false, reason: localHostAvailable ? describeStaleProbe(probes, ["browser", "codex"], "ブラウザQA") : 'Pinned local browser host is unavailable' },
       codex: freshOk(probes.codex) && probes.codex.account === "chatgpt"
         ? { connected: true }
@@ -637,8 +648,9 @@ export function createServiceBindings({
 
   /** ホストが自分のスケジュールで呼ぶ。この呼び出し以外で実probeは行わない。 */
   async function refreshProbes() {
-    const localHost = profile.staging.mode === 'local-next-isolated';
+    const localHost = isIsolatedLocalMode(profile.staging.mode);
     const browserProbe = async () => {
+      if(cuaBridge)return cuaBridge.probe();
       if (!profile.playwright) return { ok: true, reason: "この対象プロファイルはブラウザQAを使用しません" };
       if (localHost && delivery.capturesBrowser) {
         try { await delivery.probeBrowser(); return { ok: true }; }
@@ -949,7 +961,7 @@ export function createServiceBindings({
         });
 
   const qaVerify =
-    profile.evidenceMode === "local"
+    cuaBridge?cuaBridge.adapter():profile.evidenceMode === "local"
       ? makeLocalUiQaWorker("qaVerify")
       : createBrowserQaWorker({
           phase: "qaVerify",
@@ -1000,7 +1012,7 @@ export function createServiceBindings({
     runnerForModel: (selected) => {
       if (selected.provider !== implementationProvider) throw Error("Implementation provider is outside the connected profile");
       if (selected.provider === "codex") {
-        const codex = { ...effectiveConfig.codex, model: selected.model, reasoningEffort: selected.reasoningEffort };
+        const codex = { ...effectiveConfig.codex, model: selected.model, reasoningEffort: selected.reasoningEffort,...(cuaBridge?{scopedMxcFilesystem:true,protectedRoots:[profile.desktopCua.directory,path.dirname(profile.desktopCua.sessionPath),paths.evidenceDir]}:{}) };
         return new CodexRunner({ config: { ...effectiveConfig, codex }, paths, logger, execute, resolveExecutable: resolveCodex });
       }
       return new ClaudeRunner({ config: scopedClaudeConfig(effectiveConfig, selected.model, profile.allowedPaths), paths, logger });

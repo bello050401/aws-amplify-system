@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { DEFAULT_ROUTING, modelKey, validateRouting } from "./taskRouting.mjs";
 import { DEFAULT_CODEX_MODEL, DEFAULT_CODEX_EFFORT, validReasoningEffort } from "../runner/codexOptions.mjs";
+import {FROZEN_HTTP_MODE,isIsolatedLocalMode} from '../pipeline/frozenHttpFixture.mjs';
 function canonical(value) {
   return Array.isArray(value)
     ? value.map(canonical)
@@ -103,9 +104,9 @@ export function validateEco(input, capabilities = {}, { checkConnectedTarget = t
     c.rereadPrevention = false;
     warnings.push("キャッシュOFFのため再読込抑制は無効です");
   }
-  if (!['','static-smoke','real-staging','local-build-evidence','local-next-isolated'].includes(c.stagingMode)) throw Error('Unknown staging mode');
-  const localNext = c.stagingMode === 'local-next-isolated';
-  const localTarget = localNext && capabilities.staging?.connected === true && capabilities.staging.mode === 'local-next-isolated' && capabilities.staging.qaUrl === c.qaUrl;
+  if (!['','static-smoke','real-staging','local-build-evidence','local-next-isolated',FROZEN_HTTP_MODE].includes(c.stagingMode)) throw Error('Unknown staging mode');
+  const localNext = isIsolatedLocalMode(c.stagingMode);
+  const localTarget = localNext && capabilities.staging?.connected === true && capabilities.staging.mode === c.stagingMode && capabilities.staging.qaUrl === c.qaUrl;
   if (checkConnectedTarget && localNext && !localTarget) throw Error('Local Next.js requires the connected host-approved isolation target');
   if (
     !Array.isArray(c.allowedDomains) ||

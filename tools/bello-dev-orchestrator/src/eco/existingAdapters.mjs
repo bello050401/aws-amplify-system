@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { runGit } from "../core/git.mjs";
 import { fingerprint } from "../pipeline/verification.mjs";
+import {isIsolatedLocalMode} from '../pipeline/frozenHttpFixture.mjs';
 import { redactValue } from "../log/redact.mjs";
 import { routeModel, hash } from "./policy.mjs";
 import {
@@ -332,7 +333,7 @@ export function existingAdapters({
     const value = await task(run);
     if (!verifier.required || !verifier.settings.commands.length)
       throw Error("Independent test plan required");
-    const pinnedBundle = !!delivery?.settings?.hostBundle && delivery.settings.mode === 'local-next-isolated';
+    const pinnedBundle = !!delivery?.settings?.hostBundle && isIsolatedLocalMode(delivery.settings.mode);
     let source;
     if (pinnedBundle) {
       await assertIsolated(value, run);

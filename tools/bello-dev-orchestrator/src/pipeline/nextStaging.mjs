@@ -70,7 +70,9 @@ export async function readRevision({ settings, expected, request = fetch }) {
   if (!isRevision(expected?.revision) || !/^[a-f0-9]{64}$/.test(expected?.verificationFingerprint || '') || !['deploymentId','environmentId','dataScopeId'].every(key => nonempty(expected[key]))) throw Error('Complete expected revision identity is required');
   const url = new URL(settings.revisionPath, settings.qaUrl);
   // Never send the expected identifiers to an endpoint that might echo them.
-  url.searchParams.set('eco_check', randomUUID());
+  // Frozen CUA relays accept an exact reviewed path only. Unique deployment identity,
+  // no-store/no-cache and the surrounding live PID checks still reject stale responses.
+  if(!settings.desktopCua)url.searchParams.set('eco_check', randomUUID());
   const response = await request(url, { redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(15000), headers: { 'Cache-Control': 'no-cache' } });
   if (!response.ok || !/^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type') || '')) throw Error('Revision API is unavailable or is not JSON');
   if (response.url && new URL(response.url).origin !== url.origin) throw Error('Revision API left the approved origin');

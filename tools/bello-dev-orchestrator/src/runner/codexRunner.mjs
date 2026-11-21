@@ -6,7 +6,7 @@ import { COMPLETION_REPORT_SCHEMA, buildExecutionContract } from './reportSchema
 import { validate } from '../core/validate.mjs';
 import { redactText } from '../log/redact.mjs';
 import { runProcess, localEnvironment, writeEvidence } from '../pipeline/process.mjs';
-import { DEFAULT_CODEX_MODEL, DEFAULT_CODEX_EFFORT, reasoningEffortArg, restrictedCodexArgs } from './codexOptions.mjs';
+import { DEFAULT_CODEX_MODEL, DEFAULT_CODEX_EFFORT, reasoningEffortArg, restrictedCodexArgs,scopedMxcCodexArgs } from './codexOptions.mjs';
 import { classifyFailureText, REVIEW_FAILURE } from '../review/errors.mjs';
 
 export function resolveCodexExecutable(configured = 'codex', { env = process.env, platform = process.platform, lookup = spawnSync } = {}) {
@@ -37,18 +37,21 @@ export async function probeCodexLogin({ executable = 'codex', resolveExecutable 
   return { ok: false, reason: redactText(output || result.error || result.reason || 'ChatGPT subscription authentication required').slice(-2000) };
 }
 
-export function parseCodexEvents(result) {
+export function parseCodexEvents(result,{allowTerminalCleanup=false}={}) {
   const events = [];
   for (const line of String(result.stdout || '').split(/\r?\n/)) {
     if (!line.trim()) continue;
     try { events.push(JSON.parse(line)); } catch { /* Keep preceding complete events. */ }
   }
   const lastTurn = events.findLast(event => ['turn.completed', 'turn.failed'].includes(event?.type));
+  const terminalIndex=events.findLastIndex(event=>event?.type==='turn.completed');
+  const activeItems=new Set();for(const event of events){if(event.type==='item.started'&&event.item?.type!=='agent_message')activeItems.add(event.item?.id);if(event.type==='item.completed')activeItems.delete(event.item?.id);}
+  const cleanTerminal=terminalIndex>=0&&!events.slice(terminalIndex+1).some(event=>['error','turn.failed','item.started'].includes(event.type)||event.item?.type==='error')&&!activeItems.size;
   const usage = lastTurn?.usage ?? events.findLast(event => event?.type === 'turn.completed')?.usage;
   const totalTokens = [usage?.input_tokens, usage?.output_tokens].every(n => Number.isFinite(n) && n >= 0)
     ? usage.input_tokens + usage.output_tokens
     : null;
-  const completed = result.ok && lastTurn?.type === 'turn.completed';
+  const completed = (result.ok&&(!allowTerminalCleanup||cleanTerminal)||allowTerminalCleanup&&cleanTerminal&&result.reason==='terminal_turn_cleanup'&&result.terminalCleanup?.confirmed===true) && lastTurn?.type === 'turn.completed';
   const errorEvent = events.findLast(event => event?.type === 'error');
   const detail = lastTurn?.error?.message || errorEvent?.message || errorEvent?.error?.message
     || result.stderr || result.stdout || result.error || result.reason || 'No completed Codex turn';
@@ -92,7 +95,8 @@ export class CodexRunner {
   buildArgs({ workDir, schemaPath, reportPath }) {
     const model = this.config.codex?.model || DEFAULT_CODEX_MODEL;
     const effort = reasoningEffortArg(this.config.codex?.reasoningEffort, model);
-    return ['exec', ...restrictedCodexArgs('workspace-write'), '--model', model, '-c', effort,
+    const permissions=this.config.codex?.scopedMxcFilesystem===true?scopedMxcCodexArgs({workDir,reportDirectory:path.dirname(reportPath),protectedRoots:this.config.codex.protectedRoots??[]}):restrictedCodexArgs('workspace-write');
+    return ['exec', ...permissions, '--model', model, '-c', effort,
       '--cd', workDir, '--output-schema', schemaPath, '--output-last-message', reportPath, '-'];
   }
   async run({ task, instruction, shouldStop = () => false, onHeartbeat = () => {} }) {
@@ -109,10 +113,14 @@ export class CodexRunner {
     fs.writeFileSync(schemaPath, JSON.stringify(codexReportSchema()));
     const input = buildExecutionContract({ taskId: task.id, repoPath: task.repo_path, branch: task.branch, workDir: task.work_dir, isolation: task.isolation, baseCommit: task.base_commit }) + instruction;
     const started = Date.now();
-    const result = await this.execute({ file: executable, args: this.buildArgs({ workDir: task.work_dir, schemaPath, reportPath }), cwd: task.work_dir, env: localEnvironment(), input, timeoutMs: (this.config.codex?.timeoutSeconds || 3600) * 1000, shouldStop, onOutput: onHeartbeat });
+    const terminalComplete=this.config.codex?.scopedMxcFilesystem===true?stdout=>{
+      const events=parseCodexEvents({ok:true,stdout},{allowTerminalCleanup:true});if(!events.completed||!fs.existsSync(reportPath)||fs.statSync(reportPath).size>1024*1024)return false;
+      const report=omitNulls(JSON.parse(fs.readFileSync(reportPath,'utf8')));return report.taskId===task.id&&validate(report,COMPLETION_REPORT_SCHEMA).valid;
+    }:null;
+    const result = await this.execute({ file: executable, args: this.buildArgs({ workDir: task.work_dir, schemaPath, reportPath }), cwd: task.work_dir, env: localEnvironment(), input, timeoutMs: (this.config.codex?.timeoutSeconds || 3600) * 1000, shouldStop, onOutput: onHeartbeat,...(terminalComplete?{terminalComplete}:{}) });
     const stdoutPath = writeEvidence(directory, 'events.json', result);
-    const events = parseCodexEvents(result);
-    const outcome = { ...base, ...events, promptBytes: Buffer.byteLength(input), exitCode: result.exitCode, durationMs: Date.now() - started, stdoutPath, stderrTail: redactText(result.stderr || '').slice(-2000), terminationReason: events.completed ? 'completed' : result.reason || (result.exitCode === null && result.error ? 'spawn_failed' : 'crashed'), error: events.providerError || result.error };
+    const events = parseCodexEvents(result,{allowTerminalCleanup:this.config.codex?.scopedMxcFilesystem===true});
+    const outcome = { ...base, ...events, promptBytes: Buffer.byteLength(input), exitCode: result.exitCode, durationMs: Date.now() - started, stdoutPath,stderrTail: redactText(result.stderr || '').slice(-2000), terminationReason: events.completed ? result.reason==='terminal_turn_cleanup'?'completed_after_confirmed_cli_cleanup':'completed' : result.reason || (result.exitCode === null && result.error ? 'spawn_failed' : 'crashed'),...(result.terminalCleanup?{terminalCleanup:result.terminalCleanup}:{}), error: events.providerError || result.error };
     if (!events.completed) return outcome;
     try {
       if (fs.statSync(reportPath).size > 1024 * 1024) throw new Error('完了報告が大きすぎます');
