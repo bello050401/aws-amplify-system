@@ -7,6 +7,7 @@ import {EcoApi} from '../src/eco/api.mjs';
 import {createEcoRuntime} from '../src/eco/serviceRuntime.mjs';
 import {registerSystemErrorRepair,normalizeRepairEvent} from '../src/intake/systemErrors.mjs';
 import {SystemErrorBridge,assertLocalOrchestratorUrl} from '../src/intake/systemErrorBridge.mjs';
+import {repairDigest} from '../src/intake/systemErrorRouting.mjs';
 const event={id:'2026-11-21T01:00:00.000Z#'+'a'.repeat(64),code:'UI_UNHANDLED',surface:'web',operation:'render',component:'app',release:'abcdef123'};
 const contract={implementationProvider:'codex',stagingMode:'local-next-isolated',verificationRequired:true,requiresFrozenBundleReview:true,allowedPaths:['app/global-error.tsx'],profileId:'inventory_web',repoPath:'/repo'};
 const settings=()=>({version:1,config:{enabled:true,mode:'cooperative_eco',stagingMode:'local-next-isolated'},capabilities:{implementationProvider:'codex'}});
@@ -91,7 +92,7 @@ test('three crashed claims become actionable needs-operator without another disp
 test('actual runtime starts an atomically held system task and reflects terminal cancellation',async()=>{
   const store=await Store.open(':memory:'),repo=new Repo(store);installEcoSchema(store);
   const token='operator-test-token-12345678901234567890';
-  const bindings={systemErrorRepairContract:contract,capabilities:()=>({implementationProvider:'codex',codex:{connected:true},browserQa:{connected:true},staging:{connected:true,mode:'local-next-isolated',qaUrl:'http://127.0.0.1:49195/'}}),adapters:{},evidenceRoot:()=>'/fixture',safetyGate:async()=>({allowed:true}),prepareTask:task=>assert.equal(task.state,'paused')};
+  const bindings={resolveSystemErrorRepair:event=>{const snapshot={eventDigest:repairDigest(event)};return {status:'ready',contract,binding:{...snapshot,digest:repairDigest(snapshot)}};},capabilities:()=>({implementationProvider:'codex',codex:{connected:true},browserQa:{connected:true},staging:{connected:true,mode:'local-next-isolated',qaUrl:'http://127.0.0.1:49195/'}}),adapters:{},evidenceRoot:()=>'/fixture',safetyGate:async()=>({allowed:true}),prepareTask:task=>assert.equal(task.state,'paused')};
   const runtime=createEcoRuntime({store,repo,config:{execution:{provider:'codex'}},paths:{},logger:{error(){}},bindings,operatorToken:token});
   const s=runtime.repo.settings();runtime.repo.save({...s.config,enabled:true,mode:'cooperative_eco',stagingMode:'local-next-isolated',qaUrl:'http://127.0.0.1:49195/',allowedDomains:['127.0.0.1']},s.version,'fixture-config-system-error');repo.setPaused(false);
   const result=runtime.api.handle('POST','/api/eco/system-error',event,token);

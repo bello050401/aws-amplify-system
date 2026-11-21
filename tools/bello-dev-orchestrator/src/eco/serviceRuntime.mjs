@@ -251,7 +251,7 @@ export function createEcoRuntime({
     if (failure) throw failure.reason;
   }
 
-  const submitSystemError = input => registerSystemErrorRepair({input, repo, config, contract: bindings?.systemErrorRepairContract,
+  const submitSystemError = input => registerSystemErrorRepair({input, repo, config, resolveContract:bindings?.resolveSystemErrorRepair,
     settings: () => ecoStore.settings(), startHeldRun: input => startRun(input, {heldSystemError: true})});
   const api = new EcoApi({ store, operatorToken, capabilities, implementationProvider, engine, startRun, getRun, onControl: reflectFinishedRun, submitSystemError });
 

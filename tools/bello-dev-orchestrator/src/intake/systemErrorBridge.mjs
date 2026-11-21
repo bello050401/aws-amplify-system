@@ -48,6 +48,10 @@ export class SystemErrorBridge {
       catch {
         await this.queue.acknowledge(event.id, claimed.lease, 'NEEDS_OPERATOR', undefined, undefined, 'DISPATCH_FAILED'); summary.needsOperator++; continue;
       }
+      if(result?.status==='held'||!/^task_[a-z0-9]+$/.test(result?.taskId??'')||!/^eco_[a-z0-9]+$/.test(result?.runId??'')){
+        // Unsupported routing never falls through to the connected default profile.
+        await this.queue.acknowledge(event.id,claimed.lease,'NEEDS_OPERATOR',undefined,undefined,'PROFILE_REQUIRED');summary.needsOperator++;continue;
+      }
       // An ACK failure is deliberately not treated as dispatch failure. Replay
       // uses the same event/task/run idempotency keys after the lease expires.
       await this.queue.acknowledge(event.id, claimed.lease, 'DISPATCHED', result.taskId, result.runId, 'REGISTERED'); summary.dispatched++;

@@ -1,4 +1,5 @@
 import { STATES } from '../core/states.mjs';
+import {readRepairRoute,repairDigest} from './systemErrorRouting.mjs';
 
 const codes = ['UI_RENDER_FAILED','UI_UNHANDLED','API_SERVER_ERROR','SERVER_REQUEST_FAILED','PROCUREMENT_FETCH_FAILED','PROCUREMENT_ENRICH_FAILED','PROCUREMENT_REGISTER_FAILED','SALE_AUTOMATION_FAILED','SALE_LINK_FAILED','SALE_EC_UNCONFIRMED','SALE_DESKTOP_FAILED','SALE_IMPORT_FAILED','SALE_AUTH_REQUIRED','SALE_RATE_LIMITED','SALE_REMOTE_FORMAT_CHANGED'];
 const surfaces = ['web','native','server'];
@@ -24,9 +25,24 @@ export function assertSystemErrorRepairContract(contract, config) {
 
 /** Register held first. A process crash can leave a paused task, never a legacy
  * runnable task. Replay finds the same task/run even after an ACK was lost. */
-export function registerSystemErrorRepair({input, repo, config, contract, settings, startHeldRun}) {
+export function registerSystemErrorRepair({input, repo, config, contract, resolveContract, settings, startHeldRun}) {
   const event = normalizeRepairEvent(input);
   if (['SALE_AUTH_REQUIRED','SALE_RATE_LIMITED'].includes(event.code)) throw Error('Operational connection/capacity problem requires operator attention, not code repair');
+  let selection;
+  if(resolveContract){
+    const previous=repo.store.get('SELECT id FROM tasks WHERE idempotency_key=?',[`explicit:system-error:${event.id}`]);
+    if(previous){
+      const saved=readRepairRoute(repo,previous.id);
+      if(!saved||saved.binding.eventDigest!==repairDigest(event))throw Error('REPAIR_EVENT_BINDING_CHANGED');
+      const old=repo.store.get('SELECT id FROM eco_runs WHERE task_id=? ORDER BY rowid DESC LIMIT 1',[previous.id]);
+      // Acknowledgement replay is observation only, even after the host advances releases.
+      if(old)return {taskId:previous.id,runId:old.id,existing:true};
+    }
+    selection=resolveContract(event);
+    if(selection?.status!=='ready')return {status:'held',reason:selection?.reason??'REPAIR_HOST_PROFILE_REQUIRED'};
+    contract=selection.contract;
+    if(previous&&readRepairRoute(repo,previous.id)?.binding?.digest!==selection.binding.digest)throw Error('REPAIR_BINDING_CHANGED');
+  }else if(!contract)return {status:'held',reason:'REPAIR_HOST_PROFILE_REQUIRED'};
   assertSystemErrorRepairContract(contract, config);
   const current = settings();
   if (!current.config.enabled || !['cooperative_eco','fully_automatic'].includes(current.config.mode) || current.config.stagingMode !== 'local-next-isolated' || current.capabilities?.implementationProvider !== 'codex') throw Error('Approved local repair mode is not active');
@@ -39,6 +55,8 @@ export function registerSystemErrorRepair({input, repo, config, contract, settin
     'Do not change customer/inventory data, EC publishing, prices, IAM, credentials, authentication or permissions.',
     'Do not deploy production, send messages, buy services, use paid APIs, or bypass an approval gate.',
     'If the fixed diagnostic labels are insufficient, leave a concrete blocked finding; never invent a reproduction.',
+    'Patch only after a deterministic local synthetic reproduction identifies a source defect. An unconfirmed EC outcome permits diagnosis only until that proof exists; never replay an uncertain external write or alter live state as repair.',
+    'Preserve all fee, charge and cancellation guards. An intentional operational HOLD, including Yahoo STOP without a server-enforced no-fee guarantee, is not a defect to patch into dispatch.',
   ].join('\n');
   const task = repo.store.transaction(() => {
     const explicitKey = `explicit:system-error:${event.id}`;
@@ -52,12 +70,15 @@ export function registerSystemErrorRepair({input, repo, config, contract, settin
     }
     const result = repo.createTask({title: `System error ${event.code} / ${event.component}`, instruction, source: 'system', repoPath: contract.repoPath,
       explicitKey: `system-error:${event.id}`, maxAttempts: 1, maxRevisions: 1});
-    if (result.created) repo.setState(result.task.id, STATES.PAUSED, 'System error held for bounded cooperative repair', 'system', {});
+    if (result.created){
+      repo.setState(result.task.id, STATES.PAUSED, 'System error held for bounded cooperative repair', 'system', {});
+      if(selection)repo.checkpoint(result.task.id,'system_error_route',{event,binding:selection.binding});
+    }else if(selection&&readRepairRoute(repo,result.task.id)?.binding.digest!==selection.binding.digest)throw Error('REPAIR_BINDING_CHANGED');
     return repo.getTask(result.task.id);
   });
   const oldRun = repo.store.get('SELECT id FROM eco_runs WHERE task_id=? ORDER BY rowid DESC LIMIT 1', [task.id]);
   if (oldRun) return {taskId: task.id, runId: oldRun.id, existing: true};
-  const run = startHeldRun({taskId: task.id, revision: 'system-error-v1', acIds: ['ERROR-REPRO','ERROR-TEST','ERROR-REVIEW'], risk: 'low', expectedVersion: current.version,
+  const run = startHeldRun({taskId: task.id, revision:selection?'system-error-v2:'+selection.binding.digest:'system-error-v1', acIds: ['ERROR-REPRO','ERROR-TEST','ERROR-REVIEW'], risk:contract.risk??'low', expectedVersion: current.version,
     idempotencyKey: `system-error-run:${event.id}`, profileId: contract.profileId});
   return {taskId: task.id, runId: run.id, existing: false};
 }

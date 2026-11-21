@@ -16,6 +16,7 @@ import { modelKey } from "./taskRouting.mjs";
 import { existingAdapters } from "./existingAdapters.mjs";
 import { subscriptionTextWorker } from "./subscriptionTextWorker.mjs";
 import { createBrowserQaWorker, probeBrowserLaunch, ALLOWED_ACTIONS } from "./browserWorker.mjs";
+import {withSystemErrorRouting} from '../intake/systemErrorRouting.mjs';
 import {CuaQaBridge} from './cuaQaBridge.mjs';
 import {validateCuaProfile,CUA_ACTIONS} from '../pipeline/cuaBoundary.mjs';
 import {FROZEN_HTTP_MODE,isIsolatedLocalMode} from '../pipeline/frozenHttpFixture.mjs';
@@ -511,7 +512,6 @@ export function createServiceBindings({
   resolveCodex = resolveCodexExecutable,
 }) {
   const runtimeFile = path.join(paths.dataRoot, "eco-runtime.json");
-  const probesFile = path.join(paths.stateDir, "eco-probes.json");
   let profile = null;
   let loadError = null;
   try {
@@ -540,6 +540,17 @@ export function createServiceBindings({
       },
     };
   }
+
+  const options={config,paths,repo,logger,execute,launchBrowser,buildDelivery,request,resolveClaude,resolveCodex};
+  const base=createProfileBindings(options,profile);
+  return withSystemErrorRouting({base,profile,repo,buildBindings:(selected,infrastructure)=>createProfileBindings(options,selected,infrastructure)});
+}
+
+// Internal factory only. Subordinate repair scopes keep the single inventory_web
+// identity and execution boundary; each closure owns its exact paths/test plan.
+function createProfileBindings({config,paths,repo,logger,execute,launchBrowser,buildDelivery,request,resolveClaude,resolveCodex},profile,infrastructureProfile=profile){
+  const probesFile=path.join(paths.stateDir,'eco-probes.json');
+  const evidenceRoot=id=>path.join(paths.evidenceDir,id);
 
   // Bounded profiles may use their own verification/staging/model contract
   // (verification/staging/claude model), and only for the pieces below; the
@@ -612,7 +623,7 @@ export function createServiceBindings({
   function readProbes() {
     try {
       const saved = JSON.parse(fs.readFileSync(probesFile, "utf8"));
-      if (delivery.revisionContract && saved.profileHash !== hash(profile)) return {};
+      if (delivery.revisionContract && saved.profileHash !== hash(infrastructureProfile)) return {};
       return saved;
     } catch {
       return {};
@@ -675,7 +686,7 @@ export function createServiceBindings({
       probeStagingPreflight({ delivery }),
     ]);
     const at = Date.now();
-    const record = { profileHash: hash(profile), claude: { at, ...claude }, codex: { at, ...codex, ...(codex.ok && { account: "chatgpt" }) }, browser: { at, ...browser }, staging: { at, ...staging } };
+    const record = { profileHash: hash(infrastructureProfile), claude: { at, ...claude }, codex: { at, ...codex, ...(codex.ok && { account: "chatgpt" }) }, browser: { at, ...browser }, staging: { at, ...staging } };
     fs.mkdirSync(paths.stateDir, { recursive: true });
     fs.writeFileSync(probesFile, JSON.stringify(record, null, 2));
     return record;
@@ -1012,7 +1023,7 @@ export function createServiceBindings({
     runnerForModel: (selected) => {
       if (selected.provider !== implementationProvider) throw Error("Implementation provider is outside the connected profile");
       if (selected.provider === "codex") {
-        const codex = { ...effectiveConfig.codex, model: selected.model, reasoningEffort: selected.reasoningEffort,...(cuaBridge?{scopedMxcFilesystem:true,protectedRoots:[profile.desktopCua.directory,path.dirname(profile.desktopCua.sessionPath),paths.evidenceDir]}:{}) };
+        const codex = { ...effectiveConfig.codex, model: selected.model, reasoningEffort: selected.reasoningEffort,...(cuaBridge?{scopedMxcFilesystem:true,protectedRoots:[profile.desktopCua.directory,path.dirname(profile.desktopCua.sessionPath),paths.evidenceDir,path.join(paths.dataRoot,'eco-runtime.json')]}:{}) };
         return new CodexRunner({ config: { ...effectiveConfig, codex }, paths, logger, execute, resolveExecutable: resolveCodex });
       }
       return new ClaudeRunner({ config: scopedClaudeConfig(effectiveConfig, selected.model, profile.allowedPaths), paths, logger });
