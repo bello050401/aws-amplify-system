@@ -8,6 +8,8 @@ config.watchFolders.push(path.resolve(__dirname,"../lib/listing"));
 // Name search uses the same generated brand dictionary as the PC/server search.
 config.watchFolders.push(path.resolve(__dirname,"../lib/brands"));
 config.watchFolders.push(path.resolve(__dirname,"../components/inventory"));
+// Shared error reporting and procurement navigation must also be visible on clean CI installs.
+config.watchFolders.push(path.resolve(__dirname,"../lib/systemErrors"),path.resolve(__dirname,"../lib/procurement"));
 // Windows worktrees share dependencies through a junction. Metro must see its real target.
 const dependencyRoot=fs.realpathSync(path.resolve(__dirname,"node_modules"));
 if(dependencyRoot!==path.resolve(__dirname,"node_modules")){
