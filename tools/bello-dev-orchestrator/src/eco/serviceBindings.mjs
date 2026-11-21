@@ -9,7 +9,7 @@ import { ClaudeRunner } from "../runner/claudeRunner.mjs";
 import { IndependentVerifier } from "../pipeline/verification.mjs";
 import { AmplifyStaticDelivery, LocalEvidenceDelivery, digest } from "../pipeline/staticStaging.mjs";
 import { NextStagingDelivery, validateNextSettings } from "../pipeline/nextStaging.mjs";
-import { LocalNextDelivery, validateLocalNextSettings, assertIsolationProof, assertLocalNextSource, isLoopback } from "../pipeline/localNextStaging.mjs";
+import { LocalNextDelivery, validateLocalNextSettings, assertIsolationProof, assertIsolatedLocalSource, isLoopback } from "../pipeline/localNextStaging.mjs";
 import { runProcess, localEnvironment } from "../pipeline/process.mjs";
 import { DEFAULT_CODEX_MODEL_POLICY, hash } from "./policy.mjs";
 import { modelKey } from "./taskRouting.mjs";
@@ -571,7 +571,7 @@ export function createServiceBindings({
     try{const {fixtureActions,...boundary}=await delivery.inspectCuaBoundary(repo.getTask(run.task_id));return {...proof,boundary,fixtureActions};}catch(error){return {ok:false,reason:error.message};}
   }}):null;
   if (isIsolatedLocalMode(profile.staging.mode)) {
-    verifier.assertSource = task => assertLocalNextSource(task);
+    verifier.assertSource = task => assertIsolatedLocalSource(task,profile.staging);
     // Independently executed repository tests share the same enforced sandbox;
     // a stripped environment alone is insufficient filesystem/network isolation.
     verifier.execute = async (command, { worktree, fingerprint, plan }) => {

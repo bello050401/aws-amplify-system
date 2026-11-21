@@ -22,6 +22,21 @@ export function assertLocalNextSource(task, git = runGit) {
     throw Error('Local Next.js requires a sanitized source with no dotenv, production amplify_outputs.json or AWS credential paths');
 }
 
+/** Explicit HTTP fixture source omits only two committed templates; no dotenv bytes are admitted. */
+export function assertIsolatedLocalSource(task, settings, git = runGit) {
+  if(settings?.mode!==FROZEN_HTTP_MODE)return assertLocalNextSource(task,git);
+  const flags=git(task.work_dir,['ls-files','-v','-z']);
+  if(!flags.ok)throw Error('Cannot verify sparse template omissions');
+  const entries=new Set(flags.stdoutRaw.split('\0')),absent=new Set();
+  for(const name of ['.env.example','tools/bello-dev-orchestrator/.env.example']){
+    if(!entries.has('S '+name))continue;
+    try{fs.lstatSync(path.join(task.work_dir,name));}catch(error){if(error.code==='ENOENT')absent.add(name);else throw error;}
+  }
+  return assertLocalNextSource(task,(directory,args)=>{
+    const result=git(directory,args);return {...result,stdoutRaw:result.stdoutRaw.split('\0').filter(name=>!absent.has(name)).join('\0')};
+  });
+}
+
 export function validateLocalNextSettings(s) {
   const http=s?.mode===FROZEN_HTTP_MODE;if(http)validateSaleFixtureContract(s);
   if (!isIsolatedLocalMode(s?.mode) || s.enabled !== true || s.framework !== (http?'frozen-http-fixture':'nextjs') || s.isolatedDataConfirmed !== true || s.service !== 'inventory_web')
@@ -111,7 +126,7 @@ export class LocalNextDelivery extends NextStagingDelivery {
   get capturesBrowser() {
     return typeof this.host?.captureQaSession === 'function' && typeof this.host?.probeBrowser === 'function';
   }
-  source(task) { validateLocalNextSettings(this.settings); assertLocalNextSource(task,this.git); return verifiedSource(task, this.verifier, this.git); }
+  source(task) { validateLocalNextSettings(this.settings); assertIsolatedLocalSource(task,this.settings,this.git); return verifiedSource(task, this.verifier, this.git); }
   hasApprovedBundle(source) {
     try {
       this.checkHost();
