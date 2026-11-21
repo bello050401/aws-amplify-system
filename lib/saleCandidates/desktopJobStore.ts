@@ -38,9 +38,14 @@ export function createDesktopJobStore(db:Db,table:string,now=()=>Date.now()) {
  };
  const list=async(cursor?:string)=>{
   let start:undefined|{pk:string};
-  if(cursor){if(cursor.length>1000)throw Error('DESKTOP_CURSOR_INVALID');start=JSON.parse(Buffer.from(cursor,'base64url').toString());if(!start||Object.keys(start).join(',')!=='pk'||typeof start.pk!=='string'||start.pk.length>600)throw Error('DESKTOP_CURSOR_INVALID');}
-  const r=await db.send(new ScanCommand({TableName:table,Limit:100,ExclusiveStartKey:start,FilterExpression:'begins_with(pk,:p)',ExpressionAttributeValues:{':p':'SALE_DESKTOP#'},ConsistentRead:true}));
-  return {jobs:(r.Items??[]) as DesktopJob[],cursor:r.LastEvaluatedKey?Buffer.from(JSON.stringify(r.LastEvaluatedKey)).toString('base64url'):null};
+  if(cursor){if(cursor.length>1000)throw Error('DESKTOP_CURSOR_INVALID');try{start=JSON.parse(Buffer.from(cursor,'base64url').toString());}catch{throw Error('DESKTOP_CURSOR_INVALID');}if(!start||Object.keys(start).join(',')!=='pk'||typeof start.pk!=='string'||start.pk.length>600)throw Error('DESKTOP_CURSOR_INVALID');}
+  for(let page=0;page<8;page++){
+   const r=await db.send(new ScanCommand({TableName:table,Limit:100,ExclusiveStartKey:start,FilterExpression:'begins_with(pk,:p)',ExpressionAttributeValues:{':p':'SALE_DESKTOP#'},ConsistentRead:true}));
+   const jobs=(r.Items??[]) as DesktopJob[],next=r.LastEvaluatedKey;
+   if(jobs.length||!next||page===7)return {jobs,cursor:next?Buffer.from(JSON.stringify(next)).toString('base64url'):null};
+   start=next as {pk:string};
+  }
+  throw Error('DESKTOP_SCAN_UNREACHABLE');
  };
  const rebase=async(old:DesktopJob,request:DesktopRequest)=>{
   if(old.purpose!=='STOCK'||old.writeStartedAt||['COMPLETE','ATTENTION'].includes(old.state)||desktopJobId(request)!==old.id||!desktopCausalSnapshotMatches(old,request))throw Error('DESKTOP_REBASE_FORBIDDEN');

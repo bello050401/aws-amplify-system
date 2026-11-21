@@ -9,6 +9,24 @@ import type {SaleCandidate} from './model';
 const now=Date.parse('2026-11-21T00:00:00Z');
 const request:DesktopRequest={purpose:'STOCK',candidateId:'a'.repeat(64),inventoryId:'inventory-1',inventoryVersion:'v1',externalId:'mercari-1',title:'【在庫3】椅子',imageKeys:['inventory/chair.jpg'],orderId:'order-1',orderLineId:'line-1',targetQuantity:3};
 const proof=(job:DesktopJob,at=now):DesktopEvidence=>({snapshot:job.snapshot,externalId:job.externalId,inventoryId:job.inventoryId,orderId:job.orderId,orderLineId:job.orderLineId,observedTitle:'【在庫5】椅子',expectedImageKey:job.imageKeys[0],titleMatched:true,imageMatched:true,observedEvidenceRef:'screenshots/mercari-before.png',observedAt:new Date(at).toISOString(),observedQuantity:3,observedState:'ACTIVE'});
+test('desktop listing scans empty pages only, preserves the complete matching page and its cursor',async()=>{
+ const job=newDesktopJob(request,now),other=newDesktopJob({...request,candidateId:'b'.repeat(64)},now),keys=[{pk:'one'},{pk:'two'},{pk:'three'}],calls:ScanCommand[]=[];
+ const pages=[{Items:[],LastEvaluatedKey:keys[0]},{Items:[],LastEvaluatedKey:keys[1]},{Items:[job,other],LastEvaluatedKey:keys[2]}];
+ const store=createDesktopJobStore({send:async command=>{assert(command instanceof ScanCommand);calls.push(command);return pages[calls.length-1];}},'jobs');
+ const result=await store.list();assert.deepEqual(result.jobs,[job,other]);assert.equal(result.cursor,Buffer.from(JSON.stringify(keys[2])).toString('base64url'));assert.equal(calls.length,3);
+ assert.deepEqual(calls.map(c=>c.input.ExclusiveStartKey),[undefined,keys[0],keys[1]]);assert(calls.every(c=>c.input.Limit===100));
+});
+test('desktop listing returns an exact continuation after eight empty pages and resumes supplied cursor',async()=>{
+ const calls:ScanCommand[]=[],keys=Array.from({length:9},(_,i)=>({pk:'key-'+i})),cursor=Buffer.from(JSON.stringify(keys[0])).toString('base64url');
+ const store=createDesktopJobStore({send:async command=>{assert(command instanceof ScanCommand);calls.push(command);return {Items:[],LastEvaluatedKey:keys[calls.length]};}},'jobs');
+ const result=await store.list(cursor);assert.deepEqual(result.jobs,[]);assert.equal(calls.length,8);assert.deepEqual(calls[0].input.ExclusiveStartKey,keys[0]);assert.deepEqual(calls[7].input.ExclusiveStartKey,keys[7]);assert.equal(result.cursor,Buffer.from(JSON.stringify(keys[8])).toString('base64url'));
+});
+test('desktop listing stops at end of empty scan and rejects malformed cursors before database access',async()=>{
+ let calls=0;const store=createDesktopJobStore({send:async command=>{assert(command instanceof ScanCommand);calls++;return calls===1?{LastEvaluatedKey:{pk:'next'}}:{};}},'jobs');
+ assert.deepEqual(await store.list(),{jobs:[],cursor:null});assert.equal(calls,2);
+ for(const cursor of [Buffer.from('{bad').toString('base64url'),Buffer.from('{"other":"key"}').toString('base64url'),'x'.repeat(1001)])await assert.rejects(()=>store.list(cursor),/DESKTOP_CURSOR_INVALID/);
+ assert.equal(calls,2);
+});
 test('stable operation identity binds changing snapshot without creating another instruction',()=>{
  const j=newDesktopJob(request,now),next={...request,inventoryVersion:'v2'};
  assert.equal(desktopJobId(request),desktopJobId(next));assert.notEqual(j.snapshot,desktopSnapshot(next));
