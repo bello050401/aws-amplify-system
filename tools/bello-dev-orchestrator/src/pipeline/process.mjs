@@ -36,6 +36,20 @@ export function runProcess({ file, args = [], cwd, env = localEnvironment(), inp
         if(why==='terminal_turn_cleanup')cleanup={requestedAt:new Date().toISOString(),method:'non-Windows cleanup not approved for CUA/MXC',pid:child.pid,killExitCode:null,treeGone:false};
       }
     };
+    // The CLI may publish its durable report after its final stdout event.
+    // Recheck the caller's unchanged proof predicate while the owned process
+    // stays alive, and again before cleanup in case a late failure invalidated it.
+    const checkTerminal = () => {
+      if (!terminalComplete || terminalTimer || reason || settled) return;
+      try {
+        if (terminalComplete(stdout)) terminalTimer = setTimeout(() => {
+          terminalTimer = null;
+          if (reason || settled) return;
+          try { if (terminalComplete(stdout)) stop('terminal_turn_cleanup'); }
+          catch { /* An invalidated/missing report cannot authorize cleanup. */ }
+        }, 1500);
+      } catch { /* Incomplete durable proof stays subject to the normal timeout. */ }
+    };
     for (const [stream, isError] of [[child.stdout,false],[child.stderr,true]]) {
       stream.setEncoding('utf8');
       stream.on('data', chunk => {
@@ -43,7 +57,7 @@ export function runProcess({ file, args = [], cwd, env = localEnvironment(), inp
         if (bytes > maxBytes) { stop('output_limit'); return; }
         const value = chunk.toString('utf8');
         if (isError) stderr += value; else stdout += value;
-        if(!isError&&terminalComplete&&!terminalTimer&&!reason){try{if(terminalComplete(stdout))terminalTimer=setTimeout(()=>stop('terminal_turn_cleanup'),1500);}catch{/* Missing/invalid durable report cannot trigger successful cleanup. */}}
+        if (!isError) checkTerminal();
         onOutput();
       });
     }
@@ -53,7 +67,7 @@ export function runProcess({ file, args = [], cwd, env = localEnvironment(), inp
     child.stdin.on('error', () => {});
     child.stdin.end(input);
     timer = setTimeout(() => stop('timeout'), timeoutMs);
-    stopTimer = setInterval(() => { if (shouldStop()) stop('stopped'); }, 250);
+    stopTimer = setInterval(() => { if (shouldStop()) stop('stopped'); else checkTerminal(); }, 250);
   });
 }
 

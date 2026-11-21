@@ -21,6 +21,21 @@ test('CUA-only terminal cleanup preserves actual nonzero transport exit and prov
  const result=await runProcess({file:process.execPath,args:['-e',`console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:1,output_tokens:1}}));setInterval(()=>{},1000);`],timeoutMs:10000,terminalComplete:stdout=>parseCodexEvents({ok:true,stdout}).completed});
  assert.equal(result.reason,'terminal_turn_cleanup');assert.equal(result.ok,false);assert.equal(result.terminalCleanup.confirmed,true);assert.equal(result.terminalCleanup.rootExited,true);assert.notEqual(result.exitCode,0);assert.equal(parseCodexEvents(result).completed,false);assert.equal(parseCodexEvents(result,{allowTerminalCleanup:true}).completed,true);
 });
+test('terminal cleanup notices a durable report arriving after the final stdout chunk',async t=>{
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'bello-late-report-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));const report=path.join(root,'report.json');
+ const code=`const fs=require('fs');console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:1,output_tokens:1}}));setTimeout(()=>fs.writeFileSync(process.argv[1],JSON.stringify({taskId:'fixture'})),300);setInterval(()=>{},1000);`;
+ const result=await runProcess({file:process.execPath,args:['-e',code,report],timeoutMs:6000,terminalComplete:stdout=>parseCodexEvents({ok:true,stdout},{allowTerminalCleanup:true}).completed&&fs.existsSync(report)&&JSON.parse(fs.readFileSync(report)).taskId==='fixture'});
+ assert.equal(result.reason,'terminal_turn_cleanup');assert.equal(result.terminalCleanup.confirmed,true);assert.equal(result.terminalCleanup.rootExited,true);assert.notEqual(result.exitCode,0);assert.equal(parseCodexEvents(result,{allowTerminalCleanup:true}).completed,true);
+});
+test('terminal cleanup rechecks late failure before its grace period ends',async()=>{
+ const code=`console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:1,output_tokens:1}}));setTimeout(()=>console.log(JSON.stringify({type:'error',message:'late failure'})),300);setInterval(()=>{},1000);`;
+ const result=await runProcess({file:process.execPath,args:['-e',code],timeoutMs:2400,terminalComplete:stdout=>parseCodexEvents({ok:true,stdout},{allowTerminalCleanup:true}).completed});
+ assert.equal(result.reason,'timeout');assert.equal(result.terminalCleanup,null);assert.equal(parseCodexEvents(result,{allowTerminalCleanup:true}).completed,false);
+});
+test('ordinary process calls never gain report-based terminal cleanup',async()=>{
+ const code=`console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:1,output_tokens:1}}));setInterval(()=>{},1000);`;
+ const result=await runProcess({file:process.execPath,args:['-e',code],timeoutMs:400});assert.equal(result.reason,'timeout');assert.equal(result.terminalCleanup,undefined);
+});
 test('tool-output terminal text, unconfirmed cleanup and real timeout cannot masquerade as a completed turn',()=>{
  const terminal=JSON.stringify({type:'turn.completed',usage:{input_tokens:1,output_tokens:1}});
  for(const r of [{ok:false,reason:'timeout',stdout:terminal},{ok:false,reason:'terminal_turn_cleanup',terminalCleanup:{confirmed:false},stdout:terminal},{ok:false,reason:'terminal_turn_cleanup',terminalCleanup:{confirmed:true},stdout:JSON.stringify({type:'item.completed',item:{type:'command_execution',aggregated_output:terminal}})},{ok:false,reason:'terminal_turn_cleanup',terminalCleanup:{confirmed:true},stdout:terminal+'\n'+JSON.stringify({type:'turn.failed'})},{ok:false,reason:'terminal_turn_cleanup',terminalCleanup:{confirmed:true},stdout:terminal+'\n'+JSON.stringify({type:'error',message:'late failure'})}])assert.equal(parseCodexEvents(r,{allowTerminalCleanup:true}).completed,false);
