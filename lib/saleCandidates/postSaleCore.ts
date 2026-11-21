@@ -21,6 +21,7 @@ export type {PostSalePlan} from './postSaleModel';
 export class PostSaleError extends Error { constructor(message:string){super(message);this.name='PostSaleError';} }
 
 const channels=['BASE','MERCARI_SHOPS','YAHOO'] as const;
+const yahooFeeHold='ヤフオクの手数料なし取消を確認できないため、自動停止を保留しています。ヤフオクで入札状況・手数料・停止結果を確認してください。売却登録は保存済みです。';
 const fromMarket=(market:string):EcChannel|null=>market==='ベイス'?'BASE':market==='メルカリSHOP'?'MERCARI_SHOPS':market==='ヤフオク'?'YAHOO':null;
 async function context(candidateId:string){
  const c=await candidateStore().get(candidateId);if(c?.state!=='DONE'||!c.result)throw new PostSaleError('売却登録を先に完了してください。');
@@ -71,7 +72,7 @@ export async function reviewPostSaleCore(ports:PostSalePorts,candidateId:string,
  const {c,source,soldChannel,soldPack}=await context(candidateId);
  const started=new Set(await Promise.all((old?.rows??[]).filter(r=>r.adjustment).map(async r=>await saleAdjustmentStarted(r.adjustment!)?r.channel:null)));
  const resuming=old?.rows.some(r=>started.has(r.channel)&&r.state!=='DONE');
- const observed=await (resuming?Promise.resolve<Awaited<ReturnType<typeof reviewSaleBinding>>>({remote:null,reviews:{}}):reviewSaleBinding(source.id,actor,c.result!.remainingQuantity===0?channels.filter(channel=>channel!==soldChannel):[])).catch((e:unknown)=>{
+ const observed=await (resuming?Promise.resolve<Awaited<ReturnType<typeof reviewSaleBinding>>>({remote:null,reviews:{}}):reviewSaleBinding(source.id,actor,c.result!.remainingQuantity===0?channels.filter(channel=>channel!==soldChannel&&!(ports.automatic&&channel==='YAHOO')):[])).catch((e:unknown)=>{
   const code=String((e as {code?:string;name?:string})?.code||(e as Error)?.name||'Unknown');
   console.error('SALE_EC_REVIEW_FAILED',{phase:'binding',code:/^[A-Za-z_]{1,64}$/.test(code)?code:'Unknown'});
   throw new PostSaleError('売却登録と保存済みの紐付けは保持されています。eコンビニの最新状態を取得できませんでした。少し待って「結果を再確認」を押してください。');
@@ -83,6 +84,7 @@ export async function reviewPostSaleCore(ports:PostSalePorts,candidateId:string,
  for(const channel of channels){
   const prior=old?.rows.find(r=>r.channel===channel);
   if(prior?.state==='DONE'){rows.push(prior);continue;}
+  if(ports.automatic&&channel==='YAHOO'&&prior?.operation==='STOP'&&prior.state==='VERIFY_REQUIRED'){rows.push({...prior,message:yahooFeeHold});continue;}
   // The requested remainder policy deliberately keeps an unsold Yahoo page running.
   if(ports.automatic&&channel==='YAHOO'&&channel!==soldChannel&&c.result!.remainingQuantity>0)continue;
   if(ports.automatic&&channel==='MERCARI_SHOPS'){
@@ -120,6 +122,8 @@ export async function reviewPostSaleCore(ports:PostSalePorts,candidateId:string,
   }
   if(!prepared&&channel!=='BASE'&&(fresh?fresh.state!=='ACTIVE':linked.state!=='ACTIVE')&&!prior)continue;
   if(c.result!.remainingQuantity===0){
+   // eConveni cancellation has no server-side no-fee constraint. A sale grants no fee approval.
+   if(ports.automatic&&channel==='YAHOO'){rows.push({channel,externalId:linked.externalId,operation:'STOP',state:'BLOCKED',message:yahooFeeHold,currentState:'自動停止保留'});continue;}
    const review=prepared??await ports.reviewStop(source.id,channel,actor);
    rows.push({channel,externalId:linked.externalId,operation:'STOP',state:review.status==='READY'?'READY':review.status==='DONE'?'DONE':'BLOCKED',message:review.message,review,currentState:review.status==='DONE'?'停止中':fresh?.state==='ACTIVE'?'出品中':'状態確認'});
   }else if(channel==='BASE'){
@@ -167,7 +171,8 @@ export async function executePostSaleCore(ports:PostSalePorts,candidateId:string
  if(resume){
   // An interrupted external call is observed first. Durable child receipts prevent replay.
   for(const row of p.rows.filter(r=>r.state==='VERIFY_REQUIRED')){
-   if(row.adjustment)row.state='READY';
+   if(ports.automatic&&row.channel==='YAHOO'&&row.operation==='STOP'){row.message=yahooFeeHold;}
+   else if(row.adjustment)row.state='READY';
    else if(row.operation==='STOP'&&row.review){const r=await ports.executeStop(row.review,actor);row.message=r.message;if(r.status==='DONE')row.state='DONE';}
    else if(row.channel==='BASE'){const r=await readBaseItem(row.externalId);if(r.quantity===row.targetQuantity&&r.title===row.targetTitle){row.state='DONE';row.message='前回の数量更新を確認しました。';}}
   }
@@ -175,6 +180,8 @@ export async function executePostSaleCore(ports:PostSalePorts,candidateId:string
  }
  for(const row of p.rows){
   if(row.state!=='READY')continue;
+  // Protect older persisted plans too; never send a fee-unsafe automatic cancellation.
+  if(ports.automatic&&row.channel==='YAHOO'&&row.operation==='STOP'){row.state='BLOCKED';row.message=yahooFeeHold;await persist(p);continue;}
   // Record an uncertain outcome before crossing the external boundary. Repeating the request cannot resend it.
   row.state='VERIFY_REQUIRED';row.message='変更結果を確認中です。';await persist(p);
   try{
