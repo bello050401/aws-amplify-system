@@ -4,7 +4,7 @@ import {GetCommand,type TransactWriteCommandInput} from '@aws-sdk/lib-dynamodb';
 import {inventoryTable,getInventoryRaw} from '@/lib/inventory/categoryPersistence';
 import {candidateStore,candidateConfig} from '@/lib/saleCandidates/store';
 import {runAutomaticYahooStop,automaticYahooStopKey,type AutomaticYahooStopRequest,type AutomaticYahooStopReceipt,type AutomaticYahooStopBinding,type AutomaticYahooStopResult} from '@/lib/saleCandidates/automaticYahooStopCore';
-import {readYahooRuntimeSession,yahooRuntimeConfig} from '../yahooAuction/webHttpRuntime';
+import {readYahooRuntimeSession,yahooRuntimeConfig} from '@/lib/listing/yahooAuction/webHttpRuntime';
 import {econveniDatabase as db,ECONVENI_WORKFLOW_TABLE as table,econveniStore} from './runtimeStore';
 import {readManualSync} from './manualSync';
 import {selectManualLink,manualLinkKey} from './manualSyncModel';

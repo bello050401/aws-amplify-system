@@ -161,6 +161,7 @@ const saleAutomation=new NodejsFunction(saleStack,'SaleAutomation',{
   '--alias:@/lib/amplify/serverUtils':path.resolve('amplify/functions/inquiry-runtime/webBoundary.ts'),
   '--alias:@/lib/saleCandidates/store':path.resolve('amplify/functions/sale-automation/store.ts'),
   '--alias:@/lib/listing/ecImage':path.resolve('amplify/functions/sale-automation/noPublishImages.ts'),
+  '--alias:@/lib/listing/yahooAuction/webHttpRuntime':path.resolve('amplify/functions/sale-automation/yahooRuntime.ts'),
  }},
  environment:{NODE_ENV:'production',SALE_CANDIDATES_TABLE:purchaseTable.tableName,USER_POOL_ID:backend.auth.resources.userPool.userPoolId,
   CONVERSATION_TABLE_NAME:backend.data.resources.tables.Conversation.tableName,
@@ -355,6 +356,7 @@ if (process.env.AWS_APP_ID === "d4hkkg7dty2du" &&
     statements: [new PolicyStatement({ actions: ["secretsmanager:GetSecretValue"], resources: [yahooSession.secretArn] }),
       new PolicyStatement({actions:["dynamodb:GetItem","dynamodb:PutItem","dynamodb:UpdateItem","dynamodb:ConditionCheckItem"],resources:[yahooState.tableArn]})],
   });
+  saleAutomation.addEnvironment('YAHOO_WEB_STATE_TABLE',yahooState.tableName);
   backend.addOutput({custom:{yahooHttps:{region:yahooStack.region,secretArn:yahooSession.secretArn,stateTable:yahooState.tableName}}});
 
   const procurementStack = backend.createStack("ProcurementImport");
