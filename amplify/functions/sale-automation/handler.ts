@@ -10,6 +10,7 @@ import {exactListingInventoryIds} from '../../../lib/saleCandidates/listingMatch
 import {getEcListingCatalogCore} from '../../../lib/listing/ecCatalogCore';
 import {reviewPostSaleCore,executePostSaleCore,type PostSalePorts} from '../../../lib/saleCandidates/postSaleCore';
 import {stopListing} from '../../../lib/listing/stopService';
+import {automaticYahooStop} from '../../../lib/listing/econveni/automaticYahooStop';
 import {createSoldOutService} from '../../../lib/inventory/soldOutCore';
 import {createYahooPaymentStockPorts} from '../../../lib/saleCandidates/yahooPaymentStock';
 import {yahooPaymentPlan} from '../../../lib/saleCandidates/yahooPaymentModel';
@@ -31,7 +32,7 @@ import {reportSaleAutomationFailure} from '../../../lib/saleCandidates/errorRepo
 const required=(name:string)=>{const v=process.env[name];if(!v)throw Error('SALE_CONFIGURATION_MISSING');return v;};
 const table=()=>required('SALE_CANDIDATES_TABLE');
 const actor='BELLO_SALE_AUTOMATION';
-const ec:PostSalePorts={automatic:true,releaseStock:(id,candidate)=>releaseAutomationStock(db,table(),id,candidate),desktopMercari:postSaleMercari,desktopMercariComplete:postSaleMercariComplete,catalog:id=>getEcListingCatalogCore('ADMIN',id),reviewStop:stopListing,executeStop:(r,a)=>stopListing(r.inventoryId,r.channel,a,r.token)};
+const ec:PostSalePorts={automatic:true,automaticYahooStop,releaseStock:(id,candidate)=>releaseAutomationStock(db,table(),id,candidate),desktopMercari:postSaleMercari,desktopMercariComplete:postSaleMercariComplete,catalog:id=>getEcListingCatalogCore('ADMIN',id),reviewStop:stopListing,executeStop:(r,a)=>stopListing(r.inventoryId,r.channel,a,r.token)};
 const confirmedEc:PostSalePorts={...ec,automatic:false,background:true};
 const machineErrors=new Set(['BASE_ORDER_VERIFY_FAILED','BASE_ORDER_CHANGED','YAHOO_SALE_AUTH_REQUIRED','YAHOO_SALE_ACCESS_DENIED','YAHOO_SALE_RATE_LIMITED','YAHOO_SALE_FORM_CHANGED','YAHOO_SALE_READ_UNAVAILABLE','SALE_RESULT_UNCONFIRMED','SALE_SKU_FAILED','SALE_CONFIGURATION_MISSING','AUTH_REQUIRED','ADDITIONAL_AUTH','SESSION_EXPIRED','RATE_LIMITED','VERIFY_REQUIRED','STATE_UNAVAILABLE','WAIT_INTERVAL','BUSY_OR_STOPPED']);
 const safeCode=(e:unknown)=>{const error=e as {code?:string;name?:string;message?:string};if(error?.message&&machineErrors.has(error.message))return error.message;const v=error?.code||error?.name;return v&&/^[A-Za-z0-9_]{1,64}$/.test(v)?v:'UNCONFIRMED';};

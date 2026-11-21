@@ -85,6 +85,11 @@ export class EconveniWorkflowStore {
     if(next.inventoryId!==this.inventoryId||!new RegExp('^ECONVENI#SALE_ADJUST#'+this.inventoryId+'#[a-f0-9]{64}#(BASE|YAHOO)$').test(next.pk)||previous&&previous.pk!==next.pk)throw new EconveniWorkflowError('INVALID_TRANSITION');
     return this.commitRecord(previous,next,reserveSend,checks);
   }
+  async commitAutomaticYahooStop<T extends {pk:string;inventoryId:string;revision:number;updatedAt:string}>(previous:T|null,next:T,checks:NonNullable<TransactWriteCommandInput['TransactItems']>,reserveSend=false):Promise<T>{
+    const prefix='ECONVENI#AUTO_YAHOO_STOP#'+this.inventoryId+'#';
+    if(next.inventoryId!==this.inventoryId||!next.pk.startsWith(prefix)||!/^[a-f0-9]{64}$/.test(next.pk.slice(prefix.length))||previous&&previous.pk!==next.pk)throw new EconveniWorkflowError('INVALID_TRANSITION');
+    return this.commitRecord(previous,next,reserveSend,checks);
+  }
   async commitNative<T extends {pk:string;inventoryId:string;revision:number;updatedAt:string}>(previous:T|null,next:T,checks:NonNullable<TransactWriteCommandInput['TransactItems']>,reserveSend=false):Promise<T>{
     if(next.inventoryId!==this.inventoryId||!next.pk.startsWith('ECONVENI#NATIVE_RECEIPT#')||previous&&previous.pk!==next.pk)throw new EconveniWorkflowError('INVALID_TRANSITION');
     return this.commitRecord(previous,next,reserveSend,checks);

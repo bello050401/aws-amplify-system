@@ -1,0 +1,46 @@
+const {build}=require('esbuild'),vm=require('node:vm'),assert=require('node:assert/strict');
+(async()=>{
+ const built=await build({stdin:{contents:"export {automaticYahooStop} from './lib/listing/econveni/automaticYahooStop';export {EconveniWorkflowStore} from './lib/listing/econveni/workflowStore';",resolveDir:process.cwd(),loader:'ts'},bundle:true,platform:'node',format:'cjs',write:false,plugins:[{name:'isolated-runtime',setup(b){b.onResolve({filter:/.*/},a=>a.kind==='entry-point'||['./lib/listing/econveni/automaticYahooStop','./lib/listing/econveni/workflowStore','@/lib/saleCandidates/automaticYahooStopCore','./accountWorkflow','./manualStopCore','./manualSyncModel'].includes(a.path)?undefined:{path:a.path,external:true});}}]});
+ const id='10000000-0000-4000-a000-000000000001',candidateId='a'.repeat(64),auction='a1234567890',request={inventoryId:id,candidateId,inventoryVersion:'v1',externalId:auction};
+ let rows,owned,puts,cancels,readDenied,race,lostAck,auth,flow,remote,mod;
+ const key=(table,k)=>table+':'+JSON.stringify(k),read=(table,k)=>rows.get(key(table,k)),put=(table,k,value)=>rows.set(key(table,k),value);
+ const stock=()=>read('Inventory',{id}),candidate=()=>read('candidates',{id:candidateId});
+ const reset=()=>{rows=new Map();owned={auctionId:auction,title:'Synthetic chair',priceYen:1000,quantity:1,status:'open',bids:0,bidders:0,highestBidders:0,owned:true,checkedAt:new Date().toISOString()};puts=0;cancels=0;readDenied=null;race=null;lostAck=false;auth=true;flow=null;remote={productId:'123',inventoryMarker:id,channels:{YAHOO:{listingId:auction,state:'ACTIVE'}}};put('Inventory',{id},{id,name:'Sold chair',updatedAt:'v1',quantity:1});put('candidates',{id:candidateId},{id:candidateId,state:'DONE',channel:'BASE',updatedAt:'c1',result:{sourceId:id,soldId:id,soldQuantity:1,remainingQuantity:0}});put('ec',{pk:'ECONVENI#MANUAL_LINK#'+id},{inventoryId:id,productId:'123',revision:1,baseline:{YAHOO:{listingId:auction,state:'ACTIVE'}},inventoryName:'chair'});put('ec',{pk:'ECONVENI#MANUAL_OWNER#123'},{inventoryId:id});};
+ const condition=(table,k,expr,v={})=>{const row=read(table,k);if(expr.startsWith('attribute_not_exists(')){if(row)throw Error('conditional');return;}
+  if(expr.includes('#owner=:owner')&&(row?.owner!==v[':owner']||row.leaseUntil<=v[':now']||row.blockedReason))throw Error('lease changed');
+  if(expr.includes('lastSentAt <= :cutoff')&&row?.lastSentAt>v[':cutoff'])throw Error('interval');
+  if(expr.includes('revision=:revision')&&row?.revision!==v[':revision']||expr.includes('revision=:r')&&!expr.includes('revision=:revision')&&row?.revision!==v[':r'])throw Error('revision changed');
+  if(expr.includes('updatedAt=:v')&&row?.updatedAt!==v[':v'])throw Error('source changed');
+  if(expr.includes('inventoryId=:id')&&row?.inventoryId!==v[':id']||expr.includes('productId=:p')&&row?.productId!==v[':p'])throw Error('binding changed');
+  if(expr.includes('#s=:done')&&row?.state!==v[':done']||expr.includes('#p=:complete')&&row?.phase!==v[':complete'])throw Error('prior outcome changed');
+  if(expr.includes('jobId=:j')&&(row?.jobId!==v[':j']||row.active!==false))throw Error('native changed');
+  if(expr.includes('isDeleted')&&row?.isDeleted||expr.includes('deletedAt')&&row?.deletedAt)throw Error('deleted');
+ };
+ const db={send:async command=>{const x=command.input,name=command.constructor.name;if(name==='GetCommand'){if(x.TableName===readDenied)throw Object.assign(Error('denied'),{name:'AccessDeniedException'});return{Item:read(x.TableName,x.Key)};}
+  if(name==='UpdateCommand'){const old=read(x.TableName,x.Key)||{},v=x.ExpressionAttributeValues;if(x.UpdateExpression.startsWith('SET #owner')){if(old.blockedReason||old.leaseUntil>=v[':now'])throw Error('busy');put(x.TableName,x.Key,{...old,owner:v[':owner'],leaseUntil:v[':until']});}else if(x.UpdateExpression.startsWith('REMOVE #owner')){if(old.owner===v[':owner']){delete old.owner;delete old.leaseUntil;}}return{};}
+  assert.equal(name,'TransactWriteCommand');const reserve=x.TransactItems.some(w=>w.Update?.UpdateExpression.includes('lastSentAt'));if(reserve&&race){race();race=null;}
+  for(const w of x.TransactItems){const a=w.ConditionCheck??w.Put??w.Update;condition(a.TableName,a.Key??{pk:a.Item.pk},a.ConditionExpression,a.ExpressionAttributeValues);}
+  for(const w of x.TransactItems)if(w.Put)put(w.Put.TableName,{pk:w.Put.Item.pk},structuredClone(w.Put.Item));else if(w.Update){const a=w.Update,old=read(a.TableName,a.Key);old.lastSentAt=a.ExpressionAttributeValues[':now'];old.leaseUntil=a.ExpressionAttributeValues[':until'];}
+  if(reserve&&lostAck)throw Error('lost reservation acknowledgement');return{};
+ }};
+ const sdk=require('@aws-sdk/lib-dynamodb');class EconveniHttpError extends Error{constructor(code){super(code);this.code=code;}}
+ const mods={'server-only':{},'node:crypto':require('node:crypto'),'@aws-sdk/lib-dynamodb':sdk,
+  '@/lib/inventory/categoryPersistence':{inventoryTable:n=>n,getInventoryRaw:async()=>stock()},
+  '@/lib/saleCandidates/store':{candidateConfig:()=>({tableName:'candidates'}),candidateStore:()=>({get:async()=>candidate()})},
+  '../yahooAuction/webHttpRuntime':{yahooRuntimeConfig:()=>({stateTable:'legacy-state'}),readYahooRuntimeSession:async()=>auth?{ok:true,session:{inspectListing:async()=>({ok:true,value:{...owned,checkedAt:new Date().toISOString()}}),cancelListingWithoutFee:async(_id,_expected,beforeSend)=>{cancels++;await beforeSend();const receipt=[...rows.entries()].find(([k])=>k.includes('AUTO_YAHOO_STOP'))?.[1];assert.equal(receipt?.state,'SEND_RESERVED');puts++;owned.status='cancelled';return{ok:true,value:{...owned,checkedAt:new Date().toISOString()}};}}}:{ok:false,code:'AUTH_REQUIRED'}},
+  '../yahooAuction/workflowStore':{uncertainStage:s=>['IMAGE_PENDING','PUBLISH_PENDING','CANCEL_PENDING','VERIFY_REQUIRED'].includes(s)},
+  './runtimeStore':{econveniDatabase:db,ECONVENI_WORKFLOW_TABLE:'ec',econveniStore:()=>{const store=new mod.exports.EconveniWorkflowStore(id,db,'ec');store.read=async()=>flow;return store;}},
+  './manualSync':{readManualSync:async()=>({snapshot:{products:[remote]},links:[read('ec',{pk:'ECONVENI#MANUAL_LINK#'+id})]})},
+  './httpSession':{EconveniHttpError,EconveniHttpSession:class{async login(){}dispose(){}async readExternalProduct(){return remote;}}},
+  './credentials':{econveniCredentialStore:{credentials:async()=>({loginId:'synthetic',password:'synthetic'})}},
+ };
+ mod={exports:{}};vm.runInNewContext(built.outputFiles[0].text,{module:mod,exports:mod.exports,require:n=>{if(!(n in mods))throw Error('Unexpected dependency '+n);return mods[n];},Date,Map,Set,console});const run=extra=>mod.exports.automaticYahooStop({...request,...extra});
+ reset();assert.equal((await run()).status,'DONE');assert.equal(puts,1);assert.equal([...rows.values()].find(r=>r.pk?.includes('AUTO_YAHOO_STOP')).bindingKind,'ECONVENI_ONLY');await run();assert.equal(puts,1);
+ for(const setup of [()=>{put('ec',{pk:'ECONVENI#ACCOUNT'},{blockedReason:'ADDITIONAL_AUTH'});},()=>{auth=false;},()=>{remote.channels.YAHOO.listingId='b1234567890';},()=>{stock().updatedAt='v2';},()=>{candidate().state='DELETED';},()=>{put('ec',{pk:'ECONVENI#MANUAL_STOP#'+id+'#YAHOO'},{state:'PENDING',listingId:auction,revision:1});},()=>{put('ec',{pk:'ECONVENI#NATIVE_TARGET#123#YAHOO'},{active:true,jobId:'old'});},()=>{put('ec',{pk:'ECONVENI#NATIVE_TARGET#123#YAHOO'},{active:false,jobId:'old'});put('candidates',{id:'old'},{phase:'SENDING'});},()=>{flow={pk:'ECONVENI#INVENTORY#'+id,revision:1,save:{state:'VERIFY_REQUIRED',productId:'123'},channels:{YAHOO:{listingId:auction,state:'PENDING'}}};},()=>{put('legacy-state',{pk:'INVENTORY#'+id},{revision:1,stage:'CANCEL_PENDING'});},()=>{readDenied='legacy-state';},()=>{readDenied='YahooAuctionListing';}]){reset();setup();assert.equal((await run()).status,'REVIEW');assert.equal(cancels,0);assert.equal(puts,0);}
+ reset();race=()=>{stock().updatedAt='raced';};assert.equal((await run()).status,'VERIFY_REQUIRED');assert.equal(puts,0);assert(![...rows.keys()].some(k=>k.includes('AUTO_YAHOO_STOP')));
+ reset();lostAck=true;assert.equal((await run()).status,'VERIFY_REQUIRED');assert.equal(puts,0);lostAck=false;assert.equal((await run()).status,'VERIFY_REQUIRED');assert.equal(cancels,1);auth=false;assert.equal((await run()).status,'VERIFY_REQUIRED');assert.equal(puts,0);
+ reset();put('YahooAuctionListing',{inventoryId:id},{inventoryId:id,auctionId:auction,revision:1});put('legacy-state',{pk:'INVENTORY#'+id},{revision:1,stage:'IDLE',listing:{auctionId:auction}});assert.equal((await run()).status,'REVIEW');assert.equal(puts,0);assert.equal(cancels,0);
+ reset();put('ec',{pk:'ECONVENI#ACCOUNT'},{lastSentAt:Date.now()});const interval=await run();assert.equal(interval.status,'WAIT');assert(interval.nextAt>Date.now());assert.equal(puts,0);assert(![...rows.keys()].some(k=>k.includes('AUTO_YAHOO_STOP')));
+ reset();const concurrent=await Promise.all([run(),run()]);assert.equal(puts,1);assert(concurrent.some(r=>r.status==='DONE'));assert(concurrent.some(r=>r.status==='REVIEW'));
+ console.log('PASS: actual runtime binding/source/account CAS, prior manual/native/legacy unknown holds, denied reads, reservation lost ACK, one concurrent send, and explicit eConveni-only eligibility with legacy-bound HOLD.');
+})().catch(error=>{console.error(error);process.exitCode=1;});

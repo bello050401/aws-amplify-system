@@ -123,7 +123,7 @@ export async function reviewPostSaleCore(ports:PostSalePorts,candidateId:string,
   if(!prepared&&channel!=='BASE'&&(fresh?fresh.state!=='ACTIVE':linked.state!=='ACTIVE')&&!prior)continue;
   if(c.result!.remainingQuantity===0){
    // eConveni cancellation has no server-side no-fee constraint. A sale grants no fee approval.
-   if(ports.automatic&&channel==='YAHOO'){rows.push({channel,externalId:linked.externalId,operation:'STOP',state:'BLOCKED',message:yahooFeeHold,currentState:'自動停止保留'});continue;}
+   if(ports.automatic&&channel==='YAHOO'){rows.push({channel,externalId:linked.externalId,operation:'STOP',state:ports.automaticYahooStop?'READY':'BLOCKED',automaticYahooNoFee:!!ports.automaticYahooStop,message:ports.automaticYahooStop?'所有者・入札・手数料なし取消の条件を確認してから停止します。':yahooFeeHold,currentState:'無料取消の確認待ち'});continue;}
    const review=prepared??await ports.reviewStop(source.id,channel,actor);
    rows.push({channel,externalId:linked.externalId,operation:'STOP',state:review.status==='READY'?'READY':review.status==='DONE'?'DONE':'BLOCKED',message:review.message,review,currentState:review.status==='DONE'?'停止中':fresh?.state==='ACTIVE'?'出品中':'状態確認'});
   }else if(channel==='BASE'){
@@ -179,15 +179,23 @@ export async function executePostSaleCore(ports:PostSalePorts,candidateId:string
   await persist(p);
  }
  for(const row of p.rows){
+  if(ports.automatic&&row.channel==='YAHOO'&&row.operation==='STOP'&&row.state==='VERIFY_REQUIRED'&&row.automaticYahooNoFee&&ports.automaticYahooStop){
+   try{const result=await ports.automaticYahooStop({candidateId,inventoryId:p.sourceId,inventoryVersion:p.sourceVersion,externalId:row.externalId,reconcileOnly:true});row.state=result.status==='DONE'?'DONE':'VERIFY_REQUIRED';row.message=result.message;}catch{row.message=yahooFeeHold;}
+   await persist(p);continue;
+  }
   if(row.state!=='READY')continue;
   // Protect older persisted plans too; never send a fee-unsafe automatic cancellation.
-  if(ports.automatic&&row.channel==='YAHOO'&&row.operation==='STOP'){row.state='BLOCKED';row.message=yahooFeeHold;await persist(p);continue;}
+  if(ports.automatic&&row.channel==='YAHOO'&&row.operation==='STOP'&&!(row.automaticYahooNoFee&&ports.automaticYahooStop)){row.state='BLOCKED';row.message=yahooFeeHold;await persist(p);continue;}
   // Record an uncertain outcome before crossing the external boundary. Repeating the request cannot resend it.
   row.state='VERIFY_REQUIRED';row.message='変更結果を確認中です。';await persist(p);
   try{
    const latest=await context(candidateId);
    if(latest.source.updatedAt!==p.sourceVersion||row.channel===latest.soldChannel&&row.operation!=='RELIST'&&!(ports.automatic&&row.channel==='MERCARI_SHOPS'&&row.operation==='STOCK'&&p.remaining>0))throw new PostSaleError('在庫の状態が変わりました。');
-   if(ports.automatic&&row.channel==='MERCARI_SHOPS'){
+   if(ports.automatic&&row.channel==='YAHOO'&&row.operation==='STOP'&&row.automaticYahooNoFee&&ports.automaticYahooStop){
+    const result=await ports.automaticYahooStop({candidateId,inventoryId:p.sourceId,inventoryVersion:p.sourceVersion,externalId:row.externalId});
+    row.state=result.status==='DONE'?'DONE':result.status==='WAIT'?'READY':result.status==='VERIFY_REQUIRED'?'VERIFY_REQUIRED':'BLOCKED';row.message=result.message;
+    if(result.status==='WAIT'){p.nextAt=result.nextAt??Date.now()+30000;p.state='REVIEW';await persist(p);return p;}
+   }else if(ports.automatic&&row.channel==='MERCARI_SHOPS'){
     if(!ports.desktopMercari)throw new PostSaleError('パソコンへの依頼先が未設定です。');
     const result=await ports.desktopMercari({candidateId,inventoryId:p.sourceId,inventoryVersion:p.sourceVersion,externalId:row.externalId,title:String(latest.source.name),targetQuantity:row.targetQuantity??0});
     row.state=result.status==='DONE'?'DONE':result.status==='WAIT'?'READY':result.status==='VERIFY_REQUIRED'?'VERIFY_REQUIRED':'BLOCKED';row.message=result.message;
@@ -217,6 +225,7 @@ async function persist(p:PostSalePlan){await db.send(new PutCommand({TableName:t
 
 export interface PostSalePorts {
  automatic?:boolean;
+ automaticYahooStop?:(request:import('./automaticYahooStopCore').AutomaticYahooStopRequest)=>Promise<import('./automaticYahooStopCore').AutomaticYahooStopResult>;
  /** Private durable worker only. Browser calls enqueue the reviewed token instead. */
  background?:boolean;
  catalog:(id:string)=>Promise<EcCatalog>;
