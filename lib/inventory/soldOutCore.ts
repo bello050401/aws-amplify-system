@@ -9,6 +9,7 @@ import { parseCustomFields, stringifyCustomFields } from './customFieldsCodecCor
 import { SoldOutError, validateSoldOut, type SoldOutRequest, type SoldOutResult } from './soldOutInput';
 import {saleTitle} from './salePricing';
 import {stockCountTitle} from './stockCountTitle';
+import {withSoldChannelTitle} from './soldChannelTitle';
 import {managedStockTitleChange,hasManagedStockTitle,managedTitleBase} from './managedStockTitle';
 import {paymentDate,type YahooPaymentPlan,type YahooStockReservation} from '../saleCandidates/yahooPaymentModel';
 
@@ -67,7 +68,7 @@ export function createSoldOutService(ports: SoldOutPorts) {
     const unpaid=unpaidMasters.find(c=>c.name==='未入金')||unpaidMasters.find(c=>c.name==='入金待ち');
     if(payment?.waiting&&!unpaid)throw new SoldOutError('INVALID','未入金のカテゴリを確認してください。');
     if(request.sourceCandidateId&&!masters.some(c=>['販売中','出品中','出品待ち','撮影待ち','補修待ち'].includes(c.name)&&before.includes(c.id)))throw new SoldOutError('INVALID','この商品は売却候補の対象カテゴリから外れています。商品を選び直してください。');
-    const saleCustom={...(request.pricing||request.saleShippingReceived!==undefined||payment?{__belloSale:{...request.pricing,physicalQuantity:request.quantity,total:request.salePrice,commissionTotal:request.saleCommission,sourceInventoryId:source.id,...(request.saleShippingReceived!==undefined?{shippingReceived:request.saleShippingReceived}:{})}}:{}),...(payment?{__belloYahooPayment:{candidateId:payment.candidateId,auctionId:payment.auctionId,state:payment.waiting?'WAITING':'APPLIED',...(payment.waiting?{unpaidCategoryId:unpaid!.id}:{paidAt:payment.paidAt})}}:{})};
+    const saleCustom={...(request.pricing||request.saleShippingReceived!==undefined||request.sourceCandidateId||payment?{__belloSale:{...request.pricing,physicalQuantity:request.quantity,total:request.salePrice,commissionTotal:request.saleCommission,sourceInventoryId:source.id,...(request.saleShippingReceived!==undefined?{shippingReceived:request.saleShippingReceived}:{})}}:{}),...(payment?{__belloYahooPayment:{candidateId:payment.candidateId,auctionId:payment.auctionId,state:payment.waiting?'WAITING':'APPLIED',...(payment.waiting?{unpaidCategoryId:unpaid!.id}:{paidAt:payment.paidAt})}}:{})};
     if (before.includes(soldMaster[0].id)) throw new SoldOutError('INVALID','この商品はすでに売り切れです。');
     const activeIds=masters.filter(c=>['販売中','出品中'].includes(c.name)).map(c=>c.id);
     const after = [...before.filter(id=>!activeIds.includes(id)&&(!payment||!unpaidMasters.some(c=>c.id===id))),soldMaster[0].id,...(payment?.waiting?[unpaid!.id]:[])];
@@ -95,8 +96,9 @@ export function createSoldOutService(ports: SoldOutPorts) {
     let images: unknown[] = [];
     const writes: InventoryTransaction = [];
     // Version check also excludes a concurrent outbound reservation.
-    const update = (values:Row) => {
-      const entries=Object.entries(managedStockTitleChange(values,source)).filter(([,v])=>v!==undefined);
+    const soldValues=(values:Row)=>request.sourceCandidateId?withSoldChannelTitle(managedStockTitleChange(values,source),request.market):managedStockTitleChange(values,source);
+    const update = (values:Row,sold=false) => {
+      const entries=Object.entries(sold?soldValues(values):managedStockTitleChange(values,source)).filter(([,v])=>v!==undefined);
       writes.push({Update:{TableName:table('Inventory'),Key:{id:source.id},
         UpdateExpression:'SET '+entries.map((_,i)=>`#f${i} = :v${i}`).join(', '),
         ConditionExpression:'updatedAt = :version AND quantity = :quantity AND attribute_not_exists(outboundBatchId) AND attribute_not_exists(outboundArrivalBatchId)',
@@ -117,14 +119,14 @@ export function createSoldOutService(ports: SoldOutPorts) {
       const inherited: Row = {};
       for (const key of ['unit','statusId','locationId','note','barcode','purchasePrice',...ALL_EXTENDED_FIELDS.map(field=>field.key)]) if(source[key]!==undefined) inherited[key]=source[key];
       const custom = {...productCustomFields(sourceCustom),...saleCustom,__belloStockSplit:{sourceInventoryId:source.id,operation:'SOLD_OUT',mutationId:request.mutationId}};
-      writes.push({Put:{TableName:table('Inventory'),Item:managedStockTitleChange({...inherited,...changes,id:soldId,sku,images,customFields:stringifyCustomFields(custom),sourceSystem:'BELLO',listingPartition:'ACTIVE',createdAt:now,createdBy:actor,__typename:'Inventory'},source),ConditionExpression:'attribute_not_exists(id)'}});
+      writes.push({Put:{TableName:table('Inventory'),Item:soldValues({...inherited,...changes,id:soldId,sku,images,customFields:stringifyCustomFields(custom),sourceSystem:'BELLO',listingPartition:'ACTIVE',createdAt:now,createdBy:actor,__typename:'Inventory'}),ConditionExpression:'attribute_not_exists(id)'}});
       writes.push(...persistence.categoryLinkChanges(soldId,[],after,now));
     } else {
-      update({...changes,customFields:stringifyCustomFields({...withHumanEdits(source,changes,sourceCustom,sourceCustom ?? undefined),...saleCustom})});
+      update({...changes,customFields:stringifyCustomFields({...withHumanEdits(source,changes,sourceCustom,sourceCustom ?? undefined),...saleCustom})},true);
       writes.push(...persistence.categoryLinkChanges(source.id,currentCategories,after,now));
     }
     const oldValue=JSON.stringify({quantity:source.quantity,name:source.name,categoryIds:before,saleEndDate:source.saleEndDate,externalProductId:source.externalProductId,market:source.market,salePrice:source.salePrice});
-    const history = {inventoryId:source.id,fieldName:'売却登録',oldValue,newValue:JSON.stringify({requestHash:digest,result,changes:{...changes,name:managedStockTitleChange(changes,source).name},...(request.saleShippingReceived!==undefined?{shippingReceived:request.saleShippingReceived}:{}),...(split?{remainingName:hasManagedStockTitle(source)?managedStockTitleChange({quantity:result.remainingQuantity},source).name:stockCountTitle(source.name,result.remainingQuantity)}:{})}),changedBy:actor,changedAt:now,createdAt:now,updatedAt:now,__typename:'InventoryHistory'};
+    const history = {inventoryId:source.id,fieldName:'売却登録',oldValue,newValue:JSON.stringify({requestHash:digest,result,changes:{...changes,name:soldValues(changes).name},...(request.saleShippingReceived!==undefined?{shippingReceived:request.saleShippingReceived}:{}),...(split?{remainingName:hasManagedStockTitle(source)?managedStockTitleChange({quantity:result.remainingQuantity},source).name:stockCountTitle(source.name,result.remainingQuantity)}:{})}),changedBy:actor,changedAt:now,createdAt:now,updatedAt:now,__typename:'InventoryHistory'};
     writes.push({Put:{TableName:table('InventoryHistory'),Item:{...history,id:receiptId},ConditionExpression:'attribute_not_exists(id)'}});
     if(split) writes.push({Put:{TableName:table('InventoryHistory'),Item:{...history,id:`${receiptId}:SPLIT`,inventoryId:soldId,fieldName:'売却分を分割'}}});
     if(ports.saleCommit)writes.push(...ports.saleCommit(result,now));

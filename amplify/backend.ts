@@ -169,6 +169,7 @@ const saleAutomation=new NodejsFunction(saleStack,'SaleAutomation',{
   PHOTO_REGISTRATION_TABLE_NAME:process.env.PHOTO_REGISTRATION_TABLE_NAME??'',
   PHOTO_REGISTRATION_BUCKET_NAME:process.env.PHOTO_REGISTRATION_BUCKET_NAME??'',
   BASE_MANUAL_LISTING_ENABLED:'1',EXTERNAL_WRITES_ENABLED:'BASE',BASE_REQUEST_READ_ORDERS:'1',BASE_REQUEST_WRITE_ITEMS:'1',
+  BELLO_SYSTEM_ERRORS_RELEASE:/^[a-f0-9]{7,40}$/.test(process.env.AWS_COMMIT_ID||'')?process.env.AWS_COMMIT_ID!:'unknown',
  }});
 purchaseTable.grantReadWriteData(saleAutomation);
 saleAutomation.addToRolePolicy(new PolicyStatement({actions:['cognito-idp:AdminGetUser','cognito-idp:AdminListGroupsForUser'],resources:[backend.auth.resources.userPool.userPoolArn]}));
@@ -183,7 +184,7 @@ for(const name of ['Category','Location','StatusMaster','UnitMaster','CustomFiel
  saleAutomation.addToRolePolicy(new PolicyStatement({actions:['dynamodb:Query'],resources:[t.tableArn+'/index/*']}));
 }
 saleAutomation.addToRolePolicy(new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:Scan','dynamodb:Query','dynamodb:PutItem','dynamodb:UpdateItem','dynamodb:ConditionCheckItem'],resources:[`arn:aws:dynamodb:${purchaseStack.region}:${purchaseStack.account}:table/BelloEconveniWorkflow`]}));
-saleAutomation.addToRolePolicy(new PolicyStatement({actions:['secretsmanager:GetSecretValue'],resources:['bello/base-app-credentials','bello/econveni-credentials'].map(n=>`arn:aws:secretsmanager:${purchaseStack.region}:${purchaseStack.account}:secret:${n}-??????`)}));
+saleAutomation.addToRolePolicy(new PolicyStatement({actions:['secretsmanager:GetSecretValue'],resources:['bello/base-app-credentials','bello/econveni-credentials','bello/yahoo-web-session-staging'].map(n=>`arn:aws:secretsmanager:${purchaseStack.region}:${purchaseStack.account}:secret:${n}-??????`)}));
 saleAutomation.addToRolePolicy(new PolicyStatement({actions:['s3:GetObject'],resources:[backend.storage.resources.bucket.arnForObjects('inventory/*')]}));
 saleAutomation.addToRolePolicy(new PolicyStatement({actions:['s3:PutObject','s3:DeleteObject'],resources:[backend.storage.resources.bucket.arnForObjects('inventory/yahoo-payment/*')]}));
 if(process.env.PHOTO_REGISTRATION_TABLE_NAME&&process.env.PHOTO_REGISTRATION_BUCKET_NAME){
@@ -366,6 +367,13 @@ if (process.env.AWS_APP_ID === "d4hkkg7dty2du" &&
   });
   backend.addOutput({custom:{systemErrors:{tableName:systemErrorsTable.tableName,region:procurementStack.region,
     release:/^[a-f0-9]{7,40}$/.test(process.env.AWS_COMMIT_ID || '') ? process.env.AWS_COMMIT_ID : 'unknown'}}});
+  // Attach from a separate stack: procurement already consumes Inventory, so
+  // making the data stack depend on this table would create a circular deploy.
+  // The exact diagnostic table name is supplied in private AUTOMATION_CONFIG.
+  const saleDiagnosticsStack=backend.createStack('SaleDiagnostics');
+  new Policy(saleDiagnosticsStack,'WorkerDiagnosticIntake',{roles:[Role.fromRoleArn(saleDiagnosticsStack,'SaleWorkerRole',saleAutomation.role!.roleArn)],statements:[
+    new PolicyStatement({actions:['dynamodb:GetItem','dynamodb:PutItem','dynamodb:UpdateItem','dynamodb:ConditionCheckItem'],resources:[systemErrorsTable.tableArn]}),
+  ]});
   const inquiryStack=backend.createStack('InquiryRuntime');
   const inquiryTable=new Table(inquiryStack,'Inbox',{partitionKey:{name:'pk',type:AttributeType.STRING},sortKey:{name:'sk',type:AttributeType.STRING},
     billingMode:BillingMode.PAY_PER_REQUEST,encryption:TableEncryption.AWS_MANAGED,pointInTimeRecovery:true,timeToLiveAttribute:'ttl',removalPolicy:RemovalPolicy.RETAIN});

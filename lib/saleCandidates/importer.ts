@@ -24,7 +24,7 @@ export async function importPurchases(db:DynamoDBDocumentClient,table:string,rea
      const parsed=parsePurchaseMail(await reader.read(id));
      // BASE is read from its official orders API; never create a second email-derived order.
      for(const candidate of parsed){
-      if(candidate.channel==='MERCARI'&&await store.put(candidate))created++;
+      if(candidate.channel==='MERCARI'){const result=await store.receiveMercari(candidate);if(result==='created')created++;if(result==='updated')updated++;}
       if(candidate.channel==='YAHOO'){const result=await store.receiveYahoo(candidate);if(result==='created')created++;if(result==='updated')updated++;}
      }
      await db.send(new PutCommand({TableName:table,Item:{id:key,checkedAt:new Date().toISOString(),ttl:Math.floor(Date.now()/1000)+30*86400}}));checked++;

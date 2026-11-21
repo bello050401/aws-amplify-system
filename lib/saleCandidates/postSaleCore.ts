@@ -13,6 +13,7 @@ import {reviewSaleBinding,reviewSaleAdjustment,executeSaleAdjustment,saleAdjustm
 import {stockCountTitle} from '@/lib/inventory/stockCountTitle';
 import {inventoryCategoryIds} from '@/lib/inventory/categories';
 import {listCategories} from '@/lib/inventory/queries';
+import {settledYahooContinuation} from './yahooSettlementContinuationServer';
 import type {EcChannel} from '@/lib/listing/ecManagement';
 import type {PostSaleRow as Row,PostSalePlan} from './postSaleModel';
 export type {PostSalePlan} from './postSaleModel';
@@ -61,9 +62,10 @@ const key=(id:string)=>({pk:'SALE_EC#'+id});
 export async function reviewPostSaleCore(ports:PostSalePorts,candidateId:string,actor:string,packSizes:Partial<Record<EcChannel,number>>={}):Promise<PostSalePlan>{
  const old=(await db.send(new GetCommand({TableName:table,Key:key(candidateId),ConsistentRead:true}))).Item as (PostSalePlan&{pk:string})|undefined;
  if(old&&(old.state==='QUEUED'||old.state==='EXECUTING'&&!!old.queuedAt||old.state==='COMPLETE'&&old.rows.length>0||old.state==='EXECUTING'&&old.expiresAt>Date.now())){
+  if(old.state==='COMPLETE'&&!old.quantityDeferred)await ports.releaseStock?.(old.sourceId,candidateId);
   // An already completed EC confirmation must not keep showing 'stock unchanged'
   // after the payment worker has settled the inventory. Never resend EC actions.
-  if(old.quantityDeferred){const c=await candidateStore().get(candidateId);if(c?.yahooPaymentState==='APPLIED'&&c.result&&!c.result.quantityDeferred)return {...old,quantityDeferred:false};}
+  if(old.quantityDeferred){const c=await candidateStore().get(candidateId);if(c?.yahooPaymentState==='APPLIED'&&c.result&&!c.result.quantityDeferred){if(old.state==='COMPLETE')await ports.releaseStock?.(old.sourceId,candidateId);return {...old,quantityDeferred:false};}}
   return old;
  }
  const {c,source,soldChannel,soldPack}=await context(candidateId);
@@ -81,9 +83,20 @@ export async function reviewPostSaleCore(ports:PostSalePorts,candidateId:string,
  for(const channel of channels){
   const prior=old?.rows.find(r=>r.channel===channel);
   if(prior?.state==='DONE'){rows.push(prior);continue;}
+  // The requested remainder policy deliberately keeps an unsold Yahoo page running.
+  if(ports.automatic&&channel==='YAHOO'&&channel!==soldChannel&&c.result!.remainingQuantity>0)continue;
+  if(ports.automatic&&channel==='MERCARI_SHOPS'){
+   const linked=catalog.channels[channel]?.[source.id];
+   const externalId=linked?.externalId||(soldChannel===channel?c.externalListingId:'');
+   if(channel===soldChannel&&c.result!.remainingQuantity===0)continue;
+   if(!externalId)continue;
+   if(remote?.channels[channel].listingId&&remote.channels[channel].listingId!==externalId||soldChannel===channel&&c.externalListingId&&c.externalListingId!==externalId)throw new PostSaleError('メルカリShopsの出品IDが変わっています。先に照合してください。');
+   if(prior&&prior.externalId!==externalId){rows.push({...prior,state:'BLOCKED',message:'出品IDが変わっています。先に照合してください。'});continue;}
+   rows.push({channel,externalId,operation:c.result!.remainingQuantity===0?'STOP':'STOCK',state:'READY',targetQuantity:c.result!.remainingQuantity,message:'接続中のパソコンで商品名と写真を照合して数量を変更します。'});continue;
+  }
   if(channel===soldChannel){
-   if(ports.automatic)continue; // A sale never authorizes republishing or changing the sold channel.
    if(channel==='YAHOO'&&c.result!.remainingQuantity>0){
+    if(c.result!.quantityDeferred){rows.push({channel,externalId:c.externalListingId??'',operation:'MANUAL',state:'BLOCKED',message:'入金確認後に売却済みページを保持して新しく再出品します。'});continue;}
     const soldId=c.externalListingId||(c.identifierType==='AUCTION'?c.orderId:'');
     const current=remote?.channels.YAHOO;
    if(prior?.adjustment&&started.has(channel)){if(packSizes.YAHOO!==undefined&&packSizes.YAHOO!==prior.unitsPerListing)throw new PostSaleError('処理開始後は点数を変更できません。');rows.push({...prior,state:'READY'});continue;}
@@ -105,7 +118,7 @@ export async function reviewPostSaleCore(ports:PostSalePorts,candidateId:string,
   if(fresh&&!fresh.listingId&&linked.externalId&&channel!=='BASE'&&prepared?.status!=='DONE'){
    rows.push({channel,externalId:linked.externalId,operation:c.result!.remainingQuantity===0?'STOP':'MANUAL',state:'BLOCKED',currentState:'出品番号未確認',message:'eコンビニで出品番号が外れています。出品停止済みとは断定できないため、販売先で確認してください。別の商品への操作は行いません。'});continue;
   }
-  if(!prepared&&(fresh?fresh.state!=='ACTIVE':linked.state!=='ACTIVE')&&!prior)continue;
+  if(!prepared&&channel!=='BASE'&&(fresh?fresh.state!=='ACTIVE':linked.state!=='ACTIVE')&&!prior)continue;
   if(c.result!.remainingQuantity===0){
    const review=prepared??await ports.reviewStop(source.id,channel,actor);
    rows.push({channel,externalId:linked.externalId,operation:'STOP',state:review.status==='READY'?'READY':review.status==='DONE'?'DONE':'BLOCKED',message:review.message,review,currentState:review.status==='DONE'?'停止中':fresh?.state==='ACTIVE'?'出品中':'状態確認'});
@@ -116,7 +129,7 @@ export async function reviewPostSaleCore(ports:PostSalePorts,candidateId:string,
    const remote=await readBaseItem(linked.externalId);
    const pack=packSizes[channel]??prior?.unitsPerListing??1;
    if(!Number.isSafeInteger(pack)||pack<1||pack>10000)throw new PostSaleError('販売先の1商品あたりの点数を確認してください。');
-   const target=Math.min(remote.quantity,Math.floor(c.result!.remainingQuantity/pack));
+    const target=Math.floor(c.result!.remainingQuantity/pack);
    if(prior?.state==='VERIFY_REQUIRED'){
     rows.push({...prior,state:remote.quantity===prior.targetQuantity&&remote.title===(prior.targetTitle??stockCountTitle(remote.title,c.result!.remainingQuantity))?'DONE':'VERIFY_REQUIRED',message:remote.quantity===prior.targetQuantity&&remote.title===(prior.targetTitle??stockCountTitle(remote.title,c.result!.remainingQuantity))?'前回の数量更新を確認しました。':'前回の数量更新は未確認です。再送せずBASEで確認してください。'});continue;
    }
@@ -131,17 +144,26 @@ export async function executePostSaleCore(ports:PostSalePorts,candidateId:string
  const p=(await db.send(new GetCommand({TableName:table,Key:key(candidateId),ConsistentRead:true}))).Item as PostSalePlan|undefined;
  if(!confirmed||!p||p.actor!==actor||p.token!==token)throw new PostSaleError('変更内容を確認してください。');
  const resume=!!ports.background&&p.state==='EXECUTING'&&!!p.queuedAt&&(p.executionLeaseUntil??p.expiresAt)<Date.now();
- if(p.state!=='REVIEW'&&!(ports.background&&p.state==='QUEUED')&&!resume)return p;
+ if(p.state!=='REVIEW'&&!(ports.background&&p.state==='QUEUED')&&!resume){if(p.state==='COMPLETE'&&!p.quantityDeferred)await ports.releaseStock?.(p.sourceId,candidateId);return p;}
  if(!ports.background&&p.queuedAt)throw new PostSaleError('受付済みです。バックグラウンドで処理しています。');
  const current=await context(candidateId);
- if(p.expiresAt<Date.now()||p.sourceVersion!==current.source.updatedAt||p.soldChannel!==current.soldChannel||p.rows.some(r=>r.channel===current.soldChannel&&r.operation!=='RELIST'&&r.operation!=='MANUAL'))throw new PostSaleError('確認期限または対象の商品が変わりました。');
- if(ports.automatic&&p.rows.some(r=>r.operation==='RELIST'||r.channel===p.soldChannel))throw new PostSaleError('自動処理では販売先のページを変更しません。');
+ const previousSourceVersion=p.sourceVersion;
+ const paymentRebase=p.quantityDeferred&&p.sourceVersion!==current.source.updatedAt&&await settledYahooContinuation(candidateId,p.sourceId,p.sourceVersion,p.remaining);
+ if(paymentRebase){p.sourceVersion=current.source.updatedAt;p.quantityDeferred=false;}
+ if(p.expiresAt<Date.now()||p.sourceVersion!==current.source.updatedAt||p.soldChannel!==current.soldChannel||p.rows.some(r=>r.channel===current.soldChannel&&r.operation!=='RELIST'&&r.operation!=='MANUAL'&&!(r.channel==='MERCARI_SHOPS'&&r.operation==='STOCK'&&p.remaining>0)))throw new PostSaleError('確認期限または対象の商品が変わりました。');
+ if(ports.automatic&&p.rows.some(r=>r.channel===p.soldChannel&&!(p.remaining>0&&(r.channel==='YAHOO'&&r.operation==='RELIST'||r.channel==='MERCARI_SHOPS'&&r.operation==='STOCK'))&&!(p.quantityDeferred&&r.operation==='MANUAL')))throw new PostSaleError('販売先への操作を確認してください。');
  if(p.rows.some(r=>r.state==='READY'&&r.requiresTerms)&&!terms)throw new PostSaleError('Yahoo!オークションのガイドラインを確認してください。');
- if(p.nextAt&&p.nextAt>Date.now())return p;
- await db.send(new UpdateCommand({TableName:table,Key:key(candidateId),UpdateExpression:'SET #s=:busy,executionLeaseUntil=:lease',ConditionExpression:'#s=:review AND #t=:token'+(resume?' AND executionLeaseUntil<:now':''),ExpressionAttributeNames:{'#s':'state','#t':'token'},ExpressionAttributeValues:{':busy':'EXECUTING',':review':p.state,':token':token,':lease':Date.now()+210000,...(resume?{':now':Date.now()}:{})}}));
+ let completedDesktopRow:Row|undefined;
+ if(p.nextAt&&p.nextAt>Date.now()){
+  const first=p.rows.find(row=>row.state!=='DONE');
+  if(first?.state==='READY'&&first.channel==='MERCARI_SHOPS'&&['STOCK','STOP'].includes(first.operation)&&first.targetQuantity!==undefined&&ports.desktopMercariComplete&&await ports.desktopMercariComplete({candidateId,inventoryId:p.sourceId,inventoryVersion:p.sourceVersion,externalId:first.externalId,title:String(current.source.name),targetQuantity:first.targetQuantity}))completedDesktopRow=first;
+  else return p;
+ }
+ await db.send(new UpdateCommand({TableName:table,Key:key(candidateId),UpdateExpression:'SET #s=:busy,executionLeaseUntil=:lease'+(paymentRebase?',sourceVersion=:sourceVersion,quantityDeferred=:deferred':''),ConditionExpression:'#s=:review AND #t=:token'+(resume?' AND executionLeaseUntil<:now':'')+(paymentRebase?' AND sourceVersion=:previousVersion':''),ExpressionAttributeNames:{'#s':'state','#t':'token'},ExpressionAttributeValues:{':busy':'EXECUTING',':review':p.state,':token':token,':lease':Date.now()+210000,...(resume?{':now':Date.now()}:{}),...(paymentRebase?{':sourceVersion':p.sourceVersion,':previousVersion':previousSourceVersion,':deferred':false}:{})}}));
  p.state='EXECUTING';
  p.executionLeaseUntil=Date.now()+210000;
  p.nextAt=undefined;
+ if(completedDesktopRow){completedDesktopRow.state='DONE';completedDesktopRow.message='保存済みのPC照合・数量確認記録を確認しました。';await persist(p);}
  if(resume){
   // An interrupted external call is observed first. Durable child receipts prevent replay.
   for(const row of p.rows.filter(r=>r.state==='VERIFY_REQUIRED')){
@@ -157,8 +179,13 @@ export async function executePostSaleCore(ports:PostSalePorts,candidateId:string
   row.state='VERIFY_REQUIRED';row.message='変更結果を確認中です。';await persist(p);
   try{
    const latest=await context(candidateId);
-   if(latest.source.updatedAt!==p.sourceVersion||row.channel===latest.soldChannel&&row.operation!=='RELIST')throw new PostSaleError('在庫の状態が変わりました。');
-   if(row.adjustment){
+   if(latest.source.updatedAt!==p.sourceVersion||row.channel===latest.soldChannel&&row.operation!=='RELIST'&&!(ports.automatic&&row.channel==='MERCARI_SHOPS'&&row.operation==='STOCK'&&p.remaining>0))throw new PostSaleError('在庫の状態が変わりました。');
+   if(ports.automatic&&row.channel==='MERCARI_SHOPS'){
+    if(!ports.desktopMercari)throw new PostSaleError('パソコンへの依頼先が未設定です。');
+    const result=await ports.desktopMercari({candidateId,inventoryId:p.sourceId,inventoryVersion:p.sourceVersion,externalId:row.externalId,title:String(latest.source.name),targetQuantity:row.targetQuantity??0});
+    row.state=result.status==='DONE'?'DONE':result.status==='WAIT'?'READY':result.status==='VERIFY_REQUIRED'?'VERIFY_REQUIRED':'BLOCKED';row.message=result.message;
+    if(result.status==='WAIT'){p.nextAt=result.nextAt??Date.now()+6*3600000;p.state='REVIEW';await persist(p);return p;}
+   }else if(row.adjustment){
     const result=await executeSaleAdjustment(row.adjustment);
     row.state=result.status==='DONE'?'DONE':result.status==='WAIT'?'READY':'VERIFY_REQUIRED';row.message=result.message;
     if('newListingId'in result)row.newListingId=result.newListingId;
@@ -177,7 +204,7 @@ export async function executePostSaleCore(ports:PostSalePorts,candidateId:string
   }catch{row.message='変更結果を確認できません。重複送信せず販売先で確認してください。';}
   await persist(p);
  }
- p.state=p.rows.every(r=>r.state==='DONE')?'COMPLETE':'ATTENTION';await persist(p);return p;
+ p.state=p.rows.every(r=>r.state==='DONE')?'COMPLETE':'ATTENTION';await persist(p);if(p.state==='COMPLETE'&&!p.quantityDeferred)await ports.releaseStock?.(p.sourceId,candidateId);return p;
 }
 async function persist(p:PostSalePlan){await db.send(new PutCommand({TableName:table,Item:{pk:key(p.id).pk,...p,updatedAt:new Date().toISOString()},ConditionExpression:'#t=:t',ExpressionAttributeNames:{'#t':'token'},ExpressionAttributeValues:{':t':p.token}}));}
 
@@ -188,4 +215,7 @@ export interface PostSalePorts {
  catalog:(id:string)=>Promise<EcCatalog>;
  reviewStop:(id:string,channel:EcChannel,actor:string)=>Promise<EcReview>;
  executeStop:(review:EcReview,actor:string)=>Promise<EcReview>;
+ releaseStock?:(inventoryId:string,candidateId:string)=>Promise<void>;
+ desktopMercari?:(request:{candidateId:string;inventoryId:string;inventoryVersion:string;externalId:string;title:string;targetQuantity:number})=>Promise<{status:'DONE'|'WAIT'|'REVIEW'|'VERIFY_REQUIRED';nextAt?:number;message:string}>;
+ desktopMercariComplete?:(request:{candidateId:string;inventoryId:string;inventoryVersion:string;externalId:string;title:string;targetQuantity:number})=>Promise<boolean>;
 }

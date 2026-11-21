@@ -38,14 +38,48 @@ function flow(){
  let candidate=structuredClone(c),saleWrites=0,stopWrites=0;
  const job:AutomationJob={id:'AUTO:'+c.id,candidateId:c.id,state:'SALE_AUTO_ACTIVE',phase:'IDENTIFY',createdAt:now,updatedAt:now,receivedAt:now,version:'v',attempts:0};
  const plan:any={id:c.id,candidateId:c.id,sourceId:id,sourceVersion:now,soldChannel:'BASE',remaining:0,actor:'worker',expiresAt:Date.now()+60000,rows:[{channel:'YAHOO',operation:'STOP',state:'READY'}],state:'REVIEW',token:'t',updatedAt:now};
- const p:AutomationPorts={now:()=>Date.parse(now)+15000,candidate:async()=>candidate,decide:async()=>decide(),save:async()=>{},sell:async()=>{saleWrites++;const result={sourceId:id,soldId:id,remainingQuantity:0,soldQuantity:2,updatedAt:now};candidate={...candidate,state:'DONE',result};return result;},review:async()=>plan,execute:async p=>{stopWrites++;return {...p,state:'COMPLETE',rows:p.rows.map(r=>({...r,state:'DONE'}))};}};
- return {job,p,plan,counts:()=>({saleWrites,stopWrites})};
+ const p:AutomationPorts={now:()=>Date.parse(now)+15000,candidate:async()=>candidate,decide:async()=>decide(),prepare:async()=>({status:'DONE'}),save:async()=>{},sell:async()=>{saleWrites++;const result={sourceId:id,soldId:id,remainingQuantity:0,soldQuantity:2,updatedAt:now};candidate={...candidate,state:'DONE',result};return result;},review:async()=>plan,execute:async p=>{stopWrites++;return {...p,state:'COMPLETE',rows:p.rows.map(r=>({...r,state:'DONE'}))};}};
+ return {job,p,plan,setCandidate:(value:SaleCandidate)=>{candidate=value;},counts:()=>({saleWrites,stopWrites})};
 }
 test('notification → sale → stop; repeat does not write twice; measured elapsed retained',async()=>{const f=flow();await runAutomaticSale(f.job,f.p);await runAutomaticSale(f.job,f.p);assert.deepEqual(f.counts(),{saleWrites:1,stopWrites:1});assert.equal(f.job.elapsedMs,15000);assert.equal(f.job.state,'SALE_AUTO_COMPLETE');});
 test('sale committed then network lost: retry checks DONE without decrement again',async()=>{const f=flow(),sell=f.p.sell;f.p.sell=async(...args)=>{await sell(...args);throw Error('response lost');};await assert.rejects(runAutomaticSale(f.job,f.p));f.p.sell=sell;await runAutomaticSale(f.job,f.p);assert.deepEqual(f.counts(),{saleWrites:1,stopWrites:1});});
 test('stop failure is attention, not success',async()=>{const f=flow();f.p.execute=async p=>({...p,state:'ATTENTION',rows:p.rows.map(r=>({...r,state:'VERIFY_REQUIRED'}))});await runAutomaticSale(f.job,f.p);assert.equal(f.job.state,'SALE_AUTO_ATTENTION');assert.equal(f.job.reason,'EC_RESULT_UNCONFIRMED');});
 test('sold channel / republish cannot pass automatic boundary',async()=>{const f=flow();f.plan.rows[0].channel='BASE';await runAutomaticSale(f.job,f.p);assert.equal(f.counts().stopWrites,0);assert.equal(f.job.reason,'SOLD_CHANNEL_PROTECTED');});
 test('ambiguous match leaves stock and EC untouched',async()=>{const f=flow();f.p.decide=async()=>({kind:'REVIEW',reason:'NOT_UNIQUE'});await runAutomaticSale(f.job,f.p);assert.deepEqual(f.counts(),{saleWrites:0,stopWrites:0});});
+test('required eConveni/desktop preflight never sells on missing or pending evidence',async()=>{
+ for(const status of ['WAIT','REVIEW'] as const){const f=flow();f.p.prepare=async()=>({status,reason:'ECONVENI_BINDING_REQUIRED',nextAt:Date.parse(now)+6*3600000});await runAutomaticSale(f.job,f.p);assert.deepEqual(f.counts(),{saleWrites:0,stopWrites:0});assert.equal(f.job.state,status==='WAIT'?'SALE_AUTO_ACTIVE':'SALE_AUTO_ATTENTION');}
+});
+test('Mercari date notice is informational; discounts and unreconciled totals cannot mutate stock or EC',async()=>{
+ const ordinary:SaleCandidate={...c,channel:'MERCARI',source:'GMAIL',senderAuthenticated:true,warnings:['販売終了日は通知受信日を初期表示しています。実際の販売日をご確認ください。']};
+ assert.equal(decide(ordinary).kind,'SELL');
+ for(const change of [{warnings:[...ordinary.warnings,'割引後の金額を確認してください。']},{warnings:['新しい金額形式を確認してください。']},{orderTotal:20000},{orderTotal:-1}]){
+  const candidate={...ordinary,...change},f=flow();f.setCandidate(candidate);f.p.decide=async()=>decide(candidate);
+  await runAutomaticSale(f.job,f.p);
+  assert.equal(f.job.reason,'ORDER_REVIEW');assert.deepEqual(f.counts(),{saleWrites:0,stopWrites:0});
+ }
+});
+test('Mercari missing listing ID waits for desktop identification then re-reads the resolved candidate',async()=>{
+ const f=flow(),m:SaleCandidate={...c,channel:'MERCARI',source:'GMAIL',senderAuthenticated:true,externalListingId:undefined};f.setCandidate(m);
+ f.p.decide=async value=>decide(value);let identifies=0;f.p.identify=async()=>{identifies++;f.setCandidate({...m,externalListingId:'mercari-item-id',updatedAt:'2026-11-08T13:01:00Z'});return {status:'DONE'};};
+ await runAutomaticSale(f.job,f.p);assert.equal(identifies,1);assert.equal(f.counts().saleWrites,1);
+ const waiting=flow();waiting.setCandidate(m);waiting.p.decide=async value=>decide(value);waiting.p.identify=async()=>({status:'WAIT',nextAt:Date.parse(now)+6*3600000});await runAutomaticSale(waiting.job,waiting.p);assert.equal(waiting.counts().saleWrites,0);assert.equal(waiting.job.reason,'MERCARI_DESKTOP_IDENTIFICATION');
+});
+test('CAS-enriched Yahoo facts refresh candidate version before transaction commit',async()=>{
+ const f=flow(),enriched={...c,updatedAt:'2026-11-08T13:01:00Z'};let decisions=0;const sell=f.p.sell;
+ f.p.decide=async()=>{decisions++;f.setCandidate(enriched);return decide();};f.p.sell=async(value,request)=>{assert.equal(value.updatedAt,enriched.updatedAt);return sell(value,request);};
+ await runAutomaticSale(f.job,f.p);assert.equal(decisions,2);assert.equal(f.counts().saleWrites,1);
+});
+for(const [channel,operation] of [['YAHOO','RELIST'],['MERCARI_SHOPS','STOCK']] as const)test('remainder authorizes only requested sold-channel continuation: '+channel,async()=>{
+ const f=flow();f.plan.soldChannel=channel;f.plan.remaining=3;f.plan.rows=[{channel,operation,state:'READY'}];await runAutomaticSale(f.job,f.p);assert.equal(f.counts().stopWrites,1);
+ const zero=flow();zero.plan.soldChannel=channel;zero.plan.remaining=0;zero.plan.rows=[{channel,operation,state:'READY'}];await runAutomaticSale(zero.job,zero.p);assert.equal(zero.counts().stopWrites,0);
+});
+test('Yahoo reservation promptly executes other-channel actions while retaining WAITING_PAYMENT state',async()=>{
+ const f=flow();f.setCandidate({...c,channel:'YAHOO',state:'DONE',result:{sourceId:id,soldId:id,remainingQuantity:0,soldQuantity:2,sourceQuantity:2,quantityDeferred:true,updatedAt:now}});
+ await runAutomaticSale(f.job,f.p);assert.equal(f.counts().saleWrites,0);assert.equal(f.counts().stopWrites,1);assert.equal(f.job.reason,'WAITING_PAYMENT');assert.equal(f.job.state,'SALE_AUTO_ACTIVE');
+});
+test('unknown Yahoo shipping remains null and never becomes fake zero or part of the commission',()=>{
+ const d=decide({channel:'YAHOO',source:'GMAIL',senderAuthenticated:true,verifiedSaleFacts:true,yahooStatus:'WON',yahooAuthenticatedWonAt:now,quantity:1,shipping:null,identifierType:'AUCTION',orderId:'r1240092475',externalListingId:'r1240092475'});assert.equal(d.kind,'SELL');if(d.kind==='SELL'){assert.equal(d.request.saleShippingReceived,null);assert.equal(d.request.saleCommission,999);}
+});
 test('30-second EC interval waits without retrying sale',async()=>{const f=flow();f.p.execute=async p=>({...p,nextAt:Date.parse(now)+45000});await runAutomaticSale(f.job,f.p);assert.equal(f.job.state,'SALE_AUTO_ACTIVE');assert.equal(f.job.nextAt,Date.parse(now)+45000);await runAutomaticSale(f.job,f.p);assert.equal(f.counts().saleWrites,1);});
 test('privacy removes contact spans, preserves name, question, product URL and sizes',()=>{
  const t='山田です。東京都国立市東1-2-3です。\n電話：090-1234-5678\nmail: qa@example.invalid\n〒123-4567\n幅71.5cmの椅子はありますか？ https://bellointeri.base.shop/items/157908850';

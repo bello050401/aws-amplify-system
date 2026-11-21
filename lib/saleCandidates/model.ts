@@ -10,13 +10,21 @@ export type SaleCandidate={
  shipping:number|null; orderTotal:number|null; payment:string; warnings:string[]; orderLineCount:number;
  feeAllocation?:{index:number;amounts:number[]};
  externalListingId?:string; orderLineId?:string;
+ /** Authenticated Mercari seller-order link. It is not a product/listing ID. */
+ mercariOrderUrl?:string; mercariShopId?:string;
+ mercariDesktopIdentity?:{jobId:string;snapshot:string;inventoryVersion:string;evidenceRef:string;actor:string;verifiedAt:string};
  /** Trusted-source provenance, never inferred from a display name or body text. */
  senderAuthenticated?:boolean;
  verifiedSaleFacts?:boolean;
+ yahooSaleEvidence?:{auctionId:string;quantity:1;priceYen:number;checkedAt:string}&({source:'OWNED_CLOSED_LISTING'}|{source:'TRUSTED_NOTICE_LINKED_CLOSED_LISTING';inventoryId:string;inventoryVersion:string;bindingCheckedAt:string});
  baseDispatchStatus?:string;
  yahooStatus?:YahooSaleStatus; yahooEvents?:Partial<Record<YahooSaleStatus,string>>;
+ /** Earliest authenticated seller WON notice; later authenticated stages cannot establish a sale. */
+ yahooAuthenticatedWonAt?:string;
  yahooPaymentNotice?:{gmailId:string;receivedAt:string};
  yahooPaymentState?:'WAITING'|'APPLIED'; yahooPaymentAppliedAt?:string; yahooPaymentError?:string;
+ /** Exact prior reservation version, recorded atomically when payment settles a deferred sale. */
+ yahooReservationVersion?:string;
  orderRoute?:'WEB'|'PAY_ID_APP'|'UNKNOWN';
  confirmedLineFee?:number;
  result?:SoldOutResult; completedBy?:string; completedAt?:string; deletedBy?:string; deletedAt?:string;

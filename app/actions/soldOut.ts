@@ -1,7 +1,7 @@
 'use server';
 import {revalidatePath} from 'next/cache';
 import {getInventoryRole} from '@/lib/amplify/requireInventoryUser';
-import {inventoryDdb,inventoryTable} from '@/lib/inventory/categoryPersistence';
+import {inventoryDdb,inventoryTable,getInventoryRaw} from '@/lib/inventory/categoryPersistence';
 import {listCategories} from '@/lib/inventory/queries';
 import {clearInventoryCountCache} from '@/lib/inventory/inventoryPage';
 import {serverDataClient,inventoryAuthMode} from '@/lib/amplify/dataClient';
@@ -9,9 +9,13 @@ import {createSoldOutService} from '@/lib/inventory/soldOutCore';
 import {copySoldOutPhotos,discardSoldOutPhotos} from '@/lib/inventory/soldOutPhotos';
 import {SoldOutError,type SoldOutRequest,type SoldOutResult} from '@/lib/inventory/soldOutInput';
 import {inventoryMutationSession} from '@/lib/inventory/mutationSession';
-import {candidateStore} from '@/lib/saleCandidates/store';
+import {candidateStore,candidateConfig} from '@/lib/saleCandidates/store';
 import type {SaleCandidate} from '@/lib/saleCandidates/model';
 import {yahooPaymentPlan} from '@/lib/saleCandidates/yahooPaymentModel';
+import {ensureAutomaticSaleBinding} from '@/lib/saleCandidates/saleBinding';
+import {refreshSaleBinding} from '@/lib/listing/econveni/saleAdjustment';
+import {verifyMercariSale} from '@/lib/saleCandidates/desktopJobs';
+import {automationStockOwner,claimAutomationStock,automationStockGuard} from '@/lib/saleCandidates/automationStockLock';
 
 export async function registerSoldOut(request:SoldOutRequest):Promise<{ok:true;result:SoldOutResult}|{ok:false;code:string;error:string}> {
   if((await getInventoryRole())!=='ADMIN')return {ok:false,code:'FORBIDDEN',error:'売却は管理者のみ実行できます。'};
@@ -29,10 +33,24 @@ export async function registerSoldOut(request:SoldOutRequest):Promise<{ok:true;r
       if(expectedMarket&&request.market!==expectedMarket)throw new SoldOutError('INVALID','購入通知の販売先は変更できません。通知を確認してください。');
       if(candidate.state==='DONE'&&candidate.result)return {ok:true,result:candidate.result};
     }
+    const stockOwner=await automationStockOwner(inventoryDdb,candidateConfig().tableName,request.inventoryId);
+    if(stockOwner&&stockOwner!==candidate?.id)throw new SoldOutError('CONFLICT','同じ在庫の前の売却処理が未完了です。販売先の処理結果を先に確認してください。');
+    if(candidate&&!await claimAutomationStock(inventoryDdb,candidateConfig().tableName,request.inventoryId,candidate.id))throw new SoldOutError('CONFLICT','同じ在庫の前の売却処理が未完了です。');
+    const channel=candidate?.channel==='MERCARI'?'MERCARI_SHOPS':candidate?.channel;
+    const linked=channel&&channel!=='DIRECT'&&candidate?.externalListingId
+      ?await ensureAutomaticSaleBinding(request.inventoryId,channel,candidate.externalListingId,actor)
+      :!!await refreshSaleBinding(request.inventoryId);
+    if(!linked)throw new SoldOutError('INVALID','売却登録の前にeコンビニと商品を紐付け、最新の出品IDを確認してください。');
+    if(candidate?.channel==='MERCARI'){
+      const inventory=await getInventoryRaw(request.inventoryId);
+      if(!inventory||inventory.updatedAt!==request.expectedUpdatedAt)throw new SoldOutError('CONFLICT','在庫が変更されています。商品を開き直してください。');
+      const verification=await verifyMercariSale(candidate,inventory);
+      if(verification.status!=='DONE')throw new SoldOutError('INVALID','接続中のパソコンでメルカリShopsの商品名と写真を確認してください。確認依頼は重複せず保持しています。');
+    }
     const execute=createSoldOutService({yahooPayment:yahooPaymentPlan(candidate),db:inventoryDdb,table:inventoryTable,categories:listCategories,copyPhotos:copySoldOutPhotos,discardPhotos:discardSoldOutPhotos,nextSku:async()=>{
       const result=await serverDataClient.mutations.generateInventorySku(inventoryAuthMode);
       if(!result.data||result.errors?.length)throw Error('管理番号を作成できませんでした。');return result.data;
-    },...(candidate?{saleCommit:(result:SoldOutResult,now:string)=>candidateStore().commit(candidate!,actor,result,now)}:{})});
+    },...(candidate?{saleCommit:(result:SoldOutResult,now:string)=>[...automationStockGuard(candidateConfig().tableName,request.inventoryId,candidate!.id),...candidateStore().commit(candidate!,actor,result,now)]}:{})});
     const result=await execute(request,actor);
     clearInventoryCountCache();
     revalidatePath('/inventory'); revalidatePath(`/inventory/${result.sourceId}`); revalidatePath(`/inventory/${result.soldId}`);

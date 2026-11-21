@@ -17,18 +17,24 @@ import {parseBaseOrder} from '../../../lib/saleCandidates/baseOrders';
 import {getAccessToken} from '../../../lib/base/oauth';
 import type {SaleCandidate} from '../../../lib/saleCandidates/model';
 import {shouldSeedAutomation} from '../../../lib/saleCandidates/automationEligibility';
-import {runPostSaleJob,type PostSaleJob} from '../../../lib/saleCandidates/postSaleQueueCore';
+import {runPostSaleJob,postSaleJobSaveRequest,type PostSaleJob} from '../../../lib/saleCandidates/postSaleQueueCore';
 import type {PostSalePlan} from '../../../lib/saleCandidates/postSaleModel';
 import {ECONVENI_WORKFLOW_TABLE} from '../../../lib/listing/econveni/runtimeStore';
 import {processNativeQueue} from '../../../lib/listing/econveni/nativeQueue';
 import {runCatalogMaintenance} from './maintenance';
+import {ensureAutomaticSaleBinding} from '../../../lib/saleCandidates/saleBinding';
+import {claimAutomationStock,releaseAutomationStock,automationStockGuard} from '../../../lib/saleCandidates/automationStockLock';
+import {resolveMercariSale,verifyMercariSale,postSaleMercari,postSaleMercariComplete} from '../../../lib/saleCandidates/desktopJobs';
+import {completeYahooSaleFacts} from '../../../lib/saleCandidates/yahooSaleFactsServer';
+import {reportSaleAutomationFailure} from '../../../lib/saleCandidates/errorReporting';
 
 const required=(name:string)=>{const v=process.env[name];if(!v)throw Error('SALE_CONFIGURATION_MISSING');return v;};
 const table=()=>required('SALE_CANDIDATES_TABLE');
 const actor='BELLO_SALE_AUTOMATION';
-const ec:PostSalePorts={automatic:true,catalog:id=>getEcListingCatalogCore('ADMIN',id),reviewStop:stopListing,executeStop:(r,a)=>stopListing(r.inventoryId,r.channel,a,r.token)};
+const ec:PostSalePorts={automatic:true,releaseStock:(id,candidate)=>releaseAutomationStock(db,table(),id,candidate),desktopMercari:postSaleMercari,desktopMercariComplete:postSaleMercariComplete,catalog:id=>getEcListingCatalogCore('ADMIN',id),reviewStop:stopListing,executeStop:(r,a)=>stopListing(r.inventoryId,r.channel,a,r.token)};
 const confirmedEc:PostSalePorts={...ec,automatic:false,background:true};
-const safeCode=(e:unknown)=>{const v=(e as {code?:string;name?:string})?.code||(e as Error)?.name;return v&&/^[A-Za-z0-9_]{1,64}$/.test(v)?v:'UNCONFIRMED';};
+const machineErrors=new Set(['BASE_ORDER_VERIFY_FAILED','BASE_ORDER_CHANGED','YAHOO_SALE_AUTH_REQUIRED','YAHOO_SALE_ACCESS_DENIED','YAHOO_SALE_RATE_LIMITED','YAHOO_SALE_FORM_CHANGED','YAHOO_SALE_READ_UNAVAILABLE','SALE_RESULT_UNCONFIRMED','SALE_SKU_FAILED','SALE_CONFIGURATION_MISSING','AUTH_REQUIRED','ADDITIONAL_AUTH','SESSION_EXPIRED','RATE_LIMITED','VERIFY_REQUIRED','STATE_UNAVAILABLE','WAIT_INTERVAL','BUSY_OR_STOPPED']);
+const safeCode=(e:unknown)=>{const error=e as {code?:string;name?:string;message?:string};if(error?.message&&machineErrors.has(error.message))return error.message;const v=error?.code||error?.name;return v&&/^[A-Za-z0-9_]{1,64}$/.test(v)?v:'UNCONFIRMED';};
 async function get(id:string){return (await db.send(new GetCommand({TableName:table(),Key:{id},ConsistentRead:true}))).Item;}
 async function freshBase(c:SaleCandidate):Promise<SaleCandidate>{
  if(c.channel!=='BASE')return c;
@@ -50,7 +56,7 @@ export async function handler(event?:{mode?:string}){
   const store=createCandidateStore(db,table()),fees=await store.config();
   const page=await db.send(new QueryCommand({TableName:table(),IndexName:'ByState',KeyConditionExpression:'#s=:s',ExpressionAttributeNames:{'#s':'state'},ExpressionAttributeValues:{':s':'PENDING'},Limit:20}));
   const rows=[];
-  for(const row of page.Items??[]){try{const c=await freshBase(row as SaleCandidate),ids=c.channel==='BASE'||c.channel==='YAHOO'?await exactListingInventoryIds(c.channel,c.externalListingId??''):[];
+  for(const row of page.Items??[]){try{const c=await freshBase(row as SaleCandidate),ids=c.channel!=='DIRECT'?await exactListingInventoryIds(c.channel==='MERCARI'?'MERCARI_SHOPS':c.channel,c.externalListingId??''):[];
    const decision=automaticSaleDecision(c,ids,ids.length===1?(await getInventoryRaw(ids[0])??null):null,fees,config?.enabledAt??new Date().toISOString());
    rows.push({candidateId:c.id,channel:c.channel,matches:ids.length,decision:decision.kind,reason:'reason'in decision?decision.reason:null});
   }catch(e){rows.push({candidateId:row.id,error:safeCode(e)});}}
@@ -72,11 +78,13 @@ export async function handler(event?:{mode?:string}){
    // GSI may lag. Read the exact durable request before acting.
    const job=await get(indexed.id) as PostSaleJob|undefined;
    if(!job||job.state!=='SALE_EC_ACTIVE'||job.nextAt>Date.now())continue;
+   let manualVersion=job.version;
    try{await runPostSaleJob(job,{
     now:Date.now,
     read:async()=> (await db.send(new GetCommand({TableName:ECONVENI_WORKFLOW_TABLE,Key:{pk:'SALE_EC#'+job.candidateId},ConsistentRead:true}))).Item as PostSalePlan|undefined,
     execute:p=>executePostSaleCore(confirmedEc,p.candidateId,job.actor,job.token,true,job.terms),
-    save:async value=>{await db.send(new PutCommand({TableName:table(),Item:value,ConditionExpression:'#t=:t AND #s=:active',ExpressionAttributeNames:{'#t':'token','#s':'state'},ExpressionAttributeValues:{':t':job.token,':active':'SALE_EC_ACTIVE'}}));},
+    complete:async p=>{const c=await createCandidateStore(db,table()).get(p.candidateId);if(c?.result&&!c.result.quantityDeferred)await releaseAutomationStock(db,table(),p.sourceId,p.candidateId);},
+    save:async value=>{const write=postSaleJobSaveRequest(table(),value,{token:job.token,version:manualVersion});await db.send(new PutCommand(write));manualVersion=write.Item!.version as string;value.version=manualVersion;},
     attention:async(p,reason)=>{await db.send(new UpdateCommand({TableName:ECONVENI_WORKFLOW_TABLE,Key:{pk:'SALE_EC#'+p.id},UpdateExpression:'SET #s=:attention,#e=:reason,updatedAt=:now',ConditionExpression:'#t=:t AND #s=:old',ExpressionAttributeNames:{'#t':'token','#s':'state','#e':'error'},ExpressionAttributeValues:{':t':job.token,':old':p.state,':attention':'ATTENTION',':reason':reason,':now':new Date().toISOString()}}));},
    });queuedProcessed++;}catch(e){console.error('POST_SALE_WORKER_FAILED',{code:safeCode(e)});}
   }
@@ -112,15 +120,37 @@ export async function handler(event?:{mode?:string}){
    try{
     const manual=await get('EC_JOB:'+job.candidateId);
     if(manual?.state==='SALE_EC_ACTIVE')continue;
+    const previous=await store.get(job.candidateId);
+    if(previous?.result){
+     if(!await claimAutomationStock(db,table(),previous.result.sourceId,job.candidateId))continue;
+     job.inventoryId=previous.result.sourceId;
+    }
     const result=await runAutomaticSale(job,{now:Date.now,candidate:()=>store.get(job.candidateId),save,decide:async current=>{
-     const c=await freshBase(current),ids=c.channel==='BASE'||c.channel==='YAHOO'?await exactListingInventoryIds(c.channel,c.externalListingId??''):[];
+     let c=await freshBase(current);
+     if(c.channel==='YAHOO'&&Date.parse(c.yahooAuthenticatedWonAt??'')>=Date.parse(config.enabledAt))c=await completeYahooSaleFacts(c,db,table());
+     const ids=c.channel!=='DIRECT'?await exactListingInventoryIds(c.channel==='MERCARI'?'MERCARI_SHOPS':c.channel,c.externalListingId??''):[];
+     if(c.yahooSaleEvidence?.source==='TRUSTED_NOTICE_LINKED_CLOSED_LISTING'){
+      const proof=c.yahooSaleEvidence,item=ids.length===1?await getInventoryRaw(ids[0]):null;
+      if(ids.length!==1||ids[0]!==proof.inventoryId||!item||item.updatedAt!==proof.inventoryVersion)return {kind:'REVIEW',reason:'STOCK_CHANGED'};
+     }
      return automaticSaleDecision(c,ids,ids.length===1?(await getInventoryRaw(ids[0])??null):null,fees,config.enabledAt);
-    },sell:async(c,request)=>createSoldOutService({db,table:inventoryTable,...stock,yahooPayment:yahooPaymentPlan(c),saleCommit:(result,now)=>store.commit(c,actor,result,now)})(request,actor),review:id=>reviewPostSaleCore(ec,id,actor),execute:p=>executePostSaleCore(ec,p.candidateId,actor,p.token,true)});
+    },identify:resolveMercariSale,prepare:async(c,request)=>{
+     if(!await claimAutomationStock(db,table(),request.inventoryId,c.id))return {status:'WAIT',reason:'PREVIOUS_SALE_PENDING'};
+     job.inventoryId=request.inventoryId;await save(job);
+     const channel=c.channel==='MERCARI'?'MERCARI_SHOPS':c.channel;
+     if(channel==='DIRECT'||!await ensureAutomaticSaleBinding(request.inventoryId,channel,c.externalListingId??'',actor))return {status:'REVIEW',reason:'ECONVENI_BINDING_REQUIRED'};
+     const inventory=await getInventoryRaw(request.inventoryId);
+     if(!inventory||inventory.updatedAt!==request.expectedUpdatedAt)return {status:'REVIEW',reason:'STOCK_CHANGED'};
+     if(c.channel==='MERCARI'){const verified=await verifyMercariSale(c,inventory);return {...verified,reason:verified.status==='DONE'?undefined:'MERCARI_DESKTOP_VERIFICATION'};}
+     return {status:'DONE'};
+    },sell:async(c,request)=>createSoldOutService({db,table:inventoryTable,...stock,yahooPayment:yahooPaymentPlan(c),saleCommit:(result,now)=>[...automationStockGuard(table(),request.inventoryId,c.id),...store.commit(c,actor,result,now)]})(request,actor),review:id=>reviewPostSaleCore(ec,id,actor),execute:p=>executePostSaleCore(ec,p.candidateId,actor,p.token,true,config.yahooRelistTerms===true)});
+    if(result.state==='SALE_AUTO_COMPLETE'&&result.inventoryId)await releaseAutomationStock(db,table(),result.inventoryId,result.candidateId);
+    if(result.state==='SALE_AUTO_ATTENTION'&&result.reason)await reportSaleAutomationFailure(result.candidateId,result.phase,result.reason);
     processed++;if(result.state==='SALE_AUTO_COMPLETE')complete++;if(result.state==='SALE_AUTO_ATTENTION')attention++;
    }catch(e){
     job.attempts++;job.reason=safeCode(e);job.updatedAt=new Date().toISOString();
     job.state=job.attempts>=3?'SALE_AUTO_ATTENTION':'SALE_AUTO_ACTIVE';job.nextAt=Date.now()+300000;
-    await save(job);attention++;
+    await save(job);await reportSaleAutomationFailure(job.candidateId,job.phase,job.reason);attention++;
    }
   }
   await db.send(new PutCommand({TableName:table(),Item:{id:'AUTOMATION_STATUS',lastRunAt:new Date().toISOString(),processed,complete,attention,durationMs:Date.now()-started}}));

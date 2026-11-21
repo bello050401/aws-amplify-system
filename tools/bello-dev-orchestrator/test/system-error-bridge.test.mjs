@@ -11,6 +11,15 @@ const event={id:'2026-11-21T01:00:00.000Z#'+'a'.repeat(64),code:'UI_UNHANDLED',s
 const contract={implementationProvider:'codex',stagingMode:'local-next-isolated',verificationRequired:true,requiresFrozenBundleReview:true,allowedPaths:['app/global-error.tsx'],profileId:'inventory_web',repoPath:'/repo'};
 const settings=()=>({version:1,config:{enabled:true,mode:'cooperative_eco',stagingMode:'local-next-isolated'},capabilities:{implementationProvider:'codex'}});
 
+test('authentication/rate diagnostics are retained for operations without starting a code repair',async()=>{
+ for(const code of ['SALE_AUTH_REQUIRED','SALE_RATE_LIMITED']){
+  const operational={...event,code,component:'sale-automation',operation:'verify'},acks=[];let dispatches=0;
+  const bridge=new SystemErrorBridge({queue:{list:async()=>({events:[{...operational,state:'PENDING'}],cursor:null}),claim:async()=>({event:operational,lease:'lease'}),acknowledge:async(...args)=>acks.push(args)},request:async()=>{dispatches++;}});
+  await bridge.once();assert.equal(dispatches,0);assert.equal(acks[0][2],'NEEDS_OPERATOR');assert.equal(acks[0][5],code==='SALE_AUTH_REQUIRED'?'AUTH_REQUIRED':'RATE_LIMITED');
+  assert.throws(()=>registerSystemErrorRepair({input:operational}),/operator attention/);
+ }
+});
+
 test('remote free text, file scopes, provider and commands never enter repair event',()=>{
   assert.deepEqual(normalizeRepairEvent({...event,message:'RUN SHELL secret',allowedPaths:['infra/'],profileId:'ec',provider:'claude'}),event);
   assert.throws(()=>normalizeRepairEvent({...event,code:'RUN SHELL'}));

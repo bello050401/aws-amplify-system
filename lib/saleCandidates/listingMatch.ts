@@ -8,8 +8,8 @@ import {collectYahooInventoryIds} from './yahooListingMatch';
 export async function exactBaseInventoryIds(externalListingId:string){
  return exactListingInventoryIds('BASE',externalListingId);
 }
-export async function exactListingInventoryIds(channel:'BASE'|'YAHOO',externalListingId:string){
- if(!(channel==='BASE'?/^[1-9][0-9]*$/:/^[a-z][0-9]{6,15}$/).test(externalListingId))return [];
+export async function exactListingInventoryIds(channel:'BASE'|'YAHOO'|'MERCARI_SHOPS',externalListingId:string){
+ if(!(channel==='BASE'?/^[1-9][0-9]*$/:channel==='YAHOO'?/^[a-z][0-9]{6,15}$/:/^[A-Za-z0-9_-]{6,128}$/).test(externalListingId))return [];
  if(channel==='YAHOO'){
   const legacy:{inventoryId?:string;auctionId?:string;deletedAt?:string|null}[]=[];let cursor:Record<string,unknown>|undefined,pages=0;
   do{
@@ -28,12 +28,14 @@ export async function exactListingInventoryIds(channel:'BASE'|'YAHOO',externalLi
  // Legacy/manual e-conveni links carry the same immutable BASE item ID.
  // Keep all matches: stock splits must be reviewed, never choose the first one.
  const manual=await readManualSync();
+ for(const remote of manual.snapshot?.products??[])if(remote.channels[channel]?.listingId===externalListingId&&remote.inventoryMarker&&/^[a-f0-9-]{36}$/i.test(remote.inventoryMarker))ids.add(remote.inventoryMarker);
  for(const link of manual.links){
   if(link.disabled)continue;
   const remote=manual.snapshot?.products.find(p=>p.productId===link.productId);
-  const observed=remote?.channels.BASE?.listingId, baseline=link.baseline.BASE?.listingId;
+  const observed=remote?.channels[channel]?.listingId, baseline=link.baseline[channel]?.listingId;
   // A stale baseline cannot identify an order after the remote listing ID changed.
   if(observed===externalListingId&&(!baseline||baseline===observed))ids.add(link.inventoryId);
  }
+ if(channel==='MERCARI_SHOPS')for(const workflow of await readEconveniCatalog())if(workflow.channels.MERCARI_SHOPS.listingId===externalListingId)ids.add(workflow.inventoryId);
  return [...ids];
 }

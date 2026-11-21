@@ -28,6 +28,7 @@ export function managedStockTitleChange<T extends Row>(input:T,current?:Row):T &
   const title=input.name===undefined?String(current?.name??meta.prefix+meta.baseName):String(input.name);
   // A human edit is retained; only the exact previously generated prefix is removed.
   const base=meta.prefix&&title.startsWith(meta.prefix)?title.slice(meta.prefix.length):title;
-  const next={...meta,baseName:base,prefix:prefixFor(q),lastQuantity:q};
+  const salePrefix=typeof meta.salePrefix==='string'&&/^【(?:BASE|ヤフオク|メルカリショップ)】$/.test(meta.salePrefix)?meta.salePrefix:'';
+  const next={...meta,baseName:base,prefix:salePrefix+prefixFor(q),lastQuantity:q};
   return {...input,name:next.prefix+base,customFields:JSON.stringify({...nextCustom,[STOCK_TITLE_META]:next})};
 }

@@ -9,7 +9,7 @@ export async function automationStatus(ids:string[]){
   db.send(new GetCommand({TableName:table,Key:{id:'AUTOMATION_CONFIG'}})),db.send(new GetCommand({TableName:table,Key:{id:'AUTOMATION_STATUS'}})),
   ids.length?db.send(new BatchGetCommand({RequestItems:{[table]:{Keys:ids.slice(0,80).map(id=>({id:'AUTO:'+id})),ProjectionExpression:'candidateId,#s,phase,reason,updatedAt,completedAt,elapsedMs',ExpressionAttributeNames:{'#s':'state'},ConsistentRead:true}}})):Promise.resolve({Responses:{[table]:[]}})
  ]);
- return {enabled:config.Item?.enabled===true,lastRunAt:status.Item?.lastRunAt??null,jobs:Object.fromEntries((jobs.Responses?.[table]??[]).map(j=>[j.candidateId,j]))};
+ return {enabled:config.Item?.enabled===true,enabledAt:config.Item?.enabledAt??null,lastRunAt:status.Item?.lastRunAt??null,jobs:Object.fromEntries((jobs.Responses?.[table]??[]).map(j=>[j.candidateId,j]))};
 }
 export async function retryAutomaticSale(id:string){
  const now=new Date().toISOString();

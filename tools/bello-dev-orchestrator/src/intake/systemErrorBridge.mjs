@@ -37,6 +37,9 @@ export class SystemErrorBridge {
       let claimed;
       try {claimed = await this.queue.claim(event.id, this.now());}
       catch (error) {if (error?.name === 'ConditionalCheckFailedException') continue; throw error;}
+      if (['SALE_AUTH_REQUIRED','SALE_RATE_LIMITED'].includes(claimed.event.code)) {
+        await this.queue.acknowledge(event.id,claimed.lease,'NEEDS_OPERATOR',undefined,undefined,claimed.event.code === 'SALE_AUTH_REQUIRED' ? 'AUTH_REQUIRED' : 'RATE_LIMITED');summary.needsOperator++;continue;
+      }
       if (this.intakeOnly) {
         await this.queue.acknowledge(event.id,claimed.lease,'NEEDS_OPERATOR',undefined,undefined,'PROFILE_REQUIRED');summary.needsOperator++;continue;
       }

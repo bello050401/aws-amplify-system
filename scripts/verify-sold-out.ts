@@ -135,4 +135,11 @@ test('invalid shipping fails before any mutation; zero and unknown remain distin
 });
 
 import {importedStockTitle,STOCK_TITLE_META} from '../lib/inventory/managedStockTitle';
+for(const [market,prefix] of [['ベイス','【BASE】'],['ヤフオク','【ヤフオク】'],['メルカリSHOP','【メルカリショップ】']])for(const quantity of [1,5])test(`notification ${market} ${quantity}: prefix sold page only; preserve durable receipt`,async()=>{
+ const f=fixture(quantity,true),title=importedStockTitle('【検品】椅子',quantity,'脚','RESTAGE');f.rows().set('Inventory/'+f.source.id,{...f.source,name:title.name,customFields:JSON.stringify({[STOCK_TITLE_META]:title.metadata})});
+ const request={...f.request,name:title.name,market,quantity:1};const result=await f.run(request,'actor'),sold=f.get(result.soldId);
+ assert.equal(sold.name,prefix+'【検品】椅子');assert.equal(JSON.parse(sold.customFields)[STOCK_TITLE_META].prefix,prefix);assert.equal(JSON.parse(sold.customFields).__belloSale.sourceInventoryId,f.source.id);
+ if(quantity>1){assert.equal(f.get(result.sourceId).name,'【在庫4】【検品】椅子');assert.ok(!f.get(result.sourceId).name.includes(prefix));}
+ assert.deepEqual(await f.run(request,'actor'),result);assert.equal(f.state.transactions,1);const history=[...f.rows().values()].find((x:any)=>x.fieldName==='売却登録');assert.equal(JSON.parse(history.newValue).changes.name,sold.name);
+});
 test('仕入れ管理接頭辞を売却5→3+2に反映し、社内メモと数量履歴を保持',async()=>{const f=fixture(5),title=importedStockTitle('【検品】椅子',5,'脚','RESTAGE');f.rows().set('Inventory/'+f.source.id,{...f.source,name:title.name,customFields:JSON.stringify({[STOCK_TITLE_META]:title.metadata})});const result=await f.run({...f.request,quantity:2,name:title.name},'actor');assert.equal(f.get(result.sourceId).name,'【在庫3】【検品】椅子');assert.equal(f.get(result.soldId).name,'【在庫2】【検品】椅子');const history=[...f.rows().values()].find((x:any)=>x.fieldName==='売却登録');assert.equal(JSON.parse(history.newValue).changes.name,f.get(result.soldId).name);assert.equal(JSON.parse(history.newValue).remainingName,f.get(result.sourceId).name);});

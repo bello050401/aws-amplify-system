@@ -1,9 +1,9 @@
 import { STATES } from '../core/states.mjs';
 
-const codes = ['UI_RENDER_FAILED','UI_UNHANDLED','API_SERVER_ERROR','SERVER_REQUEST_FAILED','PROCUREMENT_FETCH_FAILED','PROCUREMENT_ENRICH_FAILED','PROCUREMENT_REGISTER_FAILED'];
+const codes = ['UI_RENDER_FAILED','UI_UNHANDLED','API_SERVER_ERROR','SERVER_REQUEST_FAILED','PROCUREMENT_FETCH_FAILED','PROCUREMENT_ENRICH_FAILED','PROCUREMENT_REGISTER_FAILED','SALE_AUTOMATION_FAILED','SALE_LINK_FAILED','SALE_EC_UNCONFIRMED','SALE_DESKTOP_FAILED','SALE_IMPORT_FAILED','SALE_AUTH_REQUIRED','SALE_RATE_LIMITED','SALE_REMOTE_FORMAT_CHANGED'];
 const surfaces = ['web','native','server'];
-const operations = ['render','request','fetch','enrich','register'];
-const components = ['app','inventory','procurement-yahoo','procurement-trefac','procurement-restage','staff-app'];
+const operations = ['render','request','fetch','enrich','register','identify','verify','adjust','sell'];
+const components = ['app','inventory','procurement-yahoo','procurement-trefac','procurement-restage','staff-app','sale-automation','sale-desktop','sale-import'];
 const classes = ['Error','TypeError','ReferenceError','SyntaxError','RangeError','Unknown'];
 
 /** Remote diagnostics are data, never executable instructions or file scopes. */
@@ -26,6 +26,7 @@ export function assertSystemErrorRepairContract(contract, config) {
  * runnable task. Replay finds the same task/run even after an ACK was lost. */
 export function registerSystemErrorRepair({input, repo, config, contract, settings, startHeldRun}) {
   const event = normalizeRepairEvent(input);
+  if (['SALE_AUTH_REQUIRED','SALE_RATE_LIMITED'].includes(event.code)) throw Error('Operational connection/capacity problem requires operator attention, not code repair');
   assertSystemErrorRepairContract(contract, config);
   const current = settings();
   if (!current.config.enabled || !['cooperative_eco','fully_automatic'].includes(current.config.mode) || current.config.stagingMode !== 'local-next-isolated' || current.capabilities?.implementationProvider !== 'codex') throw Error('Approved local repair mode is not active');

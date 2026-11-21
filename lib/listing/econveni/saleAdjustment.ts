@@ -17,6 +17,7 @@ import {selectManualLink,manualLinkKey} from './manualSyncModel';
 import {readManualSync} from './manualSync';
 import type {EcChannel,EcReview} from '../ecManagement';
 import {manualLinkedStop} from './manualStop';
+import {settledYahooContinuation} from '@/lib/saleCandidates/yahooSettlementContinuationServer';
 export async function saleAdjustmentStarted(request:SaleAdjustment){return !!(await db.send(new GetCommand({TableName:table,Key:{pk:adjustmentKey(request)},ConsistentRead:true}))).Item;}
 
 async function binding(id:string,channel?:EcChannel){
@@ -79,7 +80,7 @@ export async function reviewSaleAdjustment(input:{candidateId:string;inventoryId
   if(native?.externalListingId&&native.externalListingId!==input.listingId||native?.status==='PUBLISHING')throw Error('BASEの紐付けまたは処理中の操作を確認してください。');
   const actual=input.channel==='BASE'?await readBaseItem(input.listingId):null;
   if(actual?.hasVariations)throw Error('バリエーション別の数量はBASEで変更してください。');
-  const quantity=input.channel==='BASE'?Math.min(actual!.quantity,Math.floor(input.remaining/input.pack)):Math.floor(input.remaining/input.pack);
+  const quantity=Math.floor(input.remaining/input.pack);
   if(input.channel==='YAHOO'&&quantity<1)throw Error('残り在庫が1出品分に足りません。');
   const fields:Record<string,string>={products_name:stockCountTitle(values.products_name,input.remaining),products_quantity:String(input.remaining)};
   if(input.channel==='BASE'){fields.base_stock=String(quantity);fields.base_title=stockCountTitle(values.base_title,input.remaining);}
@@ -95,9 +96,10 @@ export async function executeSaleAdjustment(request:SaleAdjustment){
  const store=econveniStore(request.inventoryId),session=new EconveniHttpSession();
  try{return await withEconveniAccount(store,session,()=>econveniCredentialStore.credentials(),async()=>{
   const b=await binding(request.inventoryId,request.channel);if(!b)throw Error('紐付けがありません。');
+  const settledSuccessor=b.item.updatedAt!==request.inventoryVersion&&request.channel==='BASE'&&await settledYahooContinuation(request.candidateId,request.inventoryId,request.inventoryVersion,Number(request.fields.products_quantity));
   return runSaleAdjustment(request,{
    read:async()=>((await db.send(new GetCommand({TableName:table,Key:{pk:adjustmentKey(request)},ConsistentRead:true}))).Item as AdjustmentReceipt)??null,
-   checkBinding:async()=>{if(b.productId!==request.productId||b.version!==request.bindingVersion||b.item.updatedAt!==request.inventoryVersion)throw Error('紐付けまたは在庫が変更されています。');},
+   checkBinding:async()=>{if(b.productId!==request.productId||b.version!==request.bindingVersion||b.item.updatedAt!==request.inventoryVersion&&!settledSuccessor)throw Error('紐付けまたは在庫が変更されています。');},
    observe:async(r,step)=>{
     const remote=await session.readExternalProduct(r.productId),id=remote.channels[r.channel].listingId;
     if(remote.inventoryMarker&&remote.inventoryMarker!==r.inventoryId)throw Error('在庫番号が変わりました。');

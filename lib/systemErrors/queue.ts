@@ -25,7 +25,7 @@ export class SystemErrorQueue {
   constructor(readonly config: ErrorQueueConfig, db?: DynamoDBDocumentClient) {
     this.db = db || DynamoDBDocumentClient.from(new DynamoDBClient({region: config.region, maxAttempts: 1}), {marshallOptions: {removeUndefinedValues: true}});
   }
-  async enqueue(signal: SystemErrorSignal, owner: string, now = Date.now(), deadline = AbortSignal.timeout(1500)) {
+  async enqueue(signal: SystemErrorSignal, owner: string, now = Date.now(), deadline = AbortSignal.timeout(1500), receipt?: {table:string;id:string}) {
     const safe = normalizeSystemErrorSignal(signal);
     if (!safe || !owner) throw Error("INVALID_SIGNAL");
     const createdAt = new Date(now).toISOString();
@@ -36,19 +36,40 @@ export class SystemErrorQueue {
     const expiresAt = Math.floor(now / 1000) + 7 * 86400;
     const event: QueueEvent = {...safe, id, release: this.config.release, createdAt, state: "PENDING", attempts: 0};
     const TableName = this.config.table;
+    if(receipt&&(!/^[A-Za-z0-9_.-]{3,255}$/.test(receipt.table)||!/^SALE_ERROR:[a-f0-9]{64}$/.test(receipt.id)))throw Error('INVALID_ERROR_RECEIPT');
+    const receiptWrite=receipt?{Put:{TableName:receipt.table,Item:{id:receipt.id,reportedAt:createdAt,eventId:id},ConditionExpression:'attribute_not_exists(id)'}}:null;
     const budget = (pk: string, maximum: number) => ({Update: {TableName, Key: {pk, sk: "STATE"}, UpdateExpression: "SET expiresAt = :ttl ADD #n :one", ConditionExpression: "attribute_not_exists(#n) OR #n < :max", ExpressionAttributeNames: {"#n": "count"}, ExpressionAttributeValues: {":ttl": expiresAt, ":one": 1, ":max": maximum}}});
     try {
       await withQueueDeadline(() => this.db.send(new TransactWriteCommand({TransactItems: [
         {Put: {TableName, Item: {pk: `DEDUPE#${digest}`, sk: "STATE", eventId: id, expiresAt}, ConditionExpression: "attribute_not_exists(pk)"}},
         budget(`BUDGET#GLOBAL#${hour}`, 100), budget(`BUDGET#${actor}#${hour}`, 10),
         {Put: {TableName, Item: {pk: "ERRORS", sk: id, ...event, expiresAt}, ConditionExpression: "attribute_not_exists(pk)"}},
+        ...(receiptWrite?[receiptWrite]:[]),
       ]}), {abortSignal: deadline}), deadline);
       return {accepted: true, duplicate: false};
     } catch (error) {
       if ((error as {name?: string}).name !== "TransactionCanceledException") throw error;
+      if(receipt){
+        const sent=await withQueueDeadline(()=>this.db.send(new GetCommand({TableName:receipt.table,Key:{id:receipt.id},ConsistentRead:true}),{abortSignal:deadline}),deadline);
+        if(sent.Item)return {accepted:true,duplicate:true};
+      }
       // A canceled transaction may be contention/permissions, not a duplicate.
       const existing = await withQueueDeadline(() => this.db.send(new GetCommand({TableName, Key: {pk: `DEDUPE#${digest}`, sk: "STATE"}, ConsistentRead: true}), {abortSignal: deadline}), deadline);
-      if (existing.Item) return {accepted: true, duplicate: true};
+      if (existing.Item) {
+        if(receipt){
+          // A shared diagnostic already exists. Atomically retain its receipt so
+          // tomorrow's worker cannot report this same sale failure again.
+          try{await withQueueDeadline(()=>this.db.send(new TransactWriteCommand({TransactItems:[
+            {ConditionCheck:{TableName,Key:{pk:`DEDUPE#${digest}`,sk:'STATE'},ConditionExpression:'eventId=:event',ExpressionAttributeValues:{':event':existing.Item!.eventId}}},
+            {Put:{TableName:receipt.table,Item:{id:receipt.id,reportedAt:createdAt,eventId:existing.Item!.eventId},ConditionExpression:'attribute_not_exists(id)'}},
+          ]}),{abortSignal:deadline}),deadline);}catch(duplicate){
+            if((duplicate as {name?:string}).name!=='TransactionCanceledException')throw duplicate;
+            const sent=await withQueueDeadline(()=>this.db.send(new GetCommand({TableName:receipt.table,Key:{id:receipt.id},ConsistentRead:true}),{abortSignal:deadline}),deadline);
+            if(!sent.Item)throw duplicate;
+          }
+        }
+        return {accepted: true, duplicate: true};
+      }
       throw Error("QUEUE_LIMIT_OR_CONFLICT");
     }
   }
@@ -82,7 +103,7 @@ export class SystemErrorQueue {
   }
   async acknowledge(id: string, lease: string, state: string, taskId?: string, runId?: string, outcome?: string) {
     this.assertId(id);
-    if (!/^[a-f0-9-]{36}$/.test(lease) || !["DISPATCHED", "NEEDS_OPERATOR", "VERIFIED_LOCAL", "FAILED"].includes(state) || (taskId && !/^task_[a-f0-9]{18}$/.test(taskId)) || (runId && !/^eco_[a-f0-9]{32}$/.test(runId)) || (outcome && !["PROFILE_REQUIRED", "PROVIDER_BLOCKED", "REPAIR_FAILED", "AWAITING_APPROVAL", "LOCAL_CHECKS_PASSED", "REGISTERED", "DISPATCH_FAILED"].includes(outcome))) throw Error("INVALID_ACK");
+    if (!/^[a-f0-9-]{36}$/.test(lease) || !["DISPATCHED", "NEEDS_OPERATOR", "VERIFIED_LOCAL", "FAILED"].includes(state) || (taskId && !/^task_[a-f0-9]{18}$/.test(taskId)) || (runId && !/^eco_[a-f0-9]{32}$/.test(runId)) || (outcome && !["AUTH_REQUIRED", "RATE_LIMITED", "PROFILE_REQUIRED", "PROVIDER_BLOCKED", "REPAIR_FAILED", "AWAITING_APPROVAL", "LOCAL_CHECKS_PASSED", "REGISTERED", "DISPATCH_FAILED"].includes(outcome))) throw Error("INVALID_ACK");
     await this.db.send(new UpdateCommand({TableName: this.config.table, Key: {pk: "ERRORS", sk: id},
       UpdateExpression: "SET #s = :state, taskId = :task, runId = :run, outcome = :outcome",
       ConditionExpression: "attribute_exists(pk) AND lease = :lease AND #s IN (:claimed, :dispatched)",

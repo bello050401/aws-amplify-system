@@ -3,6 +3,7 @@ import type {InventoryTransaction} from '../inventory/categoryPersistenceCore';
 import type {SoldOutResult} from '../inventory/soldOutInput';
 import {DEFAULT_FEES,currentFeeConfig,type SaleCandidate,type FeeConfig,validateFeeConfig} from './model';
 import {mergeYahooNotification} from './yahooMail';
+import {mergeMercariNotification} from './mercariMailIdentity';
 import {yahooPaymentPlan,yahooPaymentKey,YAHOO_PAYMENT_QUEUE_STATE} from './yahooPaymentModel';
 import {deletedCandidateRecord,type DeletedSaleCandidate} from './deletion';
 export function createCandidateStore(db:DynamoDBDocumentClient,table:string){
@@ -10,6 +11,19 @@ export function createCandidateStore(db:DynamoDBDocumentClient,table:string){
  return {
   get:async(id:string):Promise<SaleCandidate|undefined>=>{const row=await get(id);return ['DELETED','ARCHIVED'].includes(row?.state)?undefined:row as SaleCandidate|undefined;},
   put:async(value:SaleCandidate)=>{try{await db.send(new PutCommand({TableName:table,Item:value,ConditionExpression:'attribute_not_exists(id)'}));return true;}catch(e){if((e as Error).name==='ConditionalCheckFailedException')return false;throw e;}},
+  receiveMercari:async(value:SaleCandidate):Promise<'created'|'updated'|'unchanged'>=>{
+   if(value.channel!=='MERCARI')throw Error('INVALID_MERCARI_NOTIFICATION');
+   for(let attempt=0;attempt<5;attempt++){
+    const current=await get(value.id) as SaleCandidate|undefined;
+    const next=current?mergeMercariNotification(current,value):value;
+    if(next===current)return 'unchanged';
+    try{
+     await db.send(new PutCommand({TableName:table,Item:next,ConditionExpression:current?'#s=:state AND updatedAt=:version':'attribute_not_exists(id)',...(current?{ExpressionAttributeNames:{'#s':'state'},ExpressionAttributeValues:{':state':current.state,':version':current.updatedAt}}:{})}));
+     return current?'updated':'created';
+    }catch(e){if((e as Error).name!=='ConditionalCheckFailedException')throw e;}
+   }
+   throw Error('MERCARI_CONCURRENT_UPDATE');
+  },
   receiveYahoo:async(value:SaleCandidate):Promise<'created'|'updated'|'unchanged'>=>{
    for(let attempt=0;attempt<5;attempt++){
     const current=await get(value.id) as SaleCandidate|undefined;

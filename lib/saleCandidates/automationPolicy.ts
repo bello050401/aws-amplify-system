@@ -17,10 +17,12 @@ export function stableSaleMutation(id:string){const h=createHash('sha256').updat
 export function automaticSaleDecision(c:SaleCandidate,ids:string[],item:Record<string,unknown>|null,fees:FeeConfig,enabledAt:string):AutomaticDecision{
  const review=(reason:AutomationReason):AutomaticDecision=>({kind:'REVIEW',reason});
  if(c.state!=='PENDING')return review('STOCK_CHANGED');
- const orderAt=c.channel==='YAHOO'?(c.yahooEvents?.WON??c.receivedAt):c.receivedAt;
+ const orderAt=c.channel==='YAHOO'?(c.yahooAuthenticatedWonAt??''):c.receivedAt;
  if(!Number.isFinite(Date.parse(enabledAt))||!Number.isFinite(Date.parse(orderAt))||Date.parse(orderAt)<Date.parse(enabledAt))return review('HISTORICAL');
  if(c.source==='DIRECT'||c.source==='INVOICE'||c.channel==='DIRECT')return review('CHANNEL_UNSUPPORTED');
  if(c.source==='GMAIL'&&c.senderAuthenticated!==true)return review('UNTRUSTED_MAIL');
+ // Desktop identity proves the item, not the accounting meaning of a discount.
+ if(c.channel==='MERCARI'&&c.warnings.some(w=>w!=='販売終了日は通知受信日を初期表示しています。実際の販売日をご確認ください。'))return review('ORDER_REVIEW');
  if(!c.externalListingId)return review('NO_ITEM_ID');
  if(ids.length!==1||!item||item.id!==ids[0])return review('NOT_UNIQUE');
  if(item.isDeleted||item.deletedAt||!Number.isSafeInteger(item.quantity)||Number(item.quantity)<1||!item.updatedAt)return review('STOCK_CHANGED');
@@ -38,16 +40,18 @@ export function automaticSaleDecision(c:SaleCandidate,ids:string[],item:Record<s
  }else if(c.channel==='YAHOO'){
   if(c.verifiedSaleFacts!==true||!c.yahooStatus||c.warnings.some(w=>/異なる|取引ナビで/.test(w)))return review('ORDER_REVIEW');
  }
- if(c.unitPrice===null||!Number.isSafeInteger(c.unitPrice)||c.unitPrice<0||c.shipping===null||!Number.isSafeInteger(c.shipping)||c.shipping<0)return review('ORDER_REVIEW');
+ if(c.unitPrice===null||!Number.isSafeInteger(c.unitPrice)||c.unitPrice<0||c.shipping===null&&c.channel!=='YAHOO'||c.shipping!==null&&(!Number.isSafeInteger(c.shipping)||c.shipping<0))return review('ORDER_REVIEW');
  const price=c.unitPrice*c.quantity;if(!Number.isSafeInteger(price))return review('ORDER_REVIEW');
+ if(c.channel==='MERCARI'&&c.orderTotal!==null&&(!Number.isSafeInteger(c.orderTotal)||c.orderTotal!==price+c.shipping!))return review('ORDER_REVIEW');
  let shipping=c.shipping,fee:number;
  if(c.orderLineCount>1){
+  if(c.shipping===null)return review('ORDER_REVIEW');
   const a=c.feeAllocation;if(!a||a.amounts[a.index]!==price)return review('ORDER_REVIEW');
   shipping=allocateFee(c.shipping,a.amounts)[a.index];
  }
  if(c.channel==='BASE'&&c.confirmedLineFee!==undefined)fee=c.confirmedLineFee;
- else if(c.channel==='BASE'&&c.orderLineCount>1){const a=c.feeAllocation!;fee=allocateFee(calculateFee('BASE',a.amounts.reduce((n,v)=>n+v,0)+c.shipping,c.payment,fees,c.orderRoute==='PAY_ID_APP'),a.amounts)[a.index];}
- else fee=calculateFee(c.channel,price+(c.channel==='BASE'?shipping:0),c.payment,fees,c.orderRoute==='PAY_ID_APP');
+ else if(c.channel==='BASE'&&c.orderLineCount>1){const a=c.feeAllocation!;fee=allocateFee(calculateFee('BASE',a.amounts.reduce((n,v)=>n+v,0)+c.shipping!,c.payment,fees,c.orderRoute==='PAY_ID_APP'),a.amounts)[a.index];}
+ else fee=calculateFee(c.channel,price+(c.channel==='BASE'?shipping!:0),c.payment,fees,c.orderRoute==='PAY_ID_APP');
  const yahoo=yahooPaymentPlan(c);
  return {kind:'SELL',request:{mutationId:stableSaleMutation(c.id),inventoryId:ids[0],expectedUpdatedAt:String(item.updatedAt),quantity:c.quantity,name:String(item.name),saleEndDate:yahoo?.waiting?'':c.saleDate,externalProductId:c.orderId,market:CHANNELS[c.channel].market,salePrice:price,saleCommission:fee,saleShippingReceived:shipping,sourceCandidateId:c.id,...(yahoo?.waiting?{awaitingYahooPayment:true}:{})}};
 }
