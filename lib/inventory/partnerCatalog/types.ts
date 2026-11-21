@@ -19,6 +19,8 @@ export interface PublicCatalogResponse {
   expiresAt: string;
   items: PublicCatalogItem[];
 }
+export const MAX_CATALOG_SELECTED_ITEMS = 500;
+
 /** ADMIN-only response: path contains the bearer capability. */
 export interface CatalogGrant {
   id: string;
@@ -29,5 +31,12 @@ export interface CatalogGrant {
   expiresAt: string;
   disabled: boolean;
   path: string;
+  revision: number;
+  selectedIds: string[];
 }
 export interface CatalogManagementResponse { ok: true; grants: CatalogGrant[] }
+
+export interface CatalogSelectionResponse {
+  ok: true; grant: CatalogGrant; candidates: PublicCatalogItem[]; maxSelectedItems: number; checkedAt: string;
+}
+export interface CatalogSelectionSave { id: string; revision: number; selectedIds: string[] }

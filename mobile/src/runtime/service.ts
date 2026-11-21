@@ -1,6 +1,8 @@
 import type { InventorySearchInput } from "../domain/search";
 import { Amplify } from "aws-amplify";
-import { Platform } from "react-native";
+import { Platform, Linking, Share } from "react-native";
+import { CatalogSelectionError, type CatalogSelectionPorts, type CatalogSelectionData } from '../../../lib/inventory/partnerCatalogSelection';
+import type { CatalogGrant } from '../../../lib/inventory/partnerCatalog/types';
 import { fetchAuthSession, getCurrentUser } from "aws-amplify/auth";
 import { cognitoUserPoolsTokenProvider } from "aws-amplify/auth/cognito";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -87,6 +89,33 @@ const authenticationFlight=singleFlight(async () => {
   return { cookie, owner: user.userId };
 });
 async function authenticatedSession(){return authenticationFlight.run();}
+
+async function catalogRequest(path: string, body?: unknown) {
+  const session = await authenticatedSession();
+  const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 20000);
+  try {
+    const response = await fetch(API_ORIGIN + path, { method: body ? 'POST' : 'GET', credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal: controller.signal,
+      headers: { Accept: 'application/json', ...(session.cookie ? { Cookie: session.cookie } : {}), ...(body ? { 'Content-Type': 'application/json', 'X-Bello-Mobile': '1' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
+    if (response.status === 401 || response.status === 403) throw new StaffSessionError('管理者でログインし直してください。');
+    if (response.status === 409) throw new CatalogSelectionError('conflict', '別の端末で更新されました。');
+    const value = await response.json();
+    if (!response.ok || value?.ok !== true) throw new CatalogSelectionError('unavailable', '共有内容を確認できませんでした。');
+    return { value, cookie: session.cookie };
+  } finally { clearTimeout(timer); }
+}
+export const partnerCatalogPorts: CatalogSelectionPorts = {
+  list: async () => (await catalogRequest('/api/inventory/partner-catalog')).value.grants as CatalogGrant[],
+  read: async id => {
+    const { value, cookie } = await catalogRequest('/api/inventory/partner-catalog/selection?id=' + encodeURIComponent(id));
+    return { ...value, ...(cookie ? { imageHeaders: { Cookie: cookie } } : {}) } as CatalogSelectionData;
+  },
+  save: async (id, revision, selectedIds) => (await catalogRequest('/api/inventory/partner-catalog/selection', { id, revision, selectedIds })).value.grant as CatalogGrant,
+  link: path => new URL(path, API_ORIGIN).href,
+  copyLabel: isWeb ? 'リンクをコピー' : 'リンクを共有',
+  copyNotice: isWeb ? '共有リンクをコピーしました。' : '共有メニューを閉じました。コピー・送信の結果は共有先で確認してください。',
+  copy: async text => { if (isWeb) await navigator.clipboard.writeText(text); else return (await Share.share({ message: text, url: text })).action !== Share.dismissedAction; },
+  open: async url => { await Linking.openURL(url); },
+};
 
 const permissionFlight=singleFlight(async ():Promise<MobileSession> => {
   const session = await authenticatedSession();

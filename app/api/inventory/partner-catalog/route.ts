@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { isOutboundRequestOriginAllowed } from '@/lib/outbound/requestOrigin';
+import { requireCatalogMutationOrigin } from '@/lib/inventory/partnerCatalog/request';
 import { CatalogError } from '@/lib/inventory/partnerCatalog/grants';
 import { catalogFailure, catalogGrantStore, partnerCatalogResponseHeaders, requireCatalogAdmin } from '@/lib/inventory/partnerCatalog/server';
 
@@ -18,7 +18,7 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const admin = await requireCatalogAdmin();
-    if (!isOutboundRequestOriginAllowed(request) || request.headers.get('sec-fetch-site') === 'cross-site') throw new CatalogError(403, '送信元を確認できません。');
+    requireCatalogMutationOrigin(request);
     if (!request.headers.get('content-type')?.startsWith('application/json')) throw new CatalogError(400, '入力内容を確認してください。');
     const body = await request.text();
     if (Buffer.byteLength(body) > 2048) throw new CatalogError(400, '入力内容が長すぎます。');

@@ -80,5 +80,8 @@ export function createCatalogReader(db: Db, table: (model: string) => string, no
     const response = await db.send(new GetCommand({ TableName: table('Inventory'), Key: { id }, ConsistentRead: true, ...projection(CATALOG_ATTRIBUTES) }));
     return response.Item ?? null;
   }
-  return { categories, rows, one };
+  async function byIds(ids: string[]): Promise<Row[]> {
+    return [...(await readInventoryBatch(db, table('Inventory'), ids, undefined, CATALOG_ATTRIBUTES)).values()];
+  }
+  return { categories, rows, one, byIds };
 }

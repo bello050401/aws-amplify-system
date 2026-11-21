@@ -1,8 +1,8 @@
 import 'server-only';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { GetCommand, QueryCommand, TransactWriteCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import { validToken, type Row } from './policy';
-import type { CatalogGrant } from './types';
+import { validToken, validInventoryId, type Row } from './policy';
+import { MAX_CATALOG_SELECTED_ITEMS, type CatalogGrant } from './types';
 
 type Db = Pick<DynamoDBDocumentClient, 'send'>;
 const SCOPE = 'control'; // Already permitted by InventoryAnalysisMetadata's LeadingKeys IAM condition.
@@ -16,7 +16,7 @@ export class CatalogError extends Error {
 }
 export interface StoredGrant {
   grantId: string; token: string; tokenHash: string; label: string; title: string;
-  createdAt: string; updatedAt: string; expiresAt: string; disabled: boolean; revision: number; changedBy: string;
+  createdAt: string; updatedAt: string; expiresAt: string; disabled: boolean; revision: number; changedBy: string; selectedIds: string[];
 }
 function parseGrant(item: Row | undefined): StoredGrant | null {
   if (!item || !uuid(item.grantId) || !validToken(item.token) || item.tokenHash !== hash(item.token)
@@ -24,11 +24,14 @@ function parseGrant(item: Row | undefined): StoredGrant | null {
       || typeof item.revision !== 'number' || !Number.isSafeInteger(item.revision) || item.revision < 1
       || !['createdAt', 'updatedAt', 'expiresAt'].every(key => typeof item[key] === 'string' && Number.isFinite(Date.parse(item[key] as string)))
       || item.scope !== SCOPE || item.id !== GRANT_PREFIX + item.grantId) return null;
-  return item as unknown as StoredGrant;
+  if (item.selectedIds !== undefined && (!Array.isArray(item.selectedIds) || item.selectedIds.length > MAX_CATALOG_SELECTED_ITEMS
+    || !item.selectedIds.every(validInventoryId) || new Set(item.selectedIds).size !== item.selectedIds.length)) return null;
+  // Old grants explicitly share nothing until an ADMIN saves a selection.
+  return { ...item, selectedIds: item.selectedIds ?? [] } as unknown as StoredGrant;
 }
 export function publicGrant(grant: StoredGrant): CatalogGrant {
   return { id: grant.grantId, label: grant.label, title: grant.title, createdAt: grant.createdAt,
-    updatedAt: grant.updatedAt, expiresAt: grant.expiresAt, disabled: grant.disabled, path: `/share/inventory/${grant.token}` };
+    updatedAt: grant.updatedAt, expiresAt: grant.expiresAt, disabled: grant.disabled, revision: grant.revision, selectedIds: [...grant.selectedIds], path: `/share/inventory/${grant.token}` };
 }
 
 export function createCatalogGrantStore(db: Db, table: string, now = () => Date.now()) {
@@ -76,7 +79,7 @@ export function createCatalogGrantStore(db: Db, table: string, now = () => Date.
       const token = randomBytes(32).toString('base64url');
       after = { grantId: randomUUID(), token, tokenHash: hash(token), label: String(input.label ?? '取引先共有').trim(),
         title: String(input.title ?? 'BELLO 商品カタログ').trim(), createdAt: timestamp, updatedAt: timestamp,
-        expiresAt: new Date(now() + days * 86400000).toISOString(), disabled: false, revision: 1, changedBy: actor };
+        expiresAt: new Date(now() + days * 86400000).toISOString(), disabled: false, revision: 1, changedBy: actor, selectedIds: [] };
     } else {
       if (!uuid(input.id)) throw new CatalogError(400, '共有リンクを選び直してください。');
       before = parseGrant(await get(GRANT_PREFIX + input.id));
@@ -106,5 +109,32 @@ export function createCatalogGrantStore(db: Db, table: string, now = () => Date.
     }
     return publicGrant(after);
   }
-  return { authorize, list, manage };
+  async function readGrant(id: unknown): Promise<StoredGrant> {
+    if (!uuid(id)) throw new CatalogError(400, '共有リンクを選び直してください。');
+    const grant = parseGrant(await get(GRANT_PREFIX + id));
+    if (!grant) throw new CatalogError(404, '共有リンクが見つかりません。');
+    return grant;
+  }
+  async function saveSelection(raw: unknown, actor: string, validate: (ids: string[]) => Promise<void>): Promise<CatalogGrant> {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw) || !actor) throw new CatalogError(400, '入力内容を確認してください。');
+    const input = raw as Row;
+    if (Object.keys(input).some(key => !['id', 'revision', 'selectedIds'].includes(key))
+      || !Number.isSafeInteger(input.revision) || Number(input.revision) < 1 || !Array.isArray(input.selectedIds)
+      || input.selectedIds.length > MAX_CATALOG_SELECTED_ITEMS || !input.selectedIds.every(validInventoryId)
+      || new Set(input.selectedIds).size !== input.selectedIds.length) throw new CatalogError(400, '選択内容を確認してください。');
+    const before = await readGrant(input.id);
+    if (before.revision !== input.revision) throw new CatalogError(409, '別の操作で更新されました。再読み込みしてください。');
+    const ids = [...input.selectedIds] as string[];
+    await validate(ids);
+    const after = { ...before, selectedIds: ids, updatedAt: new Date(now()).toISOString(), revision: before.revision + 1, changedBy: actor };
+    try { await db.send(new TransactWriteCommand({ TransactItems: [{ Put: { TableName: table, Item: item(after),
+      ConditionExpression: 'revision = :revision', ExpressionAttributeValues: { ':revision': before.revision } } }] })); }
+    catch (error) {
+      if (error instanceof Error && error.name === 'TransactionCanceledException') throw new CatalogError(409, '別の操作で更新されました。再読み込みしてください。');
+      throw error;
+    }
+    // Token lookup, capability and expiry are deliberately unchanged.
+    return publicGrant(after);
+  }
+  return { authorize, list, manage, readGrant, saveSelection };
 }

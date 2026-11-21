@@ -1,0 +1,3 @@
+'use client';
+import {useState} from 'react';
+export function PreviewControls(){const [notice,setNotice]=useState('');return <aside className="my-3 border p-3 text-sm"><p>確認専用・実際の商品や共有先には影響しません。</p><div className="flex flex-wrap gap-3">{[['unavailable','次の保存を失敗させる'],['conflict','次の保存を競合させる']].map(([failure,label])=><button key={failure} className="min-h-[44px] underline" onClick={async()=>{await fetch('/api/preview-failure',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({failure})});setNotice(label+'：設定済み');}}>{label}</button>)}<a className="min-h-[44px] underline" href="/share/inventory/selecteddemo" target="_blank">選択した商品の共有表示</a></div><p>{notice}</p></aside>}

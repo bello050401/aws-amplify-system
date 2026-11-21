@@ -2,10 +2,11 @@ import React from "react";
 import {ActivityIndicator,Pressable,ScrollView,StyleSheet,Text,View} from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import {Image} from "expo-image";
-interface Props{offline:boolean;creating:boolean;writesEnabled:boolean;onInventory:()=>void;onCreate:()=>void;onScan:()=>void;onPriceEntry:()=>void;onMessages?:()=>void;}
-export function HomeScreen({offline,creating,writesEnabled,onInventory,onCreate,onScan,onPriceEntry,onMessages}:Props){
+interface Props{offline:boolean;creating:boolean;writesEnabled:boolean;onInventory:()=>void;onCreate:()=>void;onScan:()=>void;onPriceEntry:()=>void;onMessages?:()=>void;onPartnerCatalog?:()=>void;}
+export function HomeScreen({offline,creating,writesEnabled,onInventory,onCreate,onScan,onPriceEntry,onMessages,onPartnerCatalog}:Props){
  const actions:Array<{title:string;hint:string;icon:React.ComponentProps<typeof Ionicons>['name'];onPress:()=>void;disabled?:boolean;loading?:boolean}>=[
  ...(writesEnabled?[{title:'新規登録',hint:'商品を追加',icon:'add-circle-outline' as const,onPress:onCreate,disabled:creating,loading:creating}]:[]),
+ ...(onPartnerCatalog?[{title:'社外共有',hint:'共有する商品を選ぶ',icon:'share-social-outline' as const,onPress:onPartnerCatalog}]:[]),
  {title:'スキャン検索',hint:'バーコードから探す',icon:'scan-outline',onPress:onScan},
  ...(writesEnabled?[{title:'販売予定価格入力',hint:'写真を見ながら価格設定',icon:'pricetag-outline' as const,onPress:onPriceEntry,disabled:offline}]:[]),
  ...(writesEnabled&&onMessages?[{title:'メッセージ',hint:'確認・返信案をコピー',icon:'chatbubbles-outline' as const,onPress:onMessages,disabled:offline}]:[])];

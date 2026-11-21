@@ -19,9 +19,14 @@ function load(path, imports = {}) {
   return exports;
 }
 const { catalogMutation } = load('./catalogMutation.ts');
+const catalogTypes = load('../../../../lib/inventory/partnerCatalog/types.ts');
+const catalogPolicy = load('../../../../lib/inventory/partnerCatalog/policy.ts', {
+  '../categories': load('../../../../lib/inventory/categories.ts'),
+  '../imageTypes': load('../../../../lib/inventory/imageTypes.ts'),
+});
 const { createCatalogGrantStore } = load('../../../../lib/inventory/partnerCatalog/grants.ts', {
   'server-only': {}, 'node:crypto': crypto, '@aws-sdk/lib-dynamodb': sdk,
-  './policy': { validToken: value => typeof value === 'string' && /^[A-Za-z0-9_-]{43}$/.test(value) },
+  './policy': catalogPolicy, './types': catalogTypes,
 });
 
 test('UI create, renew and disable bodies satisfy the actual strict backend; disable revokes access', async () => {
@@ -41,6 +46,8 @@ test('UI create, renew and disable bodies satisfy the actual strict backend; dis
   const create = await store.manage(catalogMutation('create', '取引先A'), 'admin');
   const token = create.path.split('/').at(-1);
   assert.ok(await store.authorize(token));
+  assert.deepEqual([...create.selectedIds], [], 'new shared links expose zero items until explicitly selected');
+  assert.equal(create.revision, 1);
   const renew = await store.manage(catalogMutation('renew', '', create.id), 'admin');
   const renewedToken = renew.path.split('/').at(-1);
   assert.equal(await store.authorize(token), null);

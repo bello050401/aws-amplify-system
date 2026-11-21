@@ -1,3 +1,4 @@
+import {partnerCatalogPorts} from '../runtime/service';
 import {ListPreferences} from '../domain/listPreferences';
 import {readInventoryValue,readInventoryAnalysis,inventoryQuantityPlanning} from '../runtime/service';
 import { settingsPath } from "../../../lib/inventory/quantityPlanning/presentation";
@@ -106,6 +107,12 @@ export function LiveApp() {
     };
     return {
     snapshot,searchCatalogStore,listPhotoCache,
+    partnerCatalog: {
+      ...partnerCatalogPorts,
+      list: async () => { try { return await partnerCatalogPorts.list(); } catch (error) { if (error instanceof StaffSessionError) await revoke(error.message); throw error; } },
+      read: async id => { try { return await partnerCatalogPorts.read(id); } catch (error) { if (error instanceof StaffSessionError) await revoke(error.message); throw error; } },
+      save: async (...args) => { try { return await partnerCatalogPorts.save(...args); } catch (error) { if (error instanceof StaffSessionError) await revoke(error.message); throw error; } },
+    },
     listPreferences:new ListPreferences(AsyncStorage,userId,API_ORIGIN),
     online: async () => connected(await Network.getNetworkStateAsync()),
     loadInventory: async () => {
@@ -213,6 +220,8 @@ export function LiveApp() {
     if(results.some(r=>r.status==='rejected'))setMessage("画面を閉じましたが、端末の保存情報を消去できない項目があります。ブラウザのサイトデータを消去してください。");
   };
   if (ports) return <StaffApp key={userId} ports={ports} offline={offline} onLogout={logout} writesEnabled={canEdit && mobileWritesEnabled()}
+    canManagePartnerCatalog={access?.owner===userId && access.role==="ADMIN"}
+    partnerCatalogAccessRevoked={!!access && access.owner===userId && access.role!=="ADMIN"}
     canIssueDocuments={!offline && access?.owner===userId && access.role==="ADMIN"}
     canSellInventory={access?.owner===userId && access.role==="ADMIN"}
     features={!offline && access?.owner === userId ? access.features : RESTRICTED_FEATURES}
