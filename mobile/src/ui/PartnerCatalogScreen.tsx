@@ -17,8 +17,8 @@ export function PartnerCatalogScreen({ ports, offline, onClose, retainedControll
     <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={s.content}>
       <Text style={s.description}>選んで保存した商品だけを、既存の共有リンクに表示します。補修待ち・撮影待ち・出品待ちの商品から選べます。</Text>
       {offline && <Text accessibilityRole="alert" style={s.error}>圏外です。選択は保持しています。通信が戻ってから保存してください。</Text>}
-      {state.error && <Text accessibilityRole="alert" style={s.error}>{state.error}</Text>}
-      {state.notice && <Text accessibilityRole="status" style={s.notice}>{state.notice}</Text>}
+      {Boolean(state.error) && <Text accessibilityRole="alert" style={s.error}>{state.error}</Text>}
+      {Boolean(state.notice) && <Text accessibilityRole="status" style={s.notice}>{state.notice}</Text>}
       {state.grants.length > 1 && <View style={s.box}><Text style={s.label}>共有先を選ぶ</Text>{state.grants.map(grant => <Pressable key={grant.id} accessibilityRole="radio" accessibilityState={{ selected: state.id === grant.id }} onPress={() => void controller.choose(grant.id)} disabled={busy || offline} style={[s.button, state.id === grant.id && s.selected]}><Text style={s.buttonText}>{state.id === grant.id ? '● ' : '○ '}{grant.label}{grant.disabled ? '（停止中）' : ''}</Text></Pressable>)}</View>}
       {action(state.loading ? '読み込み中…' : '最新内容を再読み込み', () => { void (controller.start()); }, busy || offline)}
       {!state.loading && !state.grants.length && <Text style={s.description}>共有リンクはありません。Web版の「社外共有」でリンクを作成してください。</Text>}
