@@ -46,6 +46,23 @@ test('same actor claim replay stable; other actor and stale lease blocked',()=>{
  assert.throws(()=>startDesktopWrite(j,'admin-a','bad',proof(j),now),/LEASE_CHANGED/);
  const aged=ageDesktopJob(j,now+16*60000);assert.equal(aged.state,'WAITING');assert.equal(aged.lease,undefined);
 });
+
+test('expired PC claims cannot extend the original four availability windows',()=>{
+ let j=newDesktopJob(request,now);
+ for(let window=0;window<4;window++){
+  const at=now+window*DESKTOP_RETRY_MS;
+  j=ageDesktopJob(j,at);assert.equal(j.attempts,window+1);
+  j=claimDesktopJob(j,'admin-a',at);
+  j=ageDesktopJob(j,at+16*60000);
+  assert.equal(j.state,'WAITING');assert.equal(j.nextAt,now+(window+1)*DESKTOP_RETRY_MS);
+ }
+ j=ageDesktopJob(j,now+4*DESKTOP_RETRY_MS);assert.equal(j.state,'ATTENTION');assert.equal(j.attempts,4);
+ const legacyShifted={...newDesktopJob(request,now),nextAt:now+8*DESKTOP_RETRY_MS};
+ assert.equal(ageDesktopJob(legacyShifted,now+4*DESKTOP_RETRY_MS).state,'ATTENTION');
+ const active=claimDesktopJob(newDesktopJob(request,now),'admin-a',now+4*DESKTOP_RETRY_MS-60000);
+ assert.equal(ageDesktopJob(active,now+4*DESKTOP_RETRY_MS),active);
+ assert.equal(ageDesktopJob(active,now+4*DESKTOP_RETRY_MS+16*60000).state,'ATTENTION');
+});
 test('title and image identity required before write reservation',()=>{
  const j=claimDesktopJob(newDesktopJob(request,now),'admin-a',now);
  for(const patch of [{externalId:'other'},{inventoryId:'other'},{orderId:'other'},{orderLineId:'other'},{snapshot:'other'},{expectedImageKey:'inventory/other.jpg'},{observedTitle:'机'},{imageMatched:false},{titleMatched:false},{observedEvidenceRef:j.imageKeys[0]},{observedAt:new Date(now-1000).toISOString()},{observedAt:new Date(now+6*60000).toISOString()}])assert.throws(()=>startDesktopWrite(j,'admin-a',j.lease!,{...proof(j),...patch},now),/EVIDENCE_MISMATCH/);

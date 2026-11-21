@@ -36,8 +36,13 @@ export function ageDesktopJob(job:DesktopJob,now:number):DesktopJob {
  if(job.state==='COMPLETE'||job.state==='ATTENTION'||job.state==='WRITE_STARTED')return job;
  if(job.state==='CLAIMED') {
   if((job.leaseUntil??0)>now)return job;
-  return {...job,state:'WAITING',actor:undefined,lease:undefined,leaseUntil:undefined,nextAt:now+DESKTOP_RETRY_MS,updatedAt:new Date(now).toISOString(),version:randomUUID(),reason:'DESKTOP_CLAIM_EXPIRED'};
+  job={...job,state:'WAITING',actor:undefined,lease:undefined,leaseUntil:undefined,updatedAt:new Date(now).toISOString(),version:randomUUID(),reason:'DESKTOP_CLAIM_EXPIRED'};
  }
+ // A restarted PC/expired claim must not move the four availability windows.
+ // Also normalize older receipts whose previous claim already shifted nextAt.
+ const createdAt=Date.parse(job.createdAt),nextAt=createdAt+job.attempts*DESKTOP_RETRY_MS;
+ if(!Number.isFinite(nextAt))return {...job,state:'ATTENTION',reason:'DESKTOP_TIME_UNKNOWN',updatedAt:new Date(now).toISOString(),version:randomUUID()};
+ if(job.nextAt!==nextAt)job={...job,nextAt,updatedAt:new Date(now).toISOString(),version:randomUUID()};
  if(job.nextAt>now)return job;
  // Each due window is one availability attempt; no new instruction ID is created.
  const windows=Math.floor((now-job.nextAt)/DESKTOP_RETRY_MS)+1;

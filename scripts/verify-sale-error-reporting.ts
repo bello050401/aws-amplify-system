@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {SystemErrorQueue} from '../lib/systemErrors/queue';
-import {saleFailureSignal,saleErrorReceipt} from '../lib/saleCandidates/errorReporting';
+import {saleFailureSignal,saleErrorReceipt,saleDiagnosticRelease} from '../lib/saleCandidates/errorReporting';
 const signal=saleFailureSignal('EC','EC_RESULT_UNCONFIRMED')!;
 class AtomicStore {
  rows=new Map<string,any>();fail=false;
@@ -26,6 +26,17 @@ class AtomicStore {
 }
 const queue=(db:AtomicStore)=>new SystemErrorQueue({table:'ErrorQueue',region:'us-west-2',release:'abcdef123'},db as never);
 const receipt=(id='a')=>({table:'SaleTable',id:saleErrorReceipt(id.repeat(64),'EC','EC_RESULT_UNCONFIRMED')});
+
+test('desktop diagnostics retain compiled release without worker environment and never trust a mutable release',()=>{
+ const compiled='a'.repeat(40),worker='b'.repeat(40);
+ assert.equal(saleDiagnosticRelease(compiled,undefined),compiled);
+ assert.equal(saleDiagnosticRelease(compiled,worker),compiled);
+ assert.equal(saleDiagnosticRelease(undefined,worker),worker);
+ assert.equal(saleDiagnosticRelease('unknown',worker),'unknown');
+ assert.equal(saleDiagnosticRelease(undefined,undefined),'unknown');
+ assert.equal(saleDiagnosticRelease('untrusted runtime text',worker),null);
+ assert.equal(saleDiagnosticRelease({release:compiled},worker),null);
+});
 test('sale incident is queued once across repeated workers and calendar days',async()=>{
  const db=new AtomicStore(),q=queue(db),a=Date.parse('2026-11-21T00:00:00Z');
  const results=await Promise.all(Array.from({length:20},(_,n)=>q.enqueue(signal,'worker',a+n*86400000,AbortSignal.timeout(5000),receipt())));

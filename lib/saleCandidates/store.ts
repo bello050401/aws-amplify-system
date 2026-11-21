@@ -6,4 +6,7 @@ export function candidateConfig(){
  const config=(outputs as unknown as {custom?:{saleCandidates?:{tableName:string;functionName:string}}}).custom?.saleCandidates;
  if(!config)throw Error('PURCHASE_NOT_CONFIGURED');return config;
 }
+export function candidateBuildRelease():string|undefined {
+ return (outputs as unknown as {custom?:{systemErrors?:{release?:string}}}).custom?.systemErrors?.release;
+}
 export function candidateStore(){return createCandidateStore(inventoryDdb,process.env.SALE_CANDIDATES_TABLE||candidateConfig().tableName);}

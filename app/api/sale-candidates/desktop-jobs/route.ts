@@ -9,7 +9,7 @@ import {reviewSaleBinding} from '@/lib/listing/econveni/saleAdjustment';
 import {signDesktopImage} from '@/lib/saleCandidates/desktopImagePreviews';
 import {bridgePostHeaderFailure} from '@/lib/listing/mercariBridge/postGuard';
 import {desktopImageKeys,desktopJobs,desktopCompletionWakes,refreshDesktopJobAfterYahooPayment} from '@/lib/saleCandidates/desktopJobs';
-import {candidateStore,candidateConfig} from '@/lib/saleCandidates/store';
+import {candidateStore,candidateConfig,candidateBuildRelease} from '@/lib/saleCandidates/store';
 import {bodyLimited,NO_STORE} from '@/lib/invoicing/gateway';
 import {assertDesktopIdentity,assertDesktopLease,comparableDesktopTitle,desktopIssueDiagnostic,expectedDesktopBoundaryError,type DesktopIssueCode,type DesktopJob,type DesktopEvidence} from '@/lib/saleCandidates/desktopJobModel';
 import {ensureAutomaticSaleBinding} from '@/lib/saleCandidates/saleBinding';
@@ -86,7 +86,7 @@ export async function POST(request:Request){
   if(b.action==='report-error'){
    const saved=await desktopJobs.recordIssue(job.id,session.owner,b.lease,b.code);
    const diagnostic=desktopIssueDiagnostic(b.code as DesktopIssueCode);
-   const reported=await reportSaleAutomationFailure(job.candidateId,job.purpose==='STOCK'?'EC':'IDENTIFY',diagnostic,candidateConfig().tableName);
+   const reported=await reportSaleAutomationFailure(job.candidateId,job.purpose==='STOCK'?'EC':'IDENTIFY',diagnostic,candidateConfig().tableName,candidateBuildRelease());
    return reply({job:await present(saved,session.owner),reported,operational:b.code==='AUTH_REQUIRED'||b.code==='RATE_LIMITED'});
   }
   if(b.action==='start-write'){
@@ -117,7 +117,7 @@ export async function POST(request:Request){
  }catch(error){
   const code=(error as Error).message;
   const expected=expectedDesktopBoundaryError(error);
-  const reported=trustedJob&&!expected?await reportSaleAutomationFailure(trustedJob.candidateId,trustedJob.purpose==='STOCK'?'EC':'IDENTIFY','DESKTOP_RUNTIME_FAILED',candidateConfig().tableName):false;
+  const reported=trustedJob&&!expected?await reportSaleAutomationFailure(trustedJob.candidateId,trustedJob.purpose==='STOCK'?'EC':'IDENTIFY','DESKTOP_RUNTIME_FAILED',candidateConfig().tableName,candidateBuildRelease()):false;
   return reply({error:'状態または照合結果が一致しません。変更を繰り返さず、最新の在庫・注文・PC画面を確認してください。',code:expected&&/^DESKTOP_[A-Z_]+$/.test(code)?code:'DESKTOP_STORAGE_OR_CONFLICT',reported},expected?409:503);
  }
 }

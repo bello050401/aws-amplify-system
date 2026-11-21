@@ -15,7 +15,13 @@ export function saleErrorReceipt(candidateId:string,phase:string,reason:string){
  if(!/^[a-f0-9]{64}$/.test(candidateId)||!['IDENTIFY','WAITING','REVIEW','SALE','EC','COMPLETE'].includes(phase)||!/^[A-Za-z0-9_]{1,100}$/.test(reason))throw Error('INVALID_SALE_DIAGNOSTIC');
  return 'SALE_ERROR:'+createHash('sha256').update(JSON.stringify([candidateId,phase,reason])).digest('hex');
 }
-export async function reportSaleAutomationFailure(candidateId:string,phase:string,reason:string,candidateTable?:string):Promise<boolean>{
+/** SSR supplies its compiled release; workers use the release pinned in their
+ * deployment environment. Mutable automation settings are never code identity. */
+export function saleDiagnosticRelease(compiledRelease?:unknown,environmentRelease?:unknown):string|null {
+ const release=compiledRelease??environmentRelease??'unknown';
+ return typeof release==='string'&&/^(?:[a-f0-9]{7,40}|unknown)$/.test(release)?release:null;
+}
+export async function reportSaleAutomationFailure(candidateId:string,phase:string,reason:string,candidateTable?:string,compiledRelease?:string):Promise<boolean>{
  try{
   const signal=saleFailureSignal(phase,reason);if(!signal)return false;
   const table=candidateTable||process.env.SALE_CANDIDATES_TABLE;if(!table)return false;
@@ -23,8 +29,8 @@ export async function reportSaleAutomationFailure(candidateId:string,phase:strin
   if((await db.send(new GetCommand({TableName:table,Key:{id},ConsistentRead:true}))).Item)return true;
   const config=(await db.send(new GetCommand({TableName:table,Key:{id:'AUTOMATION_CONFIG'},ConsistentRead:true}))).Item?.systemErrors as ErrorQueueConfig|undefined;
   if(!config||!/^[A-Za-z0-9_.-]{3,255}$/.test(config.table)||config.region!==(process.env.AWS_REGION||'us-west-2'))return false;
-  const release=process.env.BELLO_SYSTEM_ERRORS_RELEASE||'unknown';
-  if(!/^(?:[a-f0-9]{7,40}|unknown)$/.test(release))return false;
+  const release=saleDiagnosticRelease(compiledRelease,process.env.BELLO_SYSTEM_ERRORS_RELEASE);
+  if(!release)return false;
   return (await new SystemErrorQueue({...config,release},db).enqueue(signal,'sale-worker',Date.now(),AbortSignal.timeout(3000),{table,id})).accepted;
  }catch{return false;}
 }
