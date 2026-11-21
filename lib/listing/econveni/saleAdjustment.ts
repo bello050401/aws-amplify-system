@@ -1,5 +1,6 @@
 import 'server-only';
 import {randomUUID} from 'node:crypto';
+import {SaleBindingError} from './saleBindingError';
 import {GetCommand,PutCommand,TransactWriteCommand,type TransactWriteCommandInput} from '@aws-sdk/lib-dynamodb';
 import {econveniDatabase as db,ECONVENI_WORKFLOW_TABLE as table,econveniStore} from './runtimeStore';
 import {EconveniHttpSession} from './httpSession';
@@ -23,10 +24,10 @@ export async function saleAdjustmentStarted(request:SaleAdjustment){return !!(aw
 async function binding(id:string,channel?:EcChannel){
  const [item,data,workflow]=await Promise.all([getInventoryRaw(id),readManualSync(id),econveniStore(id).read()]);
  const link=selectManualLink(data,id,channel)??null;
- if(!item||item.isDeleted||item.deletedAt)throw Error('在庫を確認できません。');
+ if(!item||item.isDeleted||item.deletedAt)throw new SaleBindingError('SALE_BINDING_INVENTORY_UNAVAILABLE');
  const productId=link?.productId??workflow?.save.productId;
  if(!productId)return null;
- if(workflow&&(['PENDING','VERIFY_REQUIRED'].includes(workflow.save.state)||Object.values(workflow.channels).some(c=>['PENDING','VERIFY_REQUIRED'].includes(c.state))))throw Error('eコンビニの前回の処理結果を先に確認してください。');
+ if(workflow&&(['PENDING','VERIFY_REQUIRED'].includes(workflow.save.state)||Object.values(workflow.channels).some(c=>['PENDING','VERIFY_REQUIRED'].includes(c.state))))throw new SaleBindingError('SALE_BINDING_PENDING');
  const version=adjustmentFingerprint([productId,link?.revision??null,workflow?.revision??null]);
  const checks:NonNullable<TransactWriteCommandInput['TransactItems']>=[{ConditionCheck:{TableName:inventoryTable('Inventory'),Key:{id},ConditionExpression:'updatedAt=:v AND (attribute_not_exists(isDeleted) OR isDeleted=:no)',ExpressionAttributeValues:{':v':item.updatedAt,':no':false}}}];
  if(link){checks.push({ConditionCheck:{TableName:table,Key:{pk:manualLinkKey(link)},ConditionExpression:'revision=:r AND productId=:p AND (attribute_not_exists(disabled) OR disabled=:no)',ExpressionAttributeValues:{':r':link.revision,':p':productId,':no':false}}},{ConditionCheck:{TableName:table,Key:{pk:'ECONVENI#MANUAL_OWNER#'+productId},ConditionExpression:'inventoryId=:id',ExpressionAttributeValues:{':id':id}}});}
@@ -60,9 +61,9 @@ export async function reviewSaleBinding(id:string,actor?:string,stopChannels:EcC
   for(const channel of ['BASE','YAHOO','MERCARI_SHOPS'] as const){
    const link=selectManualLink(data,id,channel),productId=link?.productId??b.productId;
    let observed=remotes.get(productId);if(!observed){observed=await session.readExternalProduct(productId);remotes.set(productId,observed);}
-   if(observed.inventoryMarker&&observed.inventoryMarker!==id)throw Error('eコンビニに別の在庫番号が登録されています。');
+   if(observed.inventoryMarker&&observed.inventoryMarker!==id)throw new SaleBindingError('SALE_BINDING_INVENTORY_CHANGED',channel);
    const expected=link?.baseline[channel].listingId??(channel==='BASE'?null:b.workflow?.channels[channel].listingId);
-   if(expected&&observed.channels[channel].listingId&&expected!==observed.channels[channel].listingId)throw Error('出品IDが変わっています。eコンビニ連携で写真と商品を確認してください。');
+   if(expected&&observed.channels[channel].listingId&&expected!==observed.channels[channel].listingId)throw new SaleBindingError('SALE_BINDING_LISTING_CHANGED',channel);
    channels[channel]=observed.channels[channel];
    if(actor&&link&&stopChannels.includes(channel)&&(expected||observed.channels[channel].listingId)){const review=await manualLinkedStop(id,channel,actor,undefined,{session,remote:observed});if(review)reviews[channel]=review;}
   }

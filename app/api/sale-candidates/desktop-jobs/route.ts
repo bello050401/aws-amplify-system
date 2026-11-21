@@ -1,4 +1,5 @@
 import {NextResponse} from 'next/server';
+import {desktopExpectedBoundary} from '@/lib/saleCandidates/desktopBoundary';
 import type {TransactWriteCommandInput} from '@aws-sdk/lib-dynamodb';
 import {inventoryMutationSession} from '@/lib/inventory/mutationSession';
 import {getInventoryRaw,inventoryTable} from '@/lib/inventory/categoryPersistence';
@@ -11,7 +12,7 @@ import {bridgePostHeaderFailure} from '@/lib/listing/mercariBridge/postGuard';
 import {desktopImageKeys,desktopJobs,desktopCompletionWakes,refreshDesktopJobAfterYahooPayment} from '@/lib/saleCandidates/desktopJobs';
 import {candidateStore,candidateConfig,candidateBuildRelease} from '@/lib/saleCandidates/store';
 import {bodyLimited,NO_STORE} from '@/lib/invoicing/gateway';
-import {assertDesktopIdentity,assertDesktopLease,comparableDesktopTitle,desktopIssueDiagnostic,expectedDesktopBoundaryError,type DesktopIssueCode,type DesktopJob,type DesktopEvidence} from '@/lib/saleCandidates/desktopJobModel';
+import {assertDesktopIdentity,assertDesktopLease,comparableDesktopTitle,desktopIssueDiagnostic,type DesktopIssueCode,type DesktopJob,type DesktopEvidence} from '@/lib/saleCandidates/desktopJobModel';
 import {ensureAutomaticSaleBinding} from '@/lib/saleCandidates/saleBinding';
 import {reportSaleAutomationFailure} from '@/lib/saleCandidates/errorReporting';
 export const dynamic='force-dynamic';
@@ -34,7 +35,7 @@ export async function GET(request:Request){
   if(id){const job=await desktopJobs.get(id);return job?reply({job:await present(job,session.owner)}):reply({error:'受付がありません。'},404);}
   const page=await desktopJobs.list(u.searchParams.get('cursor')??undefined);
   return reply({jobs:await Promise.all(page.jobs.map(j=>present(j,session.owner))),cursor:page.cursor});
- }catch{return reply({error:'PC照合の受付を取得できませんでした。'},503);}
+ }catch(error){const expected=desktopExpectedBoundary(error);return expected?reply(expected,409):reply({error:'PC照合の受付を取得できませんでした。',code:'DESKTOP_STORAGE_FAILED'},500);}
 }
 async function bindingChecks(inventoryId:string,externalId:string,actor:string){
  const [manual,workflow]=await Promise.all([readManualSync(inventoryId),econveniStore(inventoryId).read()]);
@@ -115,9 +116,9 @@ export async function POST(request:Request){
   }
   return reply({error:'操作を確認してください。'},400);
  }catch(error){
-  const code=(error as Error).message;
-  const expected=expectedDesktopBoundaryError(error);
-  const reported=trustedJob&&!expected?await reportSaleAutomationFailure(trustedJob.candidateId,trustedJob.purpose==='STOCK'?'EC':'IDENTIFY','DESKTOP_RUNTIME_FAILED',candidateConfig().tableName,candidateBuildRelease()):false;
-  return reply({error:'状態または照合結果が一致しません。変更を繰り返さず、最新の在庫・注文・PC画面を確認してください。',code:expected&&/^DESKTOP_[A-Z_]+$/.test(code)?code:'DESKTOP_STORAGE_OR_CONFLICT',reported},expected?409:503);
+  const expected=desktopExpectedBoundary(error);
+  if(expected)return reply({...expected,reported:false},409);
+  const reported=trustedJob?await reportSaleAutomationFailure(trustedJob.candidateId,trustedJob.purpose==='STOCK'?'EC':'IDENTIFY','DESKTOP_RUNTIME_FAILED',candidateConfig().tableName,candidateBuildRelease()):false;
+  return reply({error:'照合記録の保存先を確認できませんでした。変更を繰り返さず、受付を保持して管理者に確認してください。',code:'DESKTOP_STORAGE_FAILED',reported},500);
  }
 }
