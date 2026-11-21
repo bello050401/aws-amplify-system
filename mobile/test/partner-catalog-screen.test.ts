@@ -12,11 +12,12 @@ import type { CatalogGrant, PublicCatalogItem } from '../../lib/inventory/partne
 const source = ts.transpileModule(readFileSync(new URL('../src/ui/PartnerCatalogScreen.tsx', import.meta.url), 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React, esModuleInterop: true },
 }).outputText;
+let registeredView = false, searchQuery = '';
 const screenModule = { exports: {} as { PartnerCatalogScreen: (props: unknown) => React.ReactElement } };
 vm.runInNewContext(source, {
   exports: screenModule.exports,
   require(name: string) {
-    if (name === 'react') return { __esModule: true, default: React, useMemo: (factory: () => unknown) => factory(), useState: (initial: unknown) => [initial, () => {}], useEffect: () => {} };
+    if (name === 'react') return { __esModule: true, default: React, useMemo: (factory: () => unknown) => factory(), useState: (initial: unknown) => [typeof initial === 'boolean' ? registeredView : typeof initial === 'string' ? searchQuery : initial, () => {}], useEffect: () => {} };
     if (name === 'react-native') return { Image: 'Image', Pressable: 'Pressable', ScrollView: 'ScrollView', Text: 'Text', TextInput: 'TextInput', View: 'View', StyleSheet: { create: (styles: unknown) => styles } };
     if (name === '../../../lib/inventory/partnerCatalogSelection') return selection;
     throw Error(`Unexpected screen dependency: ${name}`);
@@ -62,3 +63,43 @@ for (const scenario of [
     else if (!scenario.loading) assert.ok(content.includes('共有リンクはありません。'));
   });
 }
+
+type InspectedProps = { children?: unknown; accessibilityRole?: string; accessibilityLabel?: string; type?: string; className?: string; 'aria-label'?: string; style?: Array<false | { minHeight?: number }>; onPress(): void; onClick(): void };
+function elements(node: unknown): React.ReactElement<InspectedProps>[] {
+  if (Array.isArray(node)) return node.flatMap(elements);
+  if (!React.isValidElement(node)) return [];
+  const element = node as React.ReactElement<InspectedProps>; return [element, ...elements(element.props.children)];
+}
+test('native candidate actions respect search and success removes saved rows; registered view can deregister individually', async () => {
+  let saved = { ...grant, selectedIds: ['chair'] };
+  const candidates = [{ ...item, imageUrl: '/api/inventory/partner-catalog/image/chair' }, { ...item, id: 'table', name: 'テーブル' }, { ...item, id: 'other', name: 'キャビネット' }];
+  const localPorts: selection.CatalogSelectionPorts = { ...ports, list: async () => [saved], read: async () => ({ grant: saved, candidates, maxSelectedItems: 500 }), save: async (_id, revision, selectedIds) => { saved = { ...saved, revision: revision + 1, selectedIds }; return saved; } };
+  const controller = new selection.CatalogSelectionController(localPorts); await controller.start();
+  const render = () => elements(screenModule.exports.PartnerCatalogScreen({ ports: localPorts, offline: false, retainedController: controller, onClose: () => {} }));
+  searchQuery = 'テーブル';
+  try {
+    let tree = render(); assert.equal(tree.filter(e => e.props.accessibilityRole === 'checkbox').length, 1);
+    tree.find(e => e.props.accessibilityLabel === '全選択')!.props.onPress(); assert.deepEqual(controller.state.draft, ['table']);
+    tree = render(); await tree.find(e => e.props.accessibilityLabel === '選択した商品を登録（1件）')!.props.onPress();
+    // The screen intentionally detaches the async action; settle its resolved save.
+    await Promise.resolve(); assert.deepEqual(saved.selectedIds, ['chair', 'table']);
+    assert.equal(render().filter(e => e.props.accessibilityRole === 'checkbox').length, 0);
+    registeredView = true; searchQuery = ''; tree = render();
+    assert.equal(tree.filter(e => String(e.props.accessibilityLabel).endsWith('の登録を解除')).length, 2);
+    assert.equal(tree.some(e => e.props.accessibilityLabel === '全解除'), false);
+    const registeredCards = tree.filter(e => e.type === 'View' && Array.isArray(e.props.style) && e.props.style.some(style => style && style.minHeight === 96));
+    assert.equal(registeredCards.length, 2);
+    for (const card of registeredCards) {
+      assert.equal(card.props.onPress, undefined, 'registered cards must not deregister when tapped');
+      assert.equal(elements(card).filter(e => e.type === 'Pressable').length, 1, 'only the explicit removal button is interactive');
+    }
+    assert.equal(tree.find(e => e.type === 'Image' && e.props.accessibilityLabel === item.name + 'の写真')!.props.onPress, undefined);
+    assert.equal(tree.find(e => e.type === 'Text' && e.props.children === item.name)!.props.onPress, undefined);
+    const removeButton = tree.find(e => e.props.accessibilityLabel === item.name + 'の登録を解除')!;
+    assert.equal(removeButton.type, 'Pressable');
+    assert.ok(removeButton.props.style?.some(style => style && style.minHeight === 44), 'explicit removal has a 44px minimum target');
+    removeButton.props.onPress(); await Promise.resolve(); await Promise.resolve();
+    assert.deepEqual(saved.selectedIds, ['table']);
+    registeredView = false; assert.ok(render().some(e => e.props.accessibilityRole === 'checkbox' && e.props.accessibilityLabel === item.name + ' ' + item.stageLabel));
+  } finally { registeredView = false; searchQuery = ''; }
+});
