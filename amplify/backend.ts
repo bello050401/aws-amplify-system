@@ -357,6 +357,17 @@ if (process.env.AWS_APP_ID === "d4hkkg7dty2du" &&
       new PolicyStatement({actions:["dynamodb:GetItem","dynamodb:PutItem","dynamodb:UpdateItem","dynamodb:ConditionCheckItem"],resources:[yahooState.tableArn]})],
   });
   saleAutomation.addEnvironment('YAHOO_WEB_STATE_TABLE',yahooState.tableName);
+  // BEGIN sale Yahoo state read policy (synth-tested from this exact source).
+  // Attach in a separate stack to avoid a back-edge into the worker/data stack.
+  // Read-only legacy-state guards do not authorize cancellation or state writes.
+  const saleYahooReadStack=backend.createStack('SaleYahooStateRead');
+  new Policy(saleYahooReadStack,'WorkerYahooStateRead',{
+    roles:[Role.fromRoleArn(saleYahooReadStack,'SaleWorkerRole',saleAutomation.role!.roleArn)],
+    statements:[new PolicyStatement({
+      actions:['dynamodb:GetItem','dynamodb:ConditionCheckItem'],resources:[yahooState.tableArn],
+    })],
+  });
+  // END sale Yahoo state read policy.
   backend.addOutput({custom:{yahooHttps:{region:yahooStack.region,secretArn:yahooSession.secretArn,stateTable:yahooState.tableName}}});
 
   const procurementStack = backend.createStack("ProcurementImport");
