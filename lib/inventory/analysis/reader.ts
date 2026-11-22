@@ -126,21 +126,37 @@ export async function loadAnalysis(db: Db, table: string, request: AnalysisReque
   }
 }
 
-export function createAnalysisReader(deps: { authorize: () => Promise<boolean>; load: (request: AnalysisRequest) => Promise<ReadResult> }) {
+export function createAnalysisReader(deps: {
+  authorize: () => Promise<boolean>;
+  load: (request: AnalysisRequest) => Promise<ReadResult>;
+  onSummary?: (request: AnalysisRequest, result: AnalysisResult) => Promise<unknown>;
+  onComputationError?: (request: AnalysisRequest, error: unknown) => Promise<unknown>;
+}) {
   return {
     async summary(input: unknown): Promise<AnalysisResult> {
       if (!await deps.authorize()) return { status: 'error' };
       const request = analysisRequest(input, false);
       if (!request) return { status: 'error' };
       const loaded = await deps.load(request);
-      return loaded.status === 'ok' ? queryAnalysis(loaded.build, request) : loaded;
+      if (loaded.status !== 'ok') return loaded;
+      let failure: { error: unknown } | undefined;
+      const result = queryAnalysis(loaded.build, request, error => { failure = { error }; });
+      try {
+        if (failure) await deps.onComputationError?.(request, failure.error);
+        if (result.status === 'ok') await deps.onSummary?.(request, result);
+      } catch { /* Reporting is best effort and must preserve the summary. */ }
+      return result;
     },
     async detail(input: unknown): Promise<DetailResult> {
       if (!await deps.authorize()) return { status: 'error' };
       const request = analysisRequest(input, true);
       if (!request) return { status: 'error' };
       const loaded = await deps.load(request);
-      return loaded.status === 'ok' ? drilldownAnalysis(loaded.build, request) : loaded;
+      if (loaded.status !== 'ok') return loaded;
+      let failure: { error: unknown } | undefined;
+      const result = drilldownAnalysis(loaded.build, request, error => { failure = { error }; });
+      try { if (failure) await deps.onComputationError?.(request, failure.error); } catch { /* Preserve detail output. */ }
+      return result;
     },
   };
 }

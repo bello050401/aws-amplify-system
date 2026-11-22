@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, GetCommand, QueryCommand, TransactWriteCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { normalizeSystemErrorSignal, type SystemErrorSignal } from "./contract";
+import { systemErrorCauseId } from './cause';
 
 export type ErrorQueueConfig = { table: string; region: string; release: string };
 export function errorQueueConfig(env: NodeJS.ProcessEnv = process.env): ErrorQueueConfig | null {
@@ -30,7 +31,7 @@ export class SystemErrorQueue {
     if (!safe || !owner) throw Error("INVALID_SIGNAL");
     const createdAt = new Date(now).toISOString();
     const day = createdAt.slice(0, 10), hour = createdAt.slice(0, 13);
-    const digest = createHash("sha256").update(JSON.stringify([safe, this.config.release, day])).digest("hex");
+    const digest = systemErrorCauseId(safe, this.config.release);
     const id = `${createdAt}#${digest}`;
     const actor = createHash("sha256").update(`${day}:${owner}`).digest("hex");
     const expiresAt = Math.floor(now / 1000) + 7 * 86400;

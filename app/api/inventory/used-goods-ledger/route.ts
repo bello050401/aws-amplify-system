@@ -1,4 +1,6 @@
 import { reportFeatureError, observeFeatureOperation } from '@/lib/systemErrors/feature';
+import { inspectLedgerHealth } from '@/lib/systemErrors/health';
+import { reportFeatureChecks } from '@/lib/systemErrors/healthReporting';
 import {NextResponse} from 'next/server';
 import {getMobileSession} from '@/lib/mobile/session';
 import {ledgerYear} from '@/lib/inventory/usedGoodsLedger';
@@ -15,6 +17,7 @@ export async function GET(request:Request) {
   let year:number;try{year=ledgerYear(query.get('year'));}catch{return NextResponse.json({error:'出力する年を1900〜2100年で指定してください。'},{status:400,headers});}
   try{
     const ledger=await observeFeatureOperation('antique-ledger', 'export', () => loadUsedGoodsLedger(year), {reportFailure: false});
+    await reportFeatureChecks('antique-ledger', 'export', inspectLedgerHealth(ledger));
     if(query.get('format')==='xlsx'){
       const bytes=await usedGoodsLedgerWorkbook(ledger);
       const filename=`BELLO_古物台帳_${year}年.xlsx`;

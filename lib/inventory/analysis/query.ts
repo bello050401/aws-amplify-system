@@ -182,7 +182,7 @@ function select(build: AnalysisBuild, request: AnalysisRequest): Selection {
   };
 }
 
-export function queryAnalysis(build: AnalysisBuild, request: AnalysisRequest): AnalysisResult {
+export function queryAnalysis(build: AnalysisBuild, request: AnalysisRequest, onError?: (error: unknown) => void): AnalysisResult {
   try {
     const selected = select(build, request);
     if (selected.status !== 'ok') return selected;
@@ -191,7 +191,8 @@ export function queryAnalysis(build: AnalysisBuild, request: AnalysisRequest): A
       summary: summarize(build, request.target, selected.facts),
       inventoryValue: build.inventoryValue, referenceExclusions: build.referenceExclusions,
     };
-  } catch {
+  } catch (error) {
+    try { onError?.(error); } catch { /* Diagnostics cannot alter the result. */ }
     return { status: 'error' };
   }
 }
@@ -271,7 +272,7 @@ function publicDetailItem(item: DetailItem, target: Target, generation: string):
   return { type: 'group', group: { ...item.group, representative: publicRecord } };
 }
 
-export function drilldownAnalysis(build: AnalysisBuild, request: DrilldownRequest): DetailResult {
+export function drilldownAnalysis(build: AnalysisBuild, request: DrilldownRequest, onError?: (error: unknown) => void): DetailResult {
   try {
     if (typeof request.generation !== 'string' || !request.generation) return { status: 'error' };
     const selected = select(build, request);
@@ -294,7 +295,9 @@ export function drilldownAnalysis(build: AnalysisBuild, request: DrilldownReques
     let offset = 0;
     if (cursor !== undefined) {
       if (cursor.length > 3000) return { status: 'error' };
-      const parsed: unknown = JSON.parse(decodeURIComponent(cursor));
+      let parsed: unknown;
+      // A malformed caller cursor is an input error, not a computation defect.
+      try { parsed = JSON.parse(decodeURIComponent(cursor)); } catch { return { status: 'error' }; }
       if (!Array.isArray(parsed) || parsed.length !== 2 || parsed[0] !== signature || !Number.isSafeInteger(parsed[1]) || parsed[1] < 1) return { status: 'error' };
       offset = parsed[1];
     }
@@ -315,7 +318,8 @@ export function drilldownAnalysis(build: AnalysisBuild, request: DrilldownReques
       status: 'ok', items: items.slice(offset, next).map(item => publicDetailItem(item, target, request.generation)),
       nextCursor: next < items.length ? encodeURIComponent(JSON.stringify([signature, next])) : null,
     };
-  } catch {
+  } catch (error) {
+    try { onError?.(error); } catch { /* Diagnostics cannot alter the result. */ }
     return { status: 'error' };
   }
 }

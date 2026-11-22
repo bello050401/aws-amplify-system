@@ -1,4 +1,6 @@
 import { reportFeatureError, observeFeatureOperation } from '@/lib/systemErrors/feature';
+import { inspectAnalysisHealth } from '@/lib/systemErrors/health';
+import { reportFeatureChecks } from '@/lib/systemErrors/healthReporting';
 import 'server-only';
 import { getVerifiedInventoryAccess } from '@/lib/amplify/requireInventoryUser';
 import { inventoryDdb, inventoryTable } from '../categoryPersistence';
@@ -42,6 +44,13 @@ export function createAuthorizedAnalysisReader(owner?: string) {
         await reportFeatureError(error, component, 'aggregate');
         return { status: 'error' };
       }
+    },
+    onSummary: async (request, result) => {
+      const component = request.target === 'sales' ? 'sales-analysis' : 'inventory-analysis';
+      await reportFeatureChecks(component, 'aggregate', inspectAnalysisHealth(result));
+    },
+    onComputationError: async (request, error) => {
+      await reportFeatureError(error, request.target === 'sales' ? 'sales-analysis' : 'inventory-analysis', 'aggregate');
     },
   });
 }
