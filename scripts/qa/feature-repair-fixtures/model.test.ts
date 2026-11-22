@@ -1,9 +1,11 @@
+import {inspectAnalysisHealth} from '../../../lib/systemErrors/health';
+import {queryAnalysis} from '../../../lib/inventory/analysis/query';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {mkdtemp,readFile,rm} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {computeFeatureFixture,changedInput,scopes} from './model';
+import {computeFeatureFixture,changedInput,scopes,analysisBuild} from './model';
 import {buildFeatureFixture} from './build';
 const expected={
  'procurement-yahoo-local':[{quantity:2,unitPrice:5500,total:11000},{quantity:4,unitPrice:2750,total:11000}],
@@ -24,3 +26,5 @@ test('all fixed-scope browser bundles build with frozen manifest and outside-net
  try{for(const scope of scopes){const output=path.join(dir,scope),manifest=await buildFeatureFixture(scope,output);assert.deepEqual(manifest.baseline,expected[scope][0]);assert.deepEqual(manifest.mutated,expected[scope][1]);assert.equal(manifest.scopeId,scope);assert.equal(manifest.operationalApproval,false);const html=await readFile(path.join(output,'index.html'),'utf8'),bundle=await readFile(path.join(output,'fixture.js'),'utf8');assert.ok(html.includes("connect-src 'self'"));assert.ok(html.includes("img-src 'none'"));assert.ok(bundle.includes('/__feature-check'));assert.ok(!bundle.includes('NATIVE_FIXTURE_HASHING_UNAVAILABLE'),'unused Node hashing must be tree-shaken');assert.ok(!bundle.includes('__BELLO_FEATURE_SCOPE__'));}}
  finally{await rm(dir,{recursive:true,force:true});}
 });
+
+test('synthetic analysis snapshots and totals stay internally consistent with health inspection',()=>{for(const quantity of [2,4]){const result=queryAnalysis(analysisBuild(quantity),{target:'inventory'});assert.equal(result.status,'ok');assert.deepEqual(inspectAnalysisHealth(result),[]);}});
