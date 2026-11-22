@@ -35,7 +35,7 @@ export function computeFeatureFixture(scope:Scope,input=baselineInput(scope)):Fi
   return {...base,summary:`仕入れ数量 ${lot.quantity}点 / 仕入れ単価 ${lot.purchasePrice}円`,columns:['落札金額','数量','単価'],rows:[[lot.hammerPrice,lot.quantity,lot.purchasePrice]],actual:{quantity:lot.quantity,unitPrice:lot.purchasePrice}};
  }
  if(scope==='inventory-search-local'){
-  const records=[{id:'fixture-chair',name:'サンプル椅子',sku:'CHAIR',quantity:2},{id:'fixture-desk',name:'サンプル机',sku:'DESK',quantity:1}];const rows=records.filter(createQuickSearchMatcher(input));
+  const records=[{id:'fixture-chair',name:'サンプル椅子',sku:'CHAIR',quantity:2,customFields:null},{id:'fixture-desk',name:'サンプル机',sku:'DESK',quantity:1,customFields:null}];const rows=records.filter(createQuickSearchMatcher(input));
   return {...base,summary:`検索結果 ${rows.length}件 / 在庫合計 ${rows.reduce((sum,row)=>sum+row.quantity,0)}点`,columns:['商品名','数量'],rows:rows.map(row=>[row.name,row.quantity]),actual:{names:rows.map(row=>row.name),quantity:rows.reduce((sum,row)=>sum+row.quantity,0)}};
  }
  if(scope==='inventory-images-local'){
