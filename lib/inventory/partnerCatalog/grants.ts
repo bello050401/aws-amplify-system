@@ -12,7 +12,7 @@ const uuid = (value: unknown): value is string => typeof value === 'string' && /
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 const label = (value: unknown, max: number): value is string => typeof value === 'string' && value.trim().length > 0 && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value);
 export class CatalogError extends Error {
-  constructor(readonly status: number, message: string) { super(message); }
+  constructor(readonly status: number, message: string, readonly diagnostic: 'expected' | 'stored-grant-invalid' = 'expected') { super(message); }
 }
 export interface StoredGrant {
   grantId: string; token: string; tokenHash: string; label: string; title: string;
@@ -54,10 +54,10 @@ export function createCatalogGrantStore(db: Db, table: string, now = () => Date.
     const response = await db.send(new QueryCommand({ TableName: table, ConsistentRead: true, Limit: 101,
       KeyConditionExpression: '#scope = :scope AND begins_with(id, :prefix)',
       ExpressionAttributeNames: { '#scope': 'scope' }, ExpressionAttributeValues: { ':scope': SCOPE, ':prefix': GRANT_PREFIX } }));
-    if (response.LastEvaluatedKey || (response.Items?.length ?? 0) > 100) throw new CatalogError(503, '共有リンク一覧を読み込めません。');
+    if (response.LastEvaluatedKey || (response.Items?.length ?? 0) > 100) throw new CatalogError(503, '共有リンク一覧を読み込めません。', 'stored-grant-invalid');
     return (response.Items ?? []).map(value => {
       const grant = parseGrant(value);
-      if (!grant) throw new CatalogError(503, '共有リンク一覧を読み込めません。');
+      if (!grant) throw new CatalogError(503, '共有リンク一覧を読み込めません。', 'stored-grant-invalid');
       return publicGrant(grant);
     }).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }

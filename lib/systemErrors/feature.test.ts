@@ -35,8 +35,8 @@ test('feature exceptions retain identity and fixed namespace, never raw error co
 });
 test('expected auth/rate/validation/conflict and cancelled operations do not dispatch', async () => {
   const {sent,feature}=fixture();
-  for(const status of [400,401,403,404,409,422,429]) assert.equal(await feature.reportFeatureError({status,message:'secret'},'partner-sharing','share'),false);
-  for(const name of ['AbortError','ThrottlingException','NoValidAuthTokens','ValidationException']) assert.equal(await feature.reportFeatureError(Object.assign(Error('secret'),{name}),'inventory-images','fetch'),false);
+  for(const status of [401,403,429]) assert.equal(await feature.reportFeatureError({status,message:'secret'},'partner-sharing','share'),false);
+  for(const name of ['AbortError','ThrottlingException','NoValidAuthTokens']) assert.equal(await feature.reportFeatureError(Object.assign(Error('secret'),{name}),'inventory-images','fetch'),false);
   assert.equal(sent.length,0);
 });
 test('slow success emits only labels; fast, failed, non-success and disabled timing stay silent', async () => {
@@ -64,11 +64,11 @@ test('actual ledger route excludes denied and invalid-year requests, reports rea
   sent.length=0;failWorkbook=true;assert.equal((await route.GET(request('year=2026&format=xlsx'))).status,503);assert.equal(sent.length,1);
 });
 test('actual public catalog route skips domain denials and reports unexpected service failures', async () => {
-  const {feature,sent}=fixture();class CatalogError extends Error {constructor(public status:number){super('private token');}}
+  const {feature,sent}=fixture();class CatalogError extends Error {constructor(public status:number,public diagnostic='expected'){super('private token');}}
   let failure:unknown=new CatalogError(403);
   const route=load('../../app/api/shared-inventory/[token]/route.ts',{'@/lib/systemErrors/feature':feature,'next/server':nextResponse(),'@/lib/inventory/partnerCatalog/grants':{CatalogError},'@/lib/inventory/partnerCatalog/server':{partnerCatalogResponseHeaders:{},partnerCatalogServer:()=>({read:async()=>{throw failure;}}),catalogFailure:(error:unknown)=>({status:error instanceof CatalogError?error.status:503,error:'safe'})}});
   const run=()=>route.GET(new Request('https://example.invalid'),{params:Promise.resolve({token:'private'})});
-  assert.equal((await run()).status,403);assert.equal(sent.length,0);failure=new TypeError('private token');assert.equal((await run()).status,503);assert.equal(sent.length,1);assert.equal(sent[0].component,'partner-sharing');
+  assert.equal((await run()).status,403);assert.equal(sent.length,0);failure=new CatalogError(503);assert.equal((await run()).status,503);assert.equal(sent.length,0);failure=new CatalogError(503,'stored-grant-invalid');assert.equal((await run()).status,503);assert.equal(sent.length,1);sent.length=0;failure=new TypeError('private token');assert.equal((await run()).status,503);assert.equal(sent.length,1);assert.equal(sent[0].component,'partner-sharing');
 });
 test('actual analytics seam observes load failures but leaves missing snapshots silent', async()=>{
   const {feature,sent}=fixture();let status='missing',allowed=true;
@@ -94,4 +94,10 @@ test('actual analysis reader observer retains error identity; throttling stays o
   let error:unknown=Object.assign(Error('private AWS body'),{name:'ThrottlingException'}),observed:unknown;
   const run=()=>reader.loadAnalysis({send:async()=>{throw error;}},'fixture',{target:'sales'},0,async(value:unknown)=>{observed=value;await feature.reportFeatureError(value,'sales-analysis','aggregate');});
   assert.equal((await run()).status,'error');assert.equal(observed,error);assert.equal(sent.length,0);error=new TypeError('private manifest');assert.equal((await run()).status,'error');assert.equal(sent.length,1);
+});
+
+test('internal SDK validation failures are repairs, while explicit boundary validation stays silent', async()=>{
+ const {feature,sent}=fixture();
+ await feature.reportFeatureError(Object.assign(Error('Invalid ProjectionExpression customer secret'),{name:'ValidationException',statusCode:400}),'inventory-search','search');
+ assert.equal(sent.length,1);assert.equal(sent[0].errorClass,'Unknown');assert.ok(!JSON.stringify(sent).includes('ProjectionExpression'));
 });

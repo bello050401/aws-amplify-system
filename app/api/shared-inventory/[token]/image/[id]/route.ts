@@ -16,7 +16,7 @@ export async function GET(request: Request, context: { params: Promise<{ token: 
     const image = await partnerCatalogServer().image(token, id, Number(raw), size === 'full');
     return new Response(new Uint8Array(image.bytes), { headers: { ...headers, 'Content-Type': image.contentType, 'Content-Length': String(image.bytes.byteLength) } });
   } catch (error) {
-    if (!(error instanceof CatalogError)) await reportFeatureError(error, 'partner-sharing', 'share');
+    if (!(error instanceof CatalogError) || error.diagnostic === 'stored-grant-invalid') await reportFeatureError(error, 'partner-sharing', 'share');
     const failure = catalogFailure(error);
     return NextResponse.json({ ok: false, error: failure.error }, { status: failure.status, headers });
   }

@@ -10,7 +10,7 @@ export async function GET(_request: Request, context: { params: Promise<{ token:
     const { token } = await context.params;
     return NextResponse.json(await partnerCatalogServer().read(token), { headers });
   } catch (error) {
-    if (!(error instanceof CatalogError)) await reportFeatureError(error, 'partner-sharing', 'share');
+    if (!(error instanceof CatalogError) || error.diagnostic === 'stored-grant-invalid') await reportFeatureError(error, 'partner-sharing', 'share');
     const failure = catalogFailure(error);
     return NextResponse.json({ ok: false, error: failure.error }, { status: failure.status, headers });
   }
