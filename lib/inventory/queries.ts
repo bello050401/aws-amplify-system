@@ -1,3 +1,4 @@
+import { InventorySearchLimitError } from '@/lib/systemErrors/expectedFeature';
 import { observeFeatureOperation } from '@/lib/systemErrors/feature';
 import {readEditHistory} from './reversibleHistory';
 import {NOT_MERGED_FILTER} from "@/lib/outbound/mergeInventory";
@@ -398,7 +399,7 @@ async function fetchAllInventoryRecords(extraConditions: Record<string, unknown>
       if (errors) throw new Error(`在庫データの取得に失敗しました: ${JSON.stringify(errors)}`);
       items.push(...data.map(toSearchRecord));
       nextToken = nt;
-      if (items.length >= SEARCH_MAX_SCAN_ITEMS && nextToken) throw new Error('検索対象が処理上限を超えています。カテゴリなどの条件を追加してください。途中までの結果は表示していません。');
+      if (items.length >= SEARCH_MAX_SCAN_ITEMS && nextToken) throw new InventorySearchLimitError();
     } while (nextToken);
     return items;
   }

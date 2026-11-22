@@ -3,7 +3,7 @@ import test from 'node:test';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
-import { isExpectedFeatureError } from './expectedFeature';
+import { isExpectedFeatureError, InventorySearchLimitError } from './expectedFeature';
 import { safeErrorClass } from './client';
 import { normalizeSystemErrorSignal, SYSTEM_ERROR_COMPONENTS, SYSTEM_ERROR_CHECKS } from './contract';
 import type { SystemErrorSignal } from './contract';
@@ -100,4 +100,11 @@ test('internal SDK validation failures are repairs, while explicit boundary vali
  const {feature,sent}=fixture();
  await feature.reportFeatureError(Object.assign(Error('Invalid ProjectionExpression customer secret'),{name:'ValidationException',statusCode:400}),'inventory-search','search');
  assert.equal(sent.length,1);assert.equal(sent[0].errorClass,'Unknown');assert.ok(!JSON.stringify(sent).includes('ProjectionExpression'));
+});
+
+test('actual oversized collection rejects partial results without repair, and name spoofing is not trusted',async()=>{
+ const {feature,sent}=fixture();let reads=0;
+ const queries=load('../inventory/queries.ts',{'@/lib/systemErrors/feature':feature,'@/lib/systemErrors/expectedFeature':{InventorySearchLimitError},'./searchBounds':{MAX_SEARCH_CANDIDATES:2},'@/lib/amplify/requestCache':{requestCache:(fn:unknown)=>fn},'./e2eFixtures':{isE2EFixtureModeActive:()=>false},'@/lib/inventory/mutationSession':{inventoryVerifiedReadSession:async()=>null},'@/lib/amplify/dataClient':{serverDataClient:{models:{Inventory:{list:async()=>{reads++;return {data:[{id:'fixture-a',quantity:1},{id:'fixture-b',quantity:1}],nextToken:'more-fixture-records'};}}}}},'./imageTypes':{resolveTopImage:()=>null,normalizeImageRecord:(value:unknown)=>value},'./inventoryId':{resolveDisplayInventoryId:()=> 'fixture'},'./categories':{inventoryCategoryIds:()=>[]},'./customFieldsCodec':{parseCustomFields:()=>null}});
+ await assert.rejects(queries.listInventorySimpleSearch({q:'fixture'},{offset:0,limit:20}),(error:unknown)=>error instanceof InventorySearchLimitError);assert.equal(reads,2,'initial projection and fallback both retain the processing guard');assert.equal(sent.length,0);
+ const spoof=Object.assign(new Error('internal programming problem'),{name:'InventorySearchLimitError'});assert.equal(await feature.reportFeatureError(spoof,'inventory-search','search'),true);assert.equal(sent.length,1);
 });
