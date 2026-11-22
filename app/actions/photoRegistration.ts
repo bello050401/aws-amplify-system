@@ -1,5 +1,6 @@
 "use server";
 
+import { reportFeatureError } from '@/lib/systemErrors/feature';
 import { revalidatePath } from "next/cache";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, UpdateCommand } from "@aws-sdk/lib-dynamodb";
@@ -57,8 +58,9 @@ const ERROR_LABELS: Record<PhotoErrorCode, string> = {
 
 export type PhotoActionResult<T> = { ok: true; value: T } | { ok: false; code: PhotoErrorCode | "NOT_CONFIGURED"; message: string };
 
-function mapPhotoResult<T>(result: PhotoResult<T>): PhotoActionResult<T> {
+async function mapPhotoResult<T>(result: PhotoResult<T>): Promise<PhotoActionResult<T>> {
   if (result.ok) return { ok: true, value: result.value };
+  if (result.error === 'INTERNAL_ERROR') await reportFeatureError(undefined, 'inventory-images', 'fetch');
   console.error("[photoRegistration action]", { code: result.error, message: result.message, field: result.field });
   return { ok: false, code: result.error, message: ERROR_LABELS[result.error] ?? "エラーが発生しました。" };
 }

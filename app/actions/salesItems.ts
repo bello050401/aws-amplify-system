@@ -1,5 +1,6 @@
 "use server";
 
+import { reportFeatureError } from '@/lib/systemErrors/feature';
 import { getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { loadSalesItems } from "@/lib/inventory/salesView";
 import type { SalesTargetItem } from "@/lib/inventory/sales";
@@ -31,6 +32,7 @@ export async function getSalesItemsAction(
     const items = await loadSalesItems(year, month);
     return { ok: true, items };
   } catch (err) {
+    await reportFeatureError(err, 'sales-analysis', 'aggregate');
     console.warn("[sales] 対象商品一覧を取得できませんでした", { error: err instanceof Error ? err.name : "unknown" });
     return { ok: false };
   }

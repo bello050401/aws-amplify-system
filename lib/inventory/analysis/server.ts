@@ -1,3 +1,4 @@
+import { reportFeatureError, observeFeatureOperation } from '@/lib/systemErrors/feature';
 import 'server-only';
 import { getVerifiedInventoryAccess } from '@/lib/amplify/requireInventoryUser';
 import { inventoryDdb, inventoryTable } from '../categoryPersistence';
@@ -26,12 +27,20 @@ export function createAuthorizedAnalysisReader(owner?: string) {
       const access = await getAnalysisAccess();
       return access !== null && (owner === undefined || access.owner === owner);
     },
-    load: request => {
-      if (isE2EFixtureModeActive()) return Promise.resolve({ status: 'missing' });
+    load: async request => {
+      if (isE2EFixtureModeActive()) return { status: 'missing' };
+      const component = request.target === 'sales' ? 'sales-analysis' : 'inventory-analysis';
+      let observedReadError = false;
       try {
-        return loadAnalysis(inventoryDdb, inventoryTable('SalesAggregateSnapshot'), request);
-      } catch {
-        return Promise.resolve({ status: 'error' });
+        const result = await observeFeatureOperation(component, 'aggregate', () => loadAnalysis(inventoryDdb, inventoryTable('SalesAggregateSnapshot'), request, Date.now(), async error => {
+          observedReadError = true;
+          await reportFeatureError(error, component, 'aggregate');
+        }), {reportFailure: false, successful: value => value.status === 'ok'});
+        if (result.status === 'error' && !observedReadError) await reportFeatureError(undefined, component, 'aggregate');
+        return result;
+      } catch (error) {
+        await reportFeatureError(error, component, 'aggregate');
+        return { status: 'error' };
       }
     },
   });

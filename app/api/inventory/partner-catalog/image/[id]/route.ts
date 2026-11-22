@@ -1,3 +1,4 @@
+import { reportFeatureError } from '@/lib/systemErrors/feature';
 import { catalogFailure, partnerCatalogServer, partnerCatalogResponseHeaders, requireCatalogAdmin } from '@/lib/inventory/partnerCatalog/server';
 import { CatalogError } from '@/lib/inventory/partnerCatalog/grants';
 export const dynamic = 'force-dynamic';
@@ -13,6 +14,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     const image = await partnerCatalogServer().adminImage(id, Number(rawIndex), requireCatalogAdmin);
     return new Response(image.bytes as BodyInit, { headers: { ...headers, 'Content-Type': image.contentType } });
   } catch (error) {
+    if (!(error instanceof CatalogError)) await reportFeatureError(error, 'partner-sharing', 'share');
     const failure = catalogFailure(error);
     return Response.json({ ok: false, error: failure.error }, { status: failure.status, headers });
   }

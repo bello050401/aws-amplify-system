@@ -3,6 +3,7 @@ import test from 'node:test';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
+import { isExpectedFeatureError } from './expectedFeature';
 import { safeErrorClass } from './client';
 import type { SystemErrorSignal } from './contract';
 type ProcurementReport = (error:unknown,provider:'yahoo'|'trefac'|'restage',operation:'fetch'|'enrich'|'register')=>Promise<boolean>;
@@ -10,6 +11,7 @@ function fixture() {
   const sent: SystemErrorSignal[] = [], exports = {} as {reportProcurementError:ProcurementReport};
   const code = ts.transpileModule(fs.readFileSync(new URL('./procurement.ts', import.meta.url), 'utf8'), {compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
   vm.runInNewContext(code, {exports, Error, require:(name:string) => {
+    if(name==='./expectedFeature')return {isExpectedFeatureError};
     if(name==='./client')return {safeErrorClass};
     if(name==='./server')return {reportServerSystemError:async(value:SystemErrorSignal)=>{sent.push(JSON.parse(JSON.stringify(value)) as SystemErrorSignal);return true;}};
     throw Error('Unexpected dependency');

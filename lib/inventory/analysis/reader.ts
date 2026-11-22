@@ -77,7 +77,7 @@ async function readShards(db: Db, table: string, keys: string[]) {
   return found;
 }
 
-export async function loadAnalysis(db: Db, table: string, request: AnalysisRequest, now = Date.now()): Promise<ReadResult> {
+export async function loadAnalysis(db: Db, table: string, request: AnalysisRequest, now = Date.now(), onReadError?: (error: unknown) => Promise<unknown>): Promise<ReadResult> {
   try {
     const seconds = Math.floor(now / 1000);
     const getPointer = async (id: string) => (await db.send(new GetCommand({
@@ -119,7 +119,9 @@ export async function loadAnalysis(db: Db, table: string, request: AnalysisReque
       [request.target]: descriptors.flatMap((descriptor, index) => parseAnalysisShard(found.get(keys[index]), descriptor)),
     };
     return { status: 'ok', build };
-  } catch {
+  } catch (error) {
+    // An observer cannot change the read result or expose SDK payloads to callers.
+    try { await onReadError?.(error); } catch { /* best effort */ }
     return { status: 'error' };
   }
 }

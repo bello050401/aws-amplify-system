@@ -1,3 +1,4 @@
+import { reportFeatureError } from '@/lib/systemErrors/feature';
 import {categoryFilter} from "./categories";
 import { INVENTORY_SEARCH_SELECTION_SET } from "./searchProjection";
 import "server-only";
@@ -133,6 +134,7 @@ export async function listInventoryOffsetPage(
     } while (nextToken && (collected.length <= needed ||
       productUpdatedAt(collected[collected.length-1]) === productUpdatedAt(collected[needed-1])) && pages < MAX_PAGES);
   } catch (err) {
+    await reportFeatureError(err, 'inventory-search', 'search');
     const reason = err instanceof Error ? `${err.name}: ${err.message}`.slice(0, 300) : "unknown";
     console.warn("[inventoryPage] GSI経路が失敗したため従来経路へ切り替えます", { reason });
     return { items: [], offset: options.offset, limit: options.limit, hasNext: false, usedIndex: false, indexFailureReason: reason };

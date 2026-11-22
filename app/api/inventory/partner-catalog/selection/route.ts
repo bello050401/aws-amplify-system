@@ -1,3 +1,5 @@
+import { reportFeatureError } from '@/lib/systemErrors/feature';
+import { CatalogError } from '@/lib/inventory/partnerCatalog/grants';
 import { NextResponse } from 'next/server';
 import { publicGrant } from '@/lib/inventory/partnerCatalog/grants';
 import { MAX_CATALOG_SELECTED_ITEMS } from '@/lib/inventory/partnerCatalog/types';
@@ -17,6 +19,7 @@ export async function GET(request: Request) {
     await requireCatalogAdmin();
     return NextResponse.json({ ok: true, grant, candidates, maxSelectedItems: MAX_CATALOG_SELECTED_ITEMS, checkedAt: new Date().toISOString() }, { headers });
   } catch (error) {
+    if (!(error instanceof CatalogError)) await reportFeatureError(error, 'partner-sharing', 'share');
     const failure = catalogFailure(error);
     return NextResponse.json({ ok: false, error: failure.error }, { status: failure.status, headers });
   }
@@ -33,6 +36,7 @@ export async function POST(request: Request) {
     });
     return NextResponse.json({ ok: true, grant }, { headers });
   } catch (error) {
+    if (!(error instanceof CatalogError)) await reportFeatureError(error, 'partner-sharing', 'share');
     const failure = catalogFailure(error);
     return NextResponse.json({ ok: false, error: failure.error }, { status: failure.status, headers });
   }

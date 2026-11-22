@@ -1,3 +1,4 @@
+import { reportFeatureError } from '@/lib/systemErrors/feature';
 import { NextResponse } from 'next/server';
 import { requireCatalogMutationOrigin } from '@/lib/inventory/partnerCatalog/request';
 import { CatalogError } from '@/lib/inventory/partnerCatalog/grants';
@@ -11,6 +12,7 @@ export async function GET() {
     await requireCatalogAdmin();
     return NextResponse.json({ ok: true, grants: await catalogGrantStore().list() }, { headers });
   } catch (error) {
+    if (!(error instanceof CatalogError)) await reportFeatureError(error, 'partner-sharing', 'share');
     const failure = catalogFailure(error);
     return NextResponse.json({ ok: false, error: failure.error }, { status: failure.status, headers });
   }
@@ -28,6 +30,7 @@ export async function POST(request: Request) {
     const creating = input !== null && typeof input === 'object' && 'action' in input && input.action === 'create';
     return NextResponse.json({ ok: true, grant }, { status: creating ? 201 : 200, headers });
   } catch (error) {
+    if (!(error instanceof CatalogError)) await reportFeatureError(error, 'partner-sharing', 'share');
     const failure = catalogFailure(error);
     return NextResponse.json({ ok: false, error: failure.error }, { status: failure.status, headers });
   }

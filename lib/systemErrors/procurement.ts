@@ -1,8 +1,10 @@
+import { isExpectedFeatureError } from './expectedFeature';
 import { reportServerSystemError } from './server';
 import { safeErrorClass } from './client';
 
 /** User corrections, expired logins and supplier throttling are not code repairs. */
 export function isExpectedProcurementError(error: unknown): boolean {
+  if (isExpectedFeatureError(error)) return true;
   if (!(error instanceof Error)) return false;
   if (error.name === 'AbortError') return true;
   if (['TypeError', 'ReferenceError', 'SyntaxError', 'RangeError'].includes(error.name)) return false;

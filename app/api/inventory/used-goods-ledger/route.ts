@@ -1,3 +1,4 @@
+import { reportFeatureError, observeFeatureOperation } from '@/lib/systemErrors/feature';
 import {NextResponse} from 'next/server';
 import {getMobileSession} from '@/lib/mobile/session';
 import {ledgerYear} from '@/lib/inventory/usedGoodsLedger';
@@ -13,14 +14,15 @@ export async function GET(request:Request) {
   const query=new URL(request.url).searchParams;
   let year:number;try{year=ledgerYear(query.get('year'));}catch{return NextResponse.json({error:'出力する年を1900〜2100年で指定してください。'},{status:400,headers});}
   try{
-    const ledger=await loadUsedGoodsLedger(year);
+    const ledger=await observeFeatureOperation('antique-ledger', 'export', () => loadUsedGoodsLedger(year), {reportFailure: false});
     if(query.get('format')==='xlsx'){
       const bytes=await usedGoodsLedgerWorkbook(ledger);
       const filename=`BELLO_古物台帳_${year}年.xlsx`;
       return new Response(new Uint8Array(bytes),{headers:{...headers,'Content-Type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','Content-Disposition':`attachment; filename="BELLO_ledger_${year}.xlsx"; filename*=UTF-8''${encodeURIComponent(filename)}`}});
     }
     return NextResponse.json(ledger,{headers});
-  }catch{
+  }catch(error){
+    await reportFeatureError(error, 'antique-ledger', 'export');
     // Do not include row data, counterparty details or SDK payloads in logs/responses.
     return NextResponse.json({error:'台帳の取得に失敗しました。時間をおいて再実行してください。'},{status:503,headers});
   }

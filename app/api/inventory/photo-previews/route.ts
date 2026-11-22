@@ -1,3 +1,4 @@
+import { reportFeatureError } from '@/lib/systemErrors/feature';
 import {NextResponse} from 'next/server';
 import {inventoryVerifiedReadSession} from '@/lib/inventory/mutationSession';
 import {getPhotoRegistrationBadgeAction, listInventoryPrimaryPhotoThumbnailsAction} from '@/app/actions/photoRegistration';
@@ -27,7 +28,8 @@ export async function GET(request: Request) {
       return NextResponse.json({ok: false}, {status, headers});
     }
     return NextResponse.json(result, {headers});
-  } catch {
+  } catch (error) {
+    await reportFeatureError(error, 'inventory-images', 'fetch');
     return NextResponse.json({ok: false}, {status: 503, headers});
   }
 }

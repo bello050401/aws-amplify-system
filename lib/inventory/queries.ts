@@ -1,3 +1,4 @@
+import { observeFeatureOperation } from '@/lib/systemErrors/feature';
 import {readEditHistory} from './reversibleHistory';
 import {NOT_MERGED_FILTER} from "@/lib/outbound/mergeInventory";
 import {MAX_SEARCH_CANDIDATES as SEARCH_MAX_SCAN_ITEMS} from './searchBounds';
@@ -232,6 +233,7 @@ function toExtendedFields(item: InventoryModel): ExtendedFieldsAsNullable {
  * のコメントに明記済み。
  */
 export async function listInventory(filters: InventoryListFilters, options: { offset: number; limit: number }): Promise<SearchPage<InventoryListRow>> {
+  return observeFeatureOperation('inventory-search', 'search', async () => {
   // 第五ラウンド§7/P1-A: e2eFixtures.tsの安全ゲート参照(NODE_ENV!==
   // "production" AND 明示的opt-in環境変数——実デプロイでは構造的に
   // 絶対に成立しない)。Playwright E2Eが実際の保護されたルート
@@ -251,6 +253,7 @@ export async function listInventory(filters: InventoryListFilters, options: { of
   const total = all.length;
   const page = all.slice(options.offset, options.offset + options.limit);
   return { items: page, total, totalQuantity:all.reduce((sum,row)=>sum+row.quantity,0), offset: options.offset, limit: options.limit };
+  });
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -524,6 +527,7 @@ export async function listInventorySimpleSearch(
   filters: InventoryListFilters,
   options: { offset: number; limit: number; categoryPriority?: readonly (readonly string[])[] },
 ): Promise<SearchPage<InventoryListRow>> {
+  return observeFeatureOperation('inventory-search', 'search', async () => {
   if (isE2EFixtureModeActive()) return e2eListPage(options.offset, options.limit); // 第五ラウンド§7/P1-A、listInventoryと同じ安全ゲート
   const conditions: Record<string, unknown>[] = [];
   if (filters.categoryIds && filters.categoryIds.length > 0) {
@@ -552,6 +556,7 @@ export async function listInventorySimpleSearch(
   const total = filtered.length;
   const page = filtered.slice(options.offset, options.offset + options.limit);
   return { items: page, total, totalQuantity:filtered.reduce((sum,row)=>sum+row.quantity,0), offset: options.offset, limit: options.limit };
+  });
 }
 
 /**
@@ -576,6 +581,7 @@ export async function listInventoryAdvanced(
   options: { offset: number; limit: number },
   extraFilters: { categoryIds?: string[]; locationId?: string; statusId?: string; q?: string; sort?: InventorySort } = {},
 ): Promise<SearchPage<InventoryListRow>> {
+  return observeFeatureOperation('inventory-search', 'search', async () => {
   if (isE2EFixtureModeActive()) return e2eListPage(options.offset, options.limit); // 第五ラウンド§7/P1-A、listInventoryと同じ安全ゲート
   // 2026-09-04 性能改善 第2フェーズ§1(クイック検索と同じ理由・同じ扱い)。
   // QA-006: extraFiltersはsearchInventoryFast内部で詳細検索(advanced)
@@ -609,6 +615,7 @@ export async function listInventoryAdvanced(
   const total = filtered.length;
   const page = filtered.slice(options.offset, options.offset + options.limit);
   return { items: page, total, totalQuantity:filtered.reduce((sum,row)=>sum+row.quantity,0), offset: options.offset, limit: options.limit };
+  });
 }
 
 /** Mobile reuses the full-inventory engine: filter and sort before pagination. */
@@ -616,6 +623,7 @@ export async function listInventoryMobileSearch(
   input: { q?: string; categoryIds?: string[]; advanced: AdvancedSearchQuery; sort: InventorySort },
   fieldsByKey: Map<string, SearchFieldDef>, options: { offset: number; limit: number },
 ): Promise<SearchPage<InventoryListRow>> {
+  return observeFeatureOperation('inventory-search', 'search', async () => {
   const fast = await trySearchFast({filters:{categoryIds:input.categoryIds},q:input.q,nameOnly:true,
     advanced:{query:input.advanced,fieldsByKey},sort:input.sort,fieldsByKey},options);
   if (fast) return fast;
@@ -630,6 +638,7 @@ export async function listInventoryMobileSearch(
   filtered.sort((a,b)=>compare(a as unknown as Record<string,unknown>,b as unknown as Record<string,unknown>));
   return {items:filtered.slice(options.offset,options.offset+options.limit),total:filtered.length,
     totalQuantity:filtered.reduce((sum,row)=>sum+row.quantity,0),...options};
+  });
 }
 
 export interface InventoryHistoryRow {

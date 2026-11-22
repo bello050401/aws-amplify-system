@@ -1,3 +1,4 @@
+import { reportFeatureError } from '@/lib/systemErrors/feature';
 import { NextResponse } from 'next/server';
 import { CatalogError } from '@/lib/inventory/partnerCatalog/grants';
 import { catalogFailure, partnerCatalogResponseHeaders as headers, partnerCatalogServer } from '@/lib/inventory/partnerCatalog/server';
@@ -15,6 +16,7 @@ export async function GET(request: Request, context: { params: Promise<{ token: 
     const image = await partnerCatalogServer().image(token, id, Number(raw), size === 'full');
     return new Response(new Uint8Array(image.bytes), { headers: { ...headers, 'Content-Type': image.contentType, 'Content-Length': String(image.bytes.byteLength) } });
   } catch (error) {
+    if (!(error instanceof CatalogError)) await reportFeatureError(error, 'partner-sharing', 'share');
     const failure = catalogFailure(error);
     return NextResponse.json({ ok: false, error: failure.error }, { status: failure.status, headers });
   }
