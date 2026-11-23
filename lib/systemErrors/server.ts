@@ -1,15 +1,16 @@
 import "server-only";
-import outputs from "@/amplify_outputs.json";
 import { SystemErrorQueue, errorQueueConfig } from "./queue";
 import { normalizeSystemErrorSignal, type SystemErrorSignal } from "./contract";
 
 export function getSystemErrorQueue(): SystemErrorQueue | null {
-  const config = (outputs as {custom?: {systemErrors?: {tableName?: string; region?: string; release?: string}}}).custom?.systemErrors;
-  const resolved = errorQueueConfig({...process.env,
-    BELLO_SYSTEM_ERRORS_ENABLED: process.env.BELLO_SYSTEM_ERRORS_ENABLED || (config?.tableName ? "1" : "0"),
-    BELLO_SYSTEM_ERRORS_TABLE: process.env.BELLO_SYSTEM_ERRORS_TABLE || config?.tableName,
-    BELLO_SYSTEM_ERRORS_RELEASE: process.env.BELLO_SYSTEM_ERRORS_RELEASE || config?.release || "unknown",
-    AWS_REGION: process.env.AWS_REGION || config?.region,
+  // Runtime overrides stay dynamic even when Next inlines build-only defaults.
+  // Shared Lambda imports must never depend on generated frontend outputs.
+  const env = process.env;
+  const resolved = errorQueueConfig({
+    BELLO_SYSTEM_ERRORS_ENABLED: env.BELLO_SYSTEM_ERRORS_ENABLED || process.env.BELLO_SYSTEM_ERRORS_BUILD_ENABLED || "0",
+    BELLO_SYSTEM_ERRORS_TABLE: env.BELLO_SYSTEM_ERRORS_TABLE || process.env.BELLO_SYSTEM_ERRORS_BUILD_TABLE,
+    BELLO_SYSTEM_ERRORS_RELEASE: env.BELLO_SYSTEM_ERRORS_RELEASE || process.env.BELLO_SYSTEM_ERRORS_BUILD_RELEASE || "unknown",
+    AWS_REGION: env.AWS_REGION || env.BELLO_SYSTEM_ERRORS_REGION || process.env.BELLO_SYSTEM_ERRORS_BUILD_REGION,
   });
   return resolved ? new SystemErrorQueue(resolved) : null;
 }

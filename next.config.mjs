@@ -1,8 +1,8 @@
 import {readFileSync} from 'node:fs';
 // Only non-secret resource names. Backend Lambdas receive these through IAM
 // deployment environment; the web build receives them after backend deployment.
-let inventoryHistoryConfig;
-try { inventoryHistoryConfig=JSON.parse(readFileSync(new URL('./amplify_outputs.json',import.meta.url),'utf8')).custom?.inventoryEdits; } catch {}
+let inventoryHistoryConfig, systemErrorsConfig;
+try { const custom=JSON.parse(readFileSync(new URL('./amplify_outputs.json',import.meta.url),'utf8')).custom; inventoryHistoryConfig=custom?.inventoryEdits; systemErrorsConfig=custom?.systemErrors; } catch {}
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   images: {
@@ -64,6 +64,12 @@ const nextConfig = {
    * その場合はwebhookが TABLE_NOT_CONFIGURED を返すので原因が分かる。
    */
   env: {
+    // Only nonsecret queue metadata crosses this Web build boundary. Separate
+    // build defaults preserve explicit runtime overrides in the shared reporter.
+    BELLO_SYSTEM_ERRORS_BUILD_ENABLED: process.env.BELLO_SYSTEM_ERRORS_ENABLED || (systemErrorsConfig?.tableName ? "1" : "0"),
+    BELLO_SYSTEM_ERRORS_BUILD_TABLE: process.env.BELLO_SYSTEM_ERRORS_TABLE || systemErrorsConfig?.tableName || "",
+    BELLO_SYSTEM_ERRORS_BUILD_RELEASE: process.env.BELLO_SYSTEM_ERRORS_RELEASE || systemErrorsConfig?.release || "unknown",
+    BELLO_SYSTEM_ERRORS_BUILD_REGION: process.env.AWS_REGION || process.env.BELLO_SYSTEM_ERRORS_REGION || systemErrorsConfig?.region || "us-west-2",
     ...(inventoryHistoryConfig?.table && inventoryHistoryConfig?.inventoryTable ? {
       INVENTORY_EDIT_JOBS_TABLE: inventoryHistoryConfig.table,
       INVENTORY_HISTORY_TABLE: inventoryHistoryConfig.inventoryTable,
