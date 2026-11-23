@@ -12,7 +12,7 @@ import {stockCountTitle} from '@/lib/inventory/stockCountTitle';
 import {getChannelListing} from '../service';
 import {readBaseItem,claimBaseManual,finishBaseManual} from '../base/manualLifecycle';
 import {setManualBaseStock} from '../base/adapter';
-import {adjustmentFingerprint,adjustmentKey,runSaleAdjustment,saleAdjustmentQuantity,closedYahooPredecessor,type SaleAdjustment,type AdjustmentReceipt} from './saleAdjustmentCore';
+import {adjustmentFingerprint,adjustmentKey,runSaleAdjustment,saleAdjustmentQuantity,closedYahooPredecessor,physicalRemainingForAdjustment,type SaleAdjustment,type AdjustmentReceipt} from './saleAdjustmentCore';
 import type {ExternalProduct,ExternalSnapshot} from './manualSyncModel';
 import {selectManualLink,manualLinkKey} from './manualSyncModel';
 import {readManualSync} from './manualSync';
@@ -85,13 +85,13 @@ export async function reviewSaleAdjustment(input:{candidateId:string;inventoryId
   if(actual?.hasVariations)throw Error('バリエーション別の数量はBASEで変更してください。');
   const quantity=saleAdjustmentQuantity(input.channel,input.remaining,input.pack);
   if(input.channel==='YAHOO')await requireClosedYahooPredecessor(input.listingId);
-  const fields:Record<string,string>={products_name:stockCountTitle(values.products_name,input.remaining),products_quantity:String(input.remaining)};
+  const fields:Record<string,string>={products_name:stockCountTitle(values.products_name,input.remaining),products_quantity:'1'};
   if(input.channel==='BASE'){fields.base_stock=String(quantity);fields.base_title=stockCountTitle(values.base_title,input.remaining);}
-  else fields.products_quantity=String(quantity);
+  // Both channels keep Yahoo's offered field at one; BASE stock is independent.
   if(Object.keys(fields).some(k=>typeof values[k]!=='string'))throw Error('eコンビニの入力項目を確認できません。');
   const beforeFields=Object.fromEntries(Object.keys(fields).map(k=>[k,values[k]]));
   const beforeTitle=actual?.title??remote.title,title=stockCountTitle(beforeTitle,input.remaining);
-  const data={candidateId:input.candidateId,inventoryId:input.inventoryId,inventoryVersion:input.inventoryVersion,productId:b.productId,bindingVersion:b.version,channel:input.channel,listingId:input.listingId,price:remote.price,quantity,beforeQuantity:actual?.quantity??remote.quantity,title,beforeTitle,fields,beforeFields};
+  const data={candidateId:input.candidateId,inventoryId:input.inventoryId,inventoryVersion:input.inventoryVersion,productId:b.productId,bindingVersion:b.version,channel:input.channel,listingId:input.listingId,price:remote.price,quantity,physicalRemaining:input.remaining,beforeQuantity:actual?.quantity??remote.quantity,title,beforeTitle,fields,beforeFields};
   return {...data,fingerprint:adjustmentFingerprint(data)};
  });
 }
@@ -99,7 +99,7 @@ export async function executeSaleAdjustment(request:SaleAdjustment){
  const store=econveniStore(request.inventoryId),session=new EconveniHttpSession();
  try{return await withEconveniAccount(store,session,()=>econveniCredentialStore.credentials(),async()=>{
   const b=await binding(request.inventoryId,request.channel);if(!b)throw Error('紐付けがありません。');
-  const settledSuccessor=b.item.updatedAt!==request.inventoryVersion&&request.channel==='BASE'&&await settledYahooContinuation(request.candidateId,request.inventoryId,request.inventoryVersion,Number(request.fields.products_quantity));
+  const settledSuccessor=b.item.updatedAt!==request.inventoryVersion&&request.channel==='BASE'&&await settledYahooContinuation(request.candidateId,request.inventoryId,request.inventoryVersion,physicalRemainingForAdjustment(request));
   return runSaleAdjustment(request,{
    read:async()=>((await db.send(new GetCommand({TableName:table,Key:{pk:adjustmentKey(request)},ConsistentRead:true}))).Item as AdjustmentReceipt)??null,
    checkBinding:async()=>{if(b.productId!==request.productId||b.version!==request.bindingVersion||b.item.updatedAt!==request.inventoryVersion&&!settledSuccessor)throw Error('紐付けまたは在庫が変更されています。');},
