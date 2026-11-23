@@ -58,7 +58,7 @@ async function nativeReview(r:NativeRequest,shared?:Awaited<ReturnType<typeof na
  if(Date.now()-Date.parse(ctx.manual.snapshot!.checkedAt)>30*60000)throw Error('eコンビニの状態を取得し直してから実行してください。');
  return {...r,title:remote.title,price:remote.price,quantity:nativePublicationQuantity(remote,r.channel),fingerprint:nativeFingerprint(remote,r.channel,r.operation),inventoryVersion:String(ctx.item.updatedAt),before:remote};
 }
-export async function reviewNative(r:NativeRequest,shared?:Awaited<ReturnType<typeof nativeShared>>){const {before,...view}=await nativeReview(r,shared);return view;}
+export async function reviewNative(r:NativeRequest,shared?:Awaited<ReturnType<typeof nativeShared>>){const view=await nativeReview(r,shared);return {...r,title:view.title,price:view.price,quantity:view.quantity,fingerprint:view.fingerprint,inventoryVersion:view.inventoryVersion};}
 export async function enqueueNative(r:NativeRequest&{requestId:string;fingerprint:string;inventoryVersion:string;confirmed:boolean;terms:boolean},actor:string,shared?:Awaited<ReturnType<typeof nativeShared>>){
  if(!r.confirmed||!/^[-a-zA-Z0-9]{8,80}$/.test(r.requestId))throw Error('確認内容を確認してください。');
  const id='EC_NATIVE:'+r.requestId,existing=await getJob(id);
