@@ -29,10 +29,11 @@ function setup() {
     '../listImageUrls':{},'./metadata':{},
     './reader':{...actualReader,loadAnalysis:async()=>state.status==='ok'?{status:'ok',build:state.build}:{status:state.status}},
   };
-  const output: Record<string, any> = {};
+  const output: Partial<typeof import('../inventory/analysis/server')> = {};
   const source=fs.readFileSync(new URL('../inventory/analysis/server.ts',import.meta.url),'utf8');
   const code=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
   vm.runInNewContext(code,{exports:output,Date,require:(name:string)=>{assert.ok(name in dependencies,`Unstubbed dependency: ${name}`);return dependencies[name];}});
+  assert.ok(output.createAuthorizedAnalysisReader);
   return {state,checks,failures,reader:output.createAuthorizedAnalysisReader()};
 }
 

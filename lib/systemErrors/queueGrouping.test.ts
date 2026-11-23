@@ -3,22 +3,27 @@ import assert from 'node:assert/strict';
 import { systemErrorCauseId } from './cause';
 import { SystemErrorQueue } from './queue';
 import type { SystemErrorSignal } from './contract';
+import { GetCommand, TransactWriteCommand, type GetCommandInput, type GetCommandOutput } from '@aws-sdk/lib-dynamodb';
 
 const signal: SystemErrorSignal = {code:'FEATURE_OPERATION_FAILED',surface:'server',component:'inventory-search',operation:'search',errorClass:'TypeError',check:'operation-failed'};
 
 class AtomicQueueFixture {
-  rows = new Map<string, any>();
-  key(value: any) { return `${value.pk}|${value.sk}`; }
-  async send(command: any) {
+  rows = new Map<string, NonNullable<GetCommandOutput['Item']>>();
+  key(value: GetCommandInput['Key']) { assert.ok(value); return `${value.pk}|${value.sk}`; }
+  async send(command: GetCommand | TransactWriteCommand) {
+    if (command instanceof GetCommand) return {Item:this.rows.get(this.key(command.input.Key))};
+    if (!(command instanceof TransactWriteCommand)) throw Error('UNEXPECTED_TEST_OPERATION');
     const input = command.input;
-    if (command.constructor.name === 'GetCommand') return {Item:this.rows.get(this.key(input.Key))};
-    if (command.constructor.name !== 'TransactWriteCommand') throw Error('UNEXPECTED_TEST_OPERATION');
+    assert.ok(input.TransactItems);
     for (const item of input.TransactItems) {
       if (item.Put && this.rows.has(this.key(item.Put.Item))) throw Object.assign(Error('duplicate'),{name:'TransactionCanceledException'});
-      if (item.Update && (this.rows.get(this.key(item.Update.Key))?.count || 0) >= item.Update.ExpressionAttributeValues[':max']) throw Object.assign(Error('budget'),{name:'TransactionCanceledException'});
+      if (item.Update) {
+        assert.ok(item.Update.ExpressionAttributeValues);
+        if ((this.rows.get(this.key(item.Update.Key))?.count || 0) >= item.Update.ExpressionAttributeValues[':max']) throw Object.assign(Error('budget'),{name:'TransactionCanceledException'});
+      }
     }
     for (const item of input.TransactItems) {
-      if (item.Put) this.rows.set(this.key(item.Put.Item),structuredClone(item.Put.Item));
+      if (item.Put) {assert.ok(item.Put.Item);this.rows.set(this.key(item.Put.Item),structuredClone(item.Put.Item));}
       if (item.Update) {const key=this.key(item.Update.Key);this.rows.set(key,{...item.Update.Key,count:(this.rows.get(key)?.count || 0)+1});}
     }
     return {};
