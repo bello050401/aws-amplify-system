@@ -1,7 +1,8 @@
 const assert=require('node:assert/strict'),esbuild=require('esbuild'),vm=require('node:vm'),path=require('node:path');
 const root=path.resolve(__dirname,'..');let f;
-function reset(){f={row:null,remote:null,events:[],failSend:false,failVerify:false,actor:'admin',prepared:{fields:{products_name:'テスト',products_price:'999999',products_quantity:'2',mercariShops_name:'テスト',mercariShops_price:'999999'},refs:[{storageKey:'one.jpg'}],fingerprint:'hash',option:{},shippingLabel:'佐川急便',quantity:2}};}
+function reset(){f={row:null,remote:null,events:[],failSend:false,failVerify:false,actor:'admin',prepared:{fields:{products_name:'テスト',products_price:'999999',products_quantity:'1',mercariShops_variants:':2:B001:',mercariShops_name:'テスト',mercariShops_price:'999999'},refs:[{storageKey:'one.jpg'}],fingerprint:'hash',option:{},shippingLabel:'佐川急便',quantity:2}};}
 const mocks={
+ './manualWriteGuard':'export const manualWriteRestriction=async()=>null;',
  'server-only':'',sharp:'export default ()=>({metadata:async()=>({format:"jpeg"})});',
  '../service':'export const getListingDraftForInventory=async()=>({id:"draft"});export const getChannelListing=async()=>null;',
  '@/lib/inventory/queries':'export const getInventoryDetail=async()=>({id:"inventory-one",quantity:5,displayId:"B001"});',
@@ -14,7 +15,9 @@ const mocks={
  async login(){f().events.push('login')}dispose(){}async readInventory(){return structuredClone(f().remote)}async assertNoExistingTitle(){}async preflightSave(){}
  async registrationForm(){return {fields:[{name:'yahoo_setting_id',options:[{label:'佐川急便',value:'22024'}]},{name:'yahoo_information_id',options:[{label:'テンプレ',value:'8297'}]},{name:'mercariShops_setting_id',options:[{label:'名前配送',value:'133'}]}]}}
  async ensureYahooOption(){assert.equal(f().row.save.state,'PENDING');f().events.push('option');return '24829'}
- async saveProduct(id,op,fields,files){assert.equal(f().row.save.state,'PENDING');assert.equal(f().row.save.expected.fields.yahoo_setting_id,'24829');f().events.push('save');f().remote={productId:'123',operationId:op,url:'https://smart.e-conveni.net/product.php?action=product_update&products_id=123',channels:f().remote?.channels??{YAHOO:{state:'INACTIVE',listingId:null,listingUrl:null},MERCARI_SHOPS:{state:'INACTIVE',listingId:null,listingUrl:null}}}}
+ async saveProduct(id,op,fields,files){assert.equal(f().row.save.state,'PENDING');assert.equal(f().row.save.expected.fields.yahoo_setting_id,'24829');f().events.push('save');f().remote={productId:'123',quantity:1,operationId:op,url:'https://smart.e-conveni.net/product.php?action=product_update&products_id=123',channels:f().remote?.channels??{YAHOO:{state:'INACTIVE',listingId:null,listingUrl:null},MERCARI_SHOPS:{state:'INACTIVE',listingId:null,listingUrl:null}}}}
+ async saleProductFields(){return {values:{...f().prepared.fields}}}
+ async verifyYahooPublication(){return true}
  async verifySavedProduct(){return !f().failVerify}
  async publicationPreview(x){f().events.push('preview:'+x.channel+':'+x.operation);return x}
  async executeCommand(x){assert.equal(f().row.channels[x.channel].state,'PENDING');f().events.push('send:'+x.channel+':'+x.operation);if(f().failSend)throw new EconveniHttpError('NETWORK');f().remote.channels[x.channel]={state:x.operation==='PUBLISH'?'ACTIVE':'INACTIVE',listingId:'external-'+x.channel,listingUrl:'https://example.test/'+x.channel}}

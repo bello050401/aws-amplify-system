@@ -75,7 +75,7 @@ export async function saveEconveniDraft(id:string):Promise<EconveniSaveResult>{
 }
 function display(state:EconveniWorkflow,channel:EconveniChannel){
   const fields=state.save.expected?.fields??{};
-  return {title:fields[channel==='YAHOO'?'products_name':'mercariShops_name']??'',price:Number(fields[channel==='YAHOO'?'products_price':'mercariShops_price']),quantity:Number(fields.products_quantity),imageCount:state.save.expected?.imageHashes.length??0};
+  return {title:fields[channel==='YAHOO'?'products_name':'mercariShops_name']??'',price:Number(fields[channel==='YAHOO'?'products_price':'mercariShops_price']),quantity:channel==='YAHOO'?Number(fields.products_quantity):Number(fields.mercariShops_variants?.split(':')[1]??fields.products_quantity),imageCount:state.save.expected?.imageHashes.length??0};
 }
 /** Only explicit per-channel commands. There is no sale detector or cross-channel stop. */
 export async function econveniOperation(id:string,channel:EconveniChannel,operation:'PUBLISH'|'STOP',actor:string,token?:string,terms=false):Promise<EcReview>{
@@ -111,7 +111,7 @@ export async function econveniOperation(id:string,channel:EconveniChannel,operat
           const title=values[channel==='YAHOO'?'products_name':'mercariShops_name'];
           const price=values[channel==='YAHOO'?'products_price':'mercariShops_price'];
           if(!title||!/^\d+$/.test(price??'')||!/^\d+$/.test(values.products_quantity??''))throw new EconveniWorkflowError('VERIFY_REQUIRED');
-          base={...base,title,price:Number(price),quantity:Number(values.products_quantity)};
+          base={...base,title,price:Number(price),quantity:channel==='YAHOO'?Number(values.products_quantity):Number(values.mercariShops_variants?.split(':')[1]??values.products_quantity)};
         }
         if(operation==='PUBLISH'&&(!state.save.expected||!await session.verifySavedProduct(remote,state.save.expected)))throw new EconveniWorkflowError('VERIFY_REQUIRED');
         await session.publicationPreview({channel,operation,productId:state.save.productId,title:base.title,price:base.price!});

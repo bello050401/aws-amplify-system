@@ -49,14 +49,14 @@ export async function saveYahooAuctionPreparationAction(inventoryId: string, inp
   const who = await getCurrentInventoryUserEmail();
   if (!who) return { ok: false, code: "FORBIDDEN" };
   const parsed = parseYahooAuctionInput(input);
-  if (!parsed || !yahooInventoryIdValid(inventoryId) ||
+  if (!parsed || parsed.quantity !== 1 || !yahooInventoryIdValid(inventoryId) ||
       expectedRevision !== null && (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1))
     return { ok: false, code: "INVALID_INPUT" };
   const contextResult = await getYahooAuctionPreparationAction(inventoryId);
   if (!contextResult.ok) return contextResult;
   const { draft, saved, availableQuantity, canPrepare } = contextResult.context;
   if (!canPrepare || parsed.quantity > availableQuantity) return { ok: false, code: "NOT_ELIGIBLE" };
-  if (draft?.quantity!=null && parsed.quantity!==draft.quantity) return {ok:false,code:"SOURCE_CHANGED"};
+  // Yahoo quantity is fixed independently of the shared draft and physical stock.
   if (!draft || draft.updatedAt !== expectedSourceUpdatedAt) return { ok: false, code: "SOURCE_CHANGED" };
   if ((saved?.revision ?? null) !== expectedRevision) return { ok: false, code: "CONFLICT" };
   const payload: YahooAuctionPayload = { schemaVersion: 1, input: { ...parsed, endAtJst: resolvedYahooEndAt(parsed) },

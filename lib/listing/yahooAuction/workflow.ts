@@ -17,7 +17,7 @@ const condition={NEW:'new',LIKE_NEW:'used10',NO_NOTABLE_DAMAGE:'used20',SLIGHT_D
 export function previewInput(saved:YahooAuctionSaved,relistId?:string):YahooFixedPreviewInput {
   const i=saved.payload.input;
   if(i.format!=='FIXED')throw new WorkflowFailure('FIXED_PRICE_ONLY');
-  if(!i.condition||!i.priceYen)throw new WorkflowFailure('INVALID_INPUT');
+  if(i.quantity!==1||!i.condition||!i.priceYen)throw new WorkflowFailure('INVALID_INPUT');
   return {title:i.title,description:i.description,condition:condition[i.condition],priceYen:i.priceYen,quantity:i.quantity,
     categoryId:i.categoryId,closingDateJst:resolvedYahooEndAt(i).slice(0,10),closingHourJst:Number(resolvedYahooEndAt(i).slice(11,13)),
     ...(relistId?{relistId}:{}),shipping:{payer:'buyer',method:(saved.payload.input.shippingMethod??saved.payload.source.shippingMethod)==='KAZAI'?'家財おまかせ便':'佐川急便',prefecture:'11',schedule:'2'}};

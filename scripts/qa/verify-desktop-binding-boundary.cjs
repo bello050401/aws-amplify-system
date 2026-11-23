@@ -25,7 +25,7 @@ const {build}=require('esbuild'),vm=require('node:vm'),assert=require('node:asse
   './httpSession':http,'@/lib/listing/econveni/httpSession':http,'@/lib/listing/econveni/workflowStore':{EconveniWorkflowError},
   './credentials':{econveniCredentialStore:{credentials:async()=>({loginId:'synthetic',password:'synthetic'})}},
   './manualSync':{readManualSync:async()=>data()},'@/lib/listing/econveni/manualSync':{readManualSync:async()=>data()},
-  '../service':{getChannelListing:async()=>null},'../base/manualLifecycle':{},'../base/adapter':{},'./failure':{},'./saleAdjustmentCore':{adjustmentFingerprint:JSON.stringify},'./manualStop':{manualLinkedStop:async()=>{linkWrites++;throw Error('No STOP/link write authorized');}},
+  '../service':{getChannelListing:async()=>null},'../base/manualLifecycle':{},'../base/adapter':{},'./failure':{},'./saleAdjustmentCore':{adjustmentFingerprint:JSON.stringify},'@/lib/saleCandidates/yahooPublicSaleEvidence':{readYahooPublicSaleEvidence:async()=>{throw Error('No auction network read authorized in binding-only test');}},'./manualStop':{manualLinkedStop:async()=>{linkWrites++;throw Error('No STOP/link write authorized');}},
   '@/lib/inventory/stockCountTitle':{},'@/lib/saleCandidates/yahooSettlementContinuationServer':{},
   '@/lib/saleCandidates/desktopImagePreviews':{signDesktopImage:async()=>'/synthetic.jpg'},
   '@/lib/saleCandidates/desktopJobs':{desktopJobs:{get:async()=>job(),claim:async()=>{jobWrites++;throw Error('Must not claim on conflict');},startWrite:async()=>{jobWrites++;throw Error('Must not start on conflict');},finish:async()=>{jobWrites++;throw Error('Must not finish on conflict');}},desktopImageKeys:async()=>['photo'],refreshDesktopJobAfterYahooPayment:async j=>j},

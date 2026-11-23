@@ -8,7 +8,6 @@ import { getYahooWorkflowAction,cancelYahooListingAction,startNewYahooPublicatio
  prepareYahooPublicationAction,publishYahooListingAction } from './yahooAuctionWorkflow';
 import type { EcReview } from '@/lib/listing/ecManagement';
 import { commonChannelPrice } from '@/lib/listing/commonSettings';
-import { listingQuantity } from '@/lib/listing/quantity';
 
 export async function commonOperationSourceHash(id:string) {
   if(!canEditInventory(await getInventoryRole()))throw Error('FORBIDDEN');
@@ -34,7 +33,7 @@ export async function commonYahooUpdateAction(id:string,token:string|null,terms=
     const preparation=await ensureYahooCommonPreparationAction(id);
     if(!preparation.ok)return blocked(preparation.message);
     return {status:'READY',token:Buffer.from(JSON.stringify(approval)).toString('base64url'),requiresTerms:approval.p,
-      title:preparation.saved.payload.input.title,price:commonChannelPrice(draft,'YAHOO'),quantity:listingQuantity(draft,item.quantity),imageCount:draft.images.length,
+      title:preparation.saved.payload.input.title,price:commonChannelPrice(draft,'YAHOO'),quantity:1,imageCount:draft.images.length,
       message:approval.p?'現在の出品を停止し、保存した商品情報で新しく出品します。':'次回の出品に使う商品情報を更新します。現在の停止状態は保ちます。',
       details:approval.p?['入札・取消料金が発生する場合は停止します。','出品番号が変わります。変更後の商品名・価格・数量・画像で出品します。']:[]};
   }

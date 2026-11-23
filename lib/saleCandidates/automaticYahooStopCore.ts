@@ -1,4 +1,5 @@
 import {createHash} from 'node:crypto';
+import {yahooAuctionIdValid} from '../listing/yahooAuction/auctionId';
 import type {YahooListingEvidence} from '@/lib/listing/yahooAuction/webHttpListing';
 
 export type AutomaticYahooStopRequest={candidateId:string;inventoryId:string;inventoryVersion:string;externalId:string;reconcileOnly?:boolean};
@@ -26,7 +27,7 @@ const matches=(r:YahooListingEvidence,e:Expected)=>r.title===e.title&&r.priceYen
 const stopped=(r:YahooListingEvidence)=>['cancelled','closed'].includes(r.status)&&noBids(r);
 /** One immutable receipt per sale/target. A reserved attempt can only be read back, even after a lost reservation acknowledgement. */
 export async function runAutomaticYahooStop(binding:AutomaticYahooStopBinding,ports:AutomaticYahooStopPorts,now=Date.now()):Promise<AutomaticYahooStopResult>{
- if(!/^[a-f0-9]{64}$/.test(binding.candidateId)||!binding.inventoryId||!binding.inventoryVersion||!/^[a-z][0-9]{8,12}$/.test(binding.externalId)||!binding.productId||!binding.bindingVersion)return hold;
+ if(!/^[a-f0-9]{64}$/.test(binding.candidateId)||!binding.inventoryId||!binding.inventoryVersion||!yahooAuctionIdValid(binding.externalId)||!binding.productId||!binding.bindingVersion)return hold;
  let receipt:AutomaticYahooStopReceipt|null=null,reservationAttempted=false,waitUntil:number|undefined;
  try{
   receipt=await ports.read();

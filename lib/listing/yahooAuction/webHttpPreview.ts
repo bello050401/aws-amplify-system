@@ -1,4 +1,5 @@
 import "server-only";
+import {yahooAuctionIdValid} from "./auctionId";
 import { parse, type DefaultTreeAdapterMap } from "parse5";
 import type { YahooUploadedImage } from "./webHttpSession";
 
@@ -88,12 +89,12 @@ export function validPreviewInput(input: YahooFixedPreviewInput, image: YahooUpl
       typeof input.description !== "string" || !input.description.trim() || input.description.length > 30_000 ||
       !["new", "used10", "used20", "used40", "used60", "used80"].includes(input.condition) ||
       !Number.isSafeInteger(input.priceYen) || input.priceYen < 1 || input.priceYen > 999_999_999 ||
-      !Number.isSafeInteger(input.quantity) || input.quantity < 1 || input.quantity > 9 ||
+      input.quantity !== 1 ||
       !/^[1-9]\d{0,11}$/.test(input.categoryId) || !/^\d{4}-\d{2}-\d{2}$/.test(input.closingDateJst) ||
       !Number.isSafeInteger(input.closingHourJst) || input.closingHourJst < 0 || input.closingHourJst > 23 ||
       !["seller", "buyer"].includes(input.shipping?.payer) || !["家財おまかせ便", "佐川急便"].includes(input.shipping.method) ||
       input.shipping.prefecture !== "11" || input.shipping.schedule !== "2" ||
-      (input.relistId !== undefined && !/^[a-z][0-9]{8,12}$/.test(input.relistId)) || !image) return false;
+      (input.relistId !== undefined && !yahooAuctionIdValid(input.relistId)) || !image) return false;
   try {
     const date = new Date(input.closingDateJst + "T00:00:00Z");
     const url = new URL(image.url);

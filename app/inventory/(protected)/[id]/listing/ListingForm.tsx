@@ -621,7 +621,7 @@ export function ListingForm({
             </div>
           </div>
         </div>
-<div className="mt-4"><label htmlFor="listing-quantity" className="block text-sm font-medium">出品数量（全販売先共通）</label><input id="listing-quantity" type="number" inputMode="numeric" min="1" max={Math.max(1,availableQuantity)} value={quantity} onChange={e=>setQuantity(e.target.value)} className="mt-1 w-32 rounded border px-3 py-2"/><span className="ml-3 text-xs text-gray-500">現在の在庫 {availableQuantity}点</span></div>
+<div className="mt-4"><label htmlFor="listing-quantity" className="block text-sm font-medium">出品数量（ヤフオク以外の販売先）</label><input id="listing-quantity" type="number" inputMode="numeric" min="1" max={Math.max(1,availableQuantity)} value={quantity} onChange={e=>setQuantity(e.target.value)} className="mt-1 w-32 rounded border px-3 py-2"/><span className="ml-3 text-xs text-gray-500">現在の在庫 {availableQuantity}点</span></div>
         <div className="mt-4"><CommonEcSettings inventoryId={inventoryId} categoryId={commonCategoryId}
           onCategoryChange={setCommonCategoryId} prices={channelPrices} onPricesChange={setChannelPrices}
           goodsPrice={price?Number(price):null} packages={shippingPackages} shippingMethod={shippingMethod}/></div>

@@ -3,7 +3,7 @@ import {prepareEconveniProduct} from '../lib/listing/econveni/mapping';
 import type {ListingDraftRecord} from '../lib/listing/types';
 const draft={id:'draft',inventoryId:'11111111-1111-4111-8111-111111111111',title:'椅子 & テーブル',description:'状態 <良好>\nサイズ',price:10000,channelPrices:{YAHOO:12000,MERCARI_SHOPS:13000},condition:'SLIGHT_DAMAGE',quantity:2,shippingMethod:'SAGAWA',commonCategoryId:'dining-chair',images:[{storageKey:'second.jpg',sortOrder:2},{storageKey:'first.jpg',sortOrder:1}],updatedAt:'2026-10-25T00:00:00Z'} as ListingDraftRecord;
 const a=prepareEconveniProduct(draft,5,'B005000',null,null);
-assert.equal(a.fields.products_quantity,'2');assert.equal(a.fields.mercariShops_variants,':2:B005000:');
+assert.equal(a.fields.products_quantity,'1');assert.equal(a.fields.mercariShops_variants,':2:B005000:');
 assert.equal(a.fields.products_price,'12000');assert.equal(a.fields.products_willprice,'12000');assert.equal(a.fields.mercariShops_price,'13000');
 assert.equal(a.fields.products_description,'状態 &lt;良好&gt;<br>サイズ');assert.equal(a.fields.mercariShops_description,'状態 <良好>\nサイズ');
 assert.equal(a.option.condition,'used40');assert.equal(a.fields.mercariShops_condition,'CONDITION_LITTLE_DIRTY');assert.equal(a.shippingLabel,'佐川急便');

@@ -327,7 +327,7 @@ export class YahooWebSession {
     if (this.#publicationAttempted) return { ok: false as const, code: "PUBLICATION_ALREADY_ATTEMPTED" };
     const prepared = this.#publication;
     if (!prepared || Date.now() - prepared.preparedAt > 5 * 60_000) return { ok: false as const, code: "FRESH_PREVIEW_REQUIRED" };
-    if (approval.termsAccepted !== true || approval.title !== prepared.evidence.title ||
+    if (approval.quantity !== 1 || prepared.evidence.quantity !== 1 || approval.termsAccepted !== true || approval.title !== prepared.evidence.title ||
         approval.priceYen !== prepared.evidence.priceYen || approval.quantity !== prepared.evidence.quantity)
       return { ok: false as const, code: "APPROVAL_MISMATCH" };
     this.#publicationAttempted = true;

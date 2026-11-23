@@ -10,10 +10,10 @@ const shopsConditions={NEW:'CONDITION_BRAND_NEW',LIKE_NEW:'CONDITION_ALMOST_NEW'
 const html=(v:string)=>v.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/\r?\n/g,'<br>');
 export function prepareEconveniProduct(draft:ListingDraftRecord,available:number,code:string,shops:ChannelListingRecord|null,yahoo:YahooAuctionSaved|null,now=Date.now()){
   const input=restoreYahooAuctionInput(draft,yahoo);
-  input.quantity=listingQuantity(draft,available);
+  input.quantity=1;
   const issues=yahooPreparationIssues(input,draft.images.length,available,now);
   if(input.format!=='FIXED')issues.push('eコンビニ経由のヤフオクは定額販売を選択してください。');
-  if(input.quantity>9||input.quantity<1)issues.push('共通の出品数量は1〜9点で指定してください。');
+
   const category=commonCategory(draft.commonCategoryId)?.mercari?.id??shops?.categoryMapping?.mercariCategoryId;
   const price=commonChannelPrice(draft,'MERCARI_SHOPS',shops?.overridePrice);
   if(!category)issues.push('共通の商品情報で商品カテゴリを選択してください。');
@@ -34,8 +34,9 @@ export function prepareEconveniProduct(draft:ListingDraftRecord,available:number
     if(duration<1||duration>8)issues.push('ヤフオクの終了日は明日から8日以内で指定してください。');
   }
   if(issues.length)throw new EconveniPreparationError([...new Set(issues)].join(' '));
-  const quantity=input.quantity;
-  const fields:Record<string,string>={products_name:input.title,products_description:html(input.description),products_quantity:String(quantity),
+  const quantity=listingQuantity(draft,available);
+  if(!Number.isSafeInteger(quantity)||quantity<1||quantity>available)throw new EconveniPreparationError("共通の出品数量と在庫数を確認してください。");
+  const fields:Record<string,string>={products_name:input.title,products_description:html(input.description),products_quantity:"1",
     products_price:String(input.priceYen),products_willprice:String(input.priceYen),products_category:input.categoryId,
     object:'',mercariShops_name:shops?.overrideTitle?.trim()||draft.title,
     mercariShops_description:shops?.overrideDescription?.trim()||draft.description||'',mercariShops_categoryId:category!,

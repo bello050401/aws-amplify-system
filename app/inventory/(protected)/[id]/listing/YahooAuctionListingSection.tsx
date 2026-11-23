@@ -161,10 +161,10 @@ export function YahooAuctionListingSection({ inventoryId, showExecution = true }
           <div><label htmlFor="yahoo-price" className="text-sm">{input.format === "FIXED" ? "即決価格（円）" : "開始価格（円）"}</label>
             <input id="yahoo-price" type="number" min={1} step={1} className={field} value={input.priceYen ?? ""} onChange={e => change("priceYen", e.target.value === "" ? null : Number(e.target.value))} />
           </div>
-          <div><label htmlFor="yahoo-quantity" className="text-sm">出品数量（共通情報で設定・現在庫 {available}）</label>
-            <input id="yahoo-quantity" type="number" readOnly min={1} max={Math.min(9, available)} step={1} className={field} value={input.quantity} onChange={e => change("quantity", Number(e.target.value))} /></div>
+          <div><label htmlFor="yahoo-quantity" className="text-sm">出品数量（ヤフオクは1点ずつ・現在庫 {available}）</label>
+            <input id="yahoo-quantity" type="number" readOnly min={1} max={1} step={1} className={field} value={input.quantity} onChange={e => change("quantity", Number(e.target.value))} /></div>
         </div>
-        <p className="text-xs text-gray-600">送料を含まない商品単価です。送料は配送先に応じて落札後に案内します。数量は出品前に在庫と照合します。</p>
+        <p className="text-xs text-gray-600">送料を含まない商品単価です。送料は配送先に応じて落札後に案内します。在庫が複数あってもヤフオクの出品数量は1点です。在庫数や他の販売先の数量は変更しません。</p>
         {input.format === "AUCTION" && <div><label htmlFor="yahoo-buy-now" className="text-sm">即決価格（任意・円）</label>
           <input id="yahoo-buy-now" type="number" min={1} step={1} className={field} value={input.buyNowYen ?? ""} onChange={e => change("buyNowYen", e.target.value === "" ? null : Number(e.target.value))} /></div>}
         <div><label htmlFor="yahoo-category-query" className="text-sm">カテゴリーを検索</label>

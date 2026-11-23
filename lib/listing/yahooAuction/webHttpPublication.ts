@@ -1,4 +1,5 @@
 import "server-only";
+import {yahooAuctionIdValid} from "./auctionId";
 import { parse, type DefaultTreeAdapterMap } from "parse5";
 import { publicationFields } from "./publicationFields";
 import { verifyPreview, type YahooFixedPreviewInput, type YahooPreviewImages } from "./webHttpPreview";
@@ -66,8 +67,8 @@ export function publicationResponseEvidence(html: string) {
   for (const n of all.filter(n => n.tagName === "a")) {
     try {
       const u = new URL(attr(n,"href") ?? "", "https://auctions.yahoo.co.jp");
-      const match = u.pathname.match(/^\/jp\/auction\/([a-z][0-9]{8,12})$/);
-      if (u.origin === "https://auctions.yahoo.co.jp" && !u.username && !u.password && match) ids.add(match[1]);
+      const match = u.pathname.match(/^\/jp\/auction\/([^/]+)$/);
+      if (u.origin === "https://auctions.yahoo.co.jp" && !u.username && !u.password && match && yahooAuctionIdValid(match[1])) ids.add(match[1]);
     } catch {}
   }
   const text = (n: Node): string => {

@@ -1,6 +1,7 @@
 import "server-only";
 import { parse, type DefaultTreeAdapterMap } from "parse5";
-export const yahooAuctionIdValid = (id: unknown): id is string => typeof id === "string" && /^[a-z][0-9]{8,12}$/.test(id);
+import {yahooAuctionIdValid} from "./auctionId";
+export {yahooAuctionIdValid} from "./auctionId";
 export type YahooListingEvidence = { auctionId: string; title: string; priceYen: number; quantity: number;
   status: "open" | "closed" | "cancelled"; bids: number; bidders: number; highestBidders: number; owned: true; checkedAt: string };
 export function parseListingEvidence(html: string, auctionId: string): YahooListingEvidence | null {

@@ -5,6 +5,15 @@ export type SaleAdjustment = {
  channel:'BASE'|'YAHOO';listingId:string;price:number;quantity:number;beforeQuantity:number;title:string;beforeTitle:string;
  fields:Record<string,string>;beforeFields:Record<string,string>;fingerprint:string;
 };
+/** One offered Yahoo unit; a unit may be a pack of physical inventory. */
+export function saleAdjustmentQuantity(channel:'BASE'|'YAHOO',remaining:number,pack:number){
+ if(!Number.isSafeInteger(remaining)||remaining<0||!Number.isSafeInteger(pack)||pack<1)throw Error('残り在庫と1出品分の数量を確認してください。');
+ const available=Math.floor(remaining/pack);
+ if(channel==='YAHOO'&&available<1)throw Error('残り在庫が1出品分に足りません。');
+ return channel==='YAHOO'?1:available;
+}
+/** A public read only vetoes an active predecessor; it does not grant write authority. */
+export function closedYahooPredecessor(e:{auctionId:string;status:string},id:string){return e.auctionId===id&&e.status==='closed';}
 export type AdjustmentStep='CLEAR'|'EDIT'|'STOCK'|'PUBLISH';
 export type AdjustmentReceipt={pk:string;inventoryId:string;revision:number;updatedAt:string;request:SaleAdjustment;
  done:AdjustmentStep[];pending?:AdjustmentStep;newListingId?:string;newListingUrl?:string;complete?:boolean};
@@ -24,6 +33,7 @@ export async function runSaleAdjustment(request:SaleAdjustment,ports:AdjustmentP
  let receipt=await ports.read();
  if(receipt&&receipt.request.fingerprint!==request.fingerprint)throw Error('確認内容が変わりました。');
  if(receipt?.complete)return {status:'DONE',message:'変更済みの結果を確認しました。',newListingId:receipt.newListingId};
+ if(request.channel==='YAHOO'&&(request.quantity!==1||request.fields.products_quantity!=='1'))return {status:'BLOCKED',message:'ヤフオクは1点ずつ出品します。古い準備情報を送信せず確認し直してください。'};
  await ports.checkBinding(request);
  const steps:AdjustmentStep[]=request.channel==='YAHOO'?['CLEAR','EDIT','PUBLISH']:['EDIT','STOCK'];
  for(const step of steps){

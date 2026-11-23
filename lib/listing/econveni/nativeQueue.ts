@@ -11,10 +11,10 @@ import {soldListingReferences} from './overviewCatalog';
 import {EconveniHttpSession} from './httpSession';
 import {withEconveniAccount} from './accountWorkflow';
 import {econveniCredentialStore} from './credentials';
-import {nativeAllowed,nativeResultMatches,type NativeRequest,type NativeJob} from './nativeModel';
+import {nativeAllowed,nativeResultMatches,nativePublicationQuantity,type NativeRequest,type NativeJob} from './nativeModel';
 import {manualLinkKey,type ExternalProduct} from './manualSyncModel';
 import {markInventoryPublished} from '../publicationCategory';
-export const nativeFingerprint=(remote:ExternalProduct,channel:NativeRequest['channel'])=>createHash('sha256').update(JSON.stringify({...remote,channels:{[channel]:remote.channels[channel]}})).digest('hex');
+export const nativeFingerprint=(remote:ExternalProduct,channel:NativeRequest['channel'],operation?:NativeRequest['operation'])=>{const {publicationQuantities,...common}=remote;return createHash('sha256').update(JSON.stringify({...common,...(channel==='YAHOO'||operation!=='PUBLISH'?{}:{publicationQuantity:publicationQuantities?.[channel]}),channels:{[channel]:remote.channels[channel]}})).digest('hex');};
 const stockFingerprint=(item:NonNullable<Awaited<ReturnType<typeof getInventoryRaw>>>)=>createHash('sha256').update(JSON.stringify([item.name,item.quantity,item.saleEndDate,item.market,item.isDeleted,item.deletedAt,item.listingPartition,parseCustomFields(item.customFields)?.__belloYahooPayment])).digest('hex');
 let masterCache:{expires:number;rows:{id:string;name:string}[]}|undefined;
 async function workerCategories(){if(masterCache&&masterCache.expires>Date.now())return masterCache.rows;const rows:{id:string;name:string}[]=[];let key:Record<string,unknown>|undefined;do{const r=await db.send(new ScanCommand({TableName:inventoryTable('Category'),ProjectionExpression:'id,#n,isActive',ExpressionAttributeNames:{'#n':'name'},ExclusiveStartKey:key}));rows.push(...(r.Items??[]).filter(x=>x.isActive!==false).map(x=>({id:x.id,name:x.name})));key=r.LastEvaluatedKey;}while(key);masterCache={expires:Date.now()+60000,rows};return rows;}
@@ -48,21 +48,26 @@ async function context(r:NativeRequest,shared?:Awaited<ReturnType<typeof nativeS
  const bindingChecks=link?[{ConditionCheck:{TableName:table,Key:{pk:manualLinkKey(link)},ConditionExpression:'revision=:r AND productId=:p AND (attribute_not_exists(disabled) OR disabled=:no)',ExpressionAttributeValues:{':r':link.revision,':p':r.productId,':no':false}}},{ConditionCheck:{TableName:table,Key:{pk:'ECONVENI#MANUAL_OWNER#'+r.productId},ConditionExpression:'inventoryId=:id',ExpressionAttributeValues:{':id':r.inventoryId}}}]:workflow?[{ConditionCheck:{TableName:table,Key:{pk:workflow.pk},ConditionExpression:'revision=:r',ExpressionAttributeValues:{':r':workflow.revision}}}]:[];
  return {manual,item,remote,protectedSale,bindingChecks,legacy,siblingIds};
 }
-export async function reviewNative(r:NativeRequest,shared?:Awaited<ReturnType<typeof nativeShared>>){
- const ctx=await context(r,shared),reason=nativeAllowed(r,ctx.remote,ctx.item,ctx.protectedSale);
+async function nativeReview(r:NativeRequest,shared?:Awaited<ReturnType<typeof nativeShared>>){
+ const ctx=await context(r,shared);
+ let remote=ctx.remote;
+ if(r.operation==='PUBLISH'&&r.channel!=='YAHOO'){const session=new EconveniHttpSession();remote=await withEconveniAccount(econveniStore(r.inventoryId),session,()=>econveniCredentialStore.credentials(),()=>session.readExternalProduct(r.productId));}
+ if(remote.productId!==ctx.remote.productId||remote.inventoryMarker&&remote.inventoryMarker!==r.inventoryId)throw Error('出品対象の紐付けを確認してください。');
+ const reason=nativeAllowed(r,remote,ctx.item,ctx.protectedSale);
  if(reason)throw Error(reason);
  if(Date.now()-Date.parse(ctx.manual.snapshot!.checkedAt)>30*60000)throw Error('eコンビニの状態を取得し直してから実行してください。');
- return {...r,title:ctx.remote.title,price:ctx.remote.price,quantity:ctx.remote.quantity,fingerprint:nativeFingerprint(ctx.remote,r.channel),inventoryVersion:String(ctx.item.updatedAt)};
+ return {...r,title:remote.title,price:remote.price,quantity:nativePublicationQuantity(remote,r.channel),fingerprint:nativeFingerprint(remote,r.channel,r.operation),inventoryVersion:String(ctx.item.updatedAt),before:remote};
 }
+export async function reviewNative(r:NativeRequest,shared?:Awaited<ReturnType<typeof nativeShared>>){const {before,...view}=await nativeReview(r,shared);return view;}
 export async function enqueueNative(r:NativeRequest&{requestId:string;fingerprint:string;inventoryVersion:string;confirmed:boolean;terms:boolean},actor:string,shared?:Awaited<ReturnType<typeof nativeShared>>){
  if(!r.confirmed||!/^[-a-zA-Z0-9]{8,80}$/.test(r.requestId))throw Error('確認内容を確認してください。');
  const id='EC_NATIVE:'+r.requestId,existing=await getJob(id);
  if(existing){if(existing.actor!==actor||existing.inventoryId!==r.inventoryId||existing.productId!==r.productId||existing.channel!==r.channel||existing.operation!==r.operation)throw Error('受付番号が一致しません。');return existing;}
- const review=await reviewNative(r,shared);
+ const {before,...review}=await nativeReview(r,shared);
  if(review.fingerprint!==r.fingerprint||review.inventoryVersion!==r.inventoryVersion)throw Error('確認後に商品が変更されました。もう一度確認してください。');
  if(r.channel==='YAHOO'&&r.operation==='PUBLISH'&&!r.terms)throw Error('Yahoo!オークションのガイドラインへの同意を確認してください。');
  const ctx=await context(r,shared),now=new Date().toISOString();
- const job:NativeJob={id,actor,inventoryId:r.inventoryId,productId:r.productId,channel:r.channel,operation:r.operation,title:review.title,fingerprint:r.fingerprint,inventoryVersion:r.inventoryVersion,stockFingerprint:stockFingerprint(ctx.item),before:ctx.remote,terms:r.terms,state:'EC_NATIVE_ACTIVE',phase:'QUEUED',nextAt:0,createdAt:now,updatedAt:now,attempts:0};
+ const job:NativeJob={id,actor,inventoryId:r.inventoryId,productId:r.productId,channel:r.channel,operation:r.operation,title:review.title,fingerprint:r.fingerprint,inventoryVersion:r.inventoryVersion,stockFingerprint:stockFingerprint(ctx.item),before,terms:r.terms,state:'EC_NATIVE_ACTIVE',phase:'QUEUED',nextAt:0,createdAt:now,updatedAt:now,attempts:0};
  try{await db.send(new TransactWriteCommand({TransactItems:[
   {Put:{TableName:queueTable(),Item:job,ConditionExpression:'attribute_not_exists(id)'}},
   {Put:{TableName:table,Item:{...targetKey(r),jobId:id,active:true},ConditionExpression:'attribute_not_exists(active) OR active=:no',ExpressionAttributeValues:{':no':false}}},
@@ -112,16 +117,17 @@ export async function runNativeJob(job:NativeJob){
   if(receipt||job.phase==='SENDING'){
    // A timeout is read-only reconciliation, NEVER a second remote command.
    const after=await session.readExternalProduct(job.productId);
-   if(nativeResultMatches(job,after)){await finishNative(job,after);}
+   if(nativeResultMatches(job,after)&&(job.channel!=='YAHOO'||job.operation!=='PUBLISH'||!!after.channels.YAHOO.listingId&&await session.verifyYahooPublication(after.channels.YAHOO.listingId))){await finishNative(job,after);}
    else await saveJob(job,'ATTENTION','送信済みの結果を確定できません。eコンビニと販売先を確認してください。');
    return;
   }
   if(!await authorized(job.actor))throw Error('依頼したアカウントの編集権限が無効です。');
   const ctx=await context(job),remote=await session.readExternalProduct(job.productId);
-  if((job.stockFingerprint?stockFingerprint(ctx.item)!==job.stockFingerprint:ctx.item.updatedAt!==job.inventoryVersion)||nativeFingerprint(remote,job.channel)!==job.fingerprint)throw Error('受付後に商品・数量・出品状態が変更されました。再確認してください。');
+  if((job.stockFingerprint?stockFingerprint(ctx.item)!==job.stockFingerprint:ctx.item.updatedAt!==job.inventoryVersion)||nativeFingerprint(remote,job.channel,job.operation)!==job.fingerprint)throw Error('受付後に商品・数量・出品状態が変更されました。再確認してください。');
   const reason=nativeAllowed(job,remote,ctx.item,ctx.protectedSale);if(reason)throw Error(reason);
   if(job.operation==='PUBLISH')for(const id of ctx.siblingIds){const sibling=await session.readExternalProduct(id);if(sibling.channels[job.channel].state==='ACTIVE')throw Error('同じ在庫の別ページがこの販売先に出品中です。重複出品を防ぐため停止しました。');}
   const command=await session.nativePreview(job.productId,job.channel,job.operation);
+  if(job.operation==='PUBLISH'&&(typeof command.quantity!=='number'||!Number.isSafeInteger(command.quantity)||command.quantity<1||command.quantity>ctx.item.quantity||command.quantity!==nativePublicationQuantity(remote,job.channel)))throw Error('販売先の出品数量が在庫または確認内容と一致しません。');
   await lease.commitNative(null,{...receiptKey,inventoryId:job.inventoryId,revision:0,updatedAt:'',operation:job.operation,channel:job.channel,jobId:job.id,state:'SENDING',legacyId:ctx.legacy?.id},[
    {ConditionCheck:{TableName:inventoryTable('Inventory'),Key:{id:job.inventoryId},ConditionExpression:'updatedAt=:v',ExpressionAttributeValues:{':v':ctx.item.updatedAt}}},
    {ConditionCheck:{TableName:table,Key:targetKey(job),ConditionExpression:'jobId=:j AND active=:yes',ExpressionAttributeValues:{':j':job.id,':yes':true}}}
@@ -131,7 +137,7 @@ export async function runNativeJob(job:NativeJob){
   await saveJob(job,'SENDING');
   try{await session.executeNative(command);}catch{/* Write result is unknown: reconcile below, never retry the write. */}
   const after=await session.readExternalProduct(job.productId);
-  if(nativeResultMatches(job,after)){await finishNative(job,after);}
+  if(nativeResultMatches(job,after)&&(job.channel!=='YAHOO'||job.operation!=='PUBLISH'||!!after.channels.YAHOO.listingId&&await session.verifyYahooPublication(after.channels.YAHOO.listingId))){await finishNative(job,after);}
   else await saveJob(job,'ATTENTION','処理後の状態が一致しません。販売先を確認してください。');
  });
 }

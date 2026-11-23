@@ -1,7 +1,7 @@
 import type {EcCatalog,EcChannel,EcChannelState} from '../ecManagement';
 
 export type ExternalStatus = {state:'ACTIVE'|'INACTIVE'|'EXCLUDED';listingId:string|null;listingUrl:string|null};
-export type ExternalProduct = {productId:string;title:string;imageUrl:string|null;quantity:number;price:number;inventoryMarker:string|null;channels:Record<EcChannel,ExternalStatus>};
+export type ExternalProduct = {productId:string;title:string;imageUrl:string|null;quantity:number;publicationQuantities?:Partial<Record<EcChannel,number>>;price:number;inventoryMarker:string|null;channels:Record<EcChannel,ExternalStatus>};
 export type ExternalSnapshot = {version:string;checkedAt:string;products:ExternalProduct[]};
 export type ManualLink = {pk?:string;relatedProductIds?:string[];inventoryId:string;productId:string;inventoryName:string;remoteTitle:string;linkedAt:string;actor:string;baseline:Record<EcChannel,ExternalStatus>;revision:number;disabled?:boolean};
 export type ManualSyncData = {snapshot:ExternalSnapshot|null;links:ManualLink[]};

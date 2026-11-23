@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {runSaleAdjustment,adjustmentFingerprint,type SaleAdjustment,type AdjustmentPorts,type AdjustmentReceipt,type AdjustmentStep} from '../lib/listing/econveni/saleAdjustmentCore';
 
 function fixture(channel:'BASE'|'YAHOO'='YAHOO'){
- const value={candidateId:'c'.repeat(64),inventoryId:'inventory',inventoryVersion:'v1',productId:'123',bindingVersion:'b1',channel,listingId:'old',price:10000,quantity:3,beforeQuantity:5,title:'【在庫3】椅子',beforeTitle:'【在庫5】椅子',fields:{products_name:'【在庫3】椅子',products_quantity:'3'},beforeFields:{products_name:'【在庫5】椅子',products_quantity:'5'}};
+ const value={candidateId:'c'.repeat(64),inventoryId:'inventory',inventoryVersion:'v1',productId:'123',bindingVersion:'b1',channel,listingId:'old',price:10000,quantity:channel==='YAHOO'?1:3,beforeQuantity:5,title:'【在庫3】椅子',beforeTitle:'【在庫5】椅子',fields:{products_name:'【在庫3】椅子',products_quantity:channel==='YAHOO'?'1':'3'},beforeFields:{products_name:'【在庫5】椅子',products_quantity:'5'}};
  const request:SaleAdjustment={...value,fingerprint:adjustmentFingerprint(value)};
  let receipt:AdjustmentReceipt|null=null,id:string|null='old',quantity=5,title=value.beforeTitle,edited=false,version='b1',uncertain=false,lost=false,commitLost=false,finalLost=false;
  const sends:AdjustmentStep[]=[],oldPage={id:'old',exists:true};

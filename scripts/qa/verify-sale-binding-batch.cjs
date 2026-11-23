@@ -9,6 +9,7 @@ class HttpError extends Error{constructor(code){super(code);this.code=code;}}
 class Session{async login(){log.push('login');if(authFail)throw new HttpError('AUTH_REQUIRED');}dispose(){log.push('dispose');}async readExternalProduct(){log.push('read');return structuredClone({...external,channels:{...external.channels,BASE:{...external.channels.BASE,listingId:remoteId}}});}async manualStopPreview(){log.push('preview');if(previewAuth)throw new HttpError('ADDITIONAL_AUTH');return{};}async executeCommand(){throw Error('FORBIDDEN external mutation');}}
 const store={acquire:async()=>log.push('acquire'),release:async()=>log.push('release'),stop:async c=>log.push('stop:'+c),read:async()=>null,commitManualStop:async(_,n,checks,reserve)=>{assert.equal(reserve,false);assert.equal(checks.length,3);stored.push(n);return n;}};
 const mods={
+ '@/lib/saleCandidates/yahooPublicSaleEvidence':{readYahooPublicSaleEvidence:async()=>{throw Error('No auction network read authorized in binding-only test');}},
  '@/lib/saleCandidates/yahooSettlementContinuationServer':{settledYahooContinuation:async()=>false},'server-only':{},'node:crypto':require('crypto'),'@aws-sdk/lib-dynamodb':Object.fromEntries(['GetCommand','PutCommand','ScanCommand','TransactWriteCommand'].map(k=>[k,make(k)])),
  './runtimeStore':{econveniDatabase:db,ECONVENI_WORKFLOW_TABLE:'qa',econveniStore:()=>store},
  './httpSession':{EconveniHttpSession:Session,EconveniHttpError:HttpError,econveniCommandCompleted:()=>{throw Error('send');}},

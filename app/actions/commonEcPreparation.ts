@@ -14,11 +14,11 @@ export async function ensureYahooCommonPreparationAction(id:string) {
   if(!context.ok) return {ok:false as const,message:'ヤフオクの保存情報を取得できません。'};
   const {draft,saved,availableQuantity,canPrepare}=context.context;
   if(!draft||!canPrepare)return {ok:false as const,message:'共通の商品情報と在庫数を確認してください。'};
-  if(saved&&yahooSourceMatches(saved.payload.source,draft))return {ok:true as const,saved};
+  if(saved&&saved.payload.input.quantity===1&&yahooSourceMatches(saved.payload.source,draft))return {ok:true as const,saved};
   const input=restoreYahooAuctionInput(draft,saved);
-  input.quantity=listingQuantity(draft,availableQuantity);
+  input.quantity=1;
   const issues=yahooPreparationIssues(input,draft.images.length,availableQuantity);
-  if(input.quantity>9)issues.push('ヤフオクの出品数量は9点までです。共通の出品数量を確認してください。');
+
   if(issues.length)return {ok:false as const,message:issues.join(' ')};
   const result=await saveYahooAuctionPreparationAction(id,input,saved?.revision??null,draft.updatedAt);
   return result.ok?result:{ok:false as const,message:'出品準備の保存を確認できません。再確認してください。'};

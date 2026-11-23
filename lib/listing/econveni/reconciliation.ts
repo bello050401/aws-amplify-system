@@ -14,6 +14,7 @@ export function reconcileEconveniChannel(current:EconveniWorkflow, remote:Econve
   const uncertain=()=>({...current,channels:{...current.channels,[channel]:{...previous,state:"VERIFY_REQUIRED" as const,errorCode:"REMOTE_RESULT_UNCONFIRMED"}}});
   if(!observed||observed.state==="EXCLUDED") return uncertain();
   if(previous.operation==="PUBLISH") {
+    if(channel==="YAHOO"&&remote?.quantity!==1)return uncertain();
     if(observed.state!=="ACTIVE"||!observed.listingId||!observed.listingUrl) return uncertain();
     // After a stopped item, only a new live listing ID can settle a re-publication.
     if(previous.remoteStatus==="INACTIVE"&&previous.listingId===observed.listingId) return uncertain();

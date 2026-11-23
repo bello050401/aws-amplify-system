@@ -22,20 +22,20 @@ export const yahooInventoryIdValid = (id: unknown): id is string => typeof id ==
 export function initialYahooAuctionInput(draft: ListingDraftRecord | null): YahooAuctionInput {
   const category=commonCategory(draft?.commonCategoryId)?.yahoo;
   return { title: [...(draft?.title ?? "")].slice(0,65).join(""), description: draft?.description ?? "", condition: draft?.condition ?? null,
-    format: "FIXED", priceYen: draft?commonChannelPrice(draft,'YAHOO'):null, buyNowYen: null, quantity: draft?.quantity ?? 1,
+    format: "FIXED", priceYen: draft?commonChannelPrice(draft,'YAHOO'):null, buyNowYen: null, quantity: 1,
     categoryId: category?.id??"", categoryName: category?.path??"", endAtJst: defaultYahooEndAt(), automaticEnd: true, autoExtension: false };
 }
 
 /** Only changed common choices replace channel choices; unrelated common edits retain manual overrides. */
 export function restoreYahooAuctionInput(draft: ListingDraftRecord | null, saved: YahooAuctionSaved | null): YahooAuctionInput {
   if (!saved) return initialYahooAuctionInput(draft);
-  const input = { ...saved.payload.input };
+  const input = { ...saved.payload.input, quantity: 1 };
   if (!draft) return input;
   const previous=saved.payload.source;
   if (previous.commonTitle!==draft.title) input.title=[...draft.title].slice(0,65).join("");
   if (previous.commonDescription!==(draft.description??"")) input.description=draft.description??"";
   if (previous.commonCondition!==draft.condition) input.condition=draft.condition;
-  input.quantity=draft.quantity??input.quantity;
+  // Yahoo offers one listing unit regardless of shared stock or draft quantity.
   const category = commonCategory(draft.commonCategoryId)?.yahoo;
   if (category && saved.payload.source.commonCategoryId !== draft.commonCategoryId) {
     input.categoryId = category.id;
@@ -75,6 +75,7 @@ export function parseYahooAuctionInput(value: unknown): YahooAuctionInput | null
 export function yahooPreparationIssues(input: YahooAuctionInput, imageCount: number, availableQuantity: number,
   now = Date.now()): string[] {
   const issues: string[] = [];
+  if (input.quantity !== 1) issues.push("ヤフオクの出品数量は1点です。保存し直してください。");
   if (!input.title.trim()) issues.push("商品名を入力してください。");
   else if ([...input.title].length > 65) issues.push("商品名を65文字以内にしてください。");
   if (!input.description.trim()) issues.push("商品説明を入力してください。");

@@ -1,11 +1,19 @@
 import "server-only";
+import {readYahooPublicSaleEvidence} from "../../saleCandidates/yahooPublicSaleEvidence";
 import { parse, type DefaultTreeAdapterMap } from "parse5";
 import iconv from "iconv-lite";
 import { randomUUID, createHash } from "node:crypto";
 import type {ExternalProduct,ExternalStatus} from './manualSyncModel';
 import type {NativeOperation} from './nativeModel';
 import type {EcChannel} from '../ecManagement';
-export type NativeCommand={channel:EcChannel;operation:NativeOperation;productId:string;accountId:string;title:string;price:number;url:string};
+export type NativeCommand={channel:EcChannel;operation:NativeOperation;productId:string;accountId:string;title:string;price:number;quantity?:number;url:string};
+/** Never use Yahoo's shared products_quantity as another channel's stock ceiling. */
+export function publicationQuantities(fields:Record<string,string>):Partial<Record<EcChannel,number>>{
+ const integer=(v:string|undefined)=>v!==undefined&&/^\d+$/.test(v)&&Number.isSafeInteger(Number(v))?Number(v):undefined;
+ const raw=fields.mercariShops_variants??'';
+ const variants=raw===raw.trim()?/^:(\d+)(?::[^:\r\n]*:)?$/.exec(raw):null;
+ return {YAHOO:integer(fields.products_quantity),BASE:integer(fields.base_stock),MERCARI_SHOPS:integer(variants?.[1])};
+}
 /** Contracts observed in the normal confirmation pages. CLEAR never means STOP. */
 export function readNativeCommand(page:HtmlPage,expected:Omit<NativeCommand,'url'>):NativeCommand{
  if(expected.operation!=='CLEAR'&&expected.channel!=='BASE')return readEconveniCommand(page,expected as Omit<EconveniCommand,'url'>);
@@ -31,7 +39,7 @@ export type HtmlPage = { url: string; status: number; html: string };
 export type InventoryBinding = { productId: string; url: string; operationId: string | null };
 export type EconveniMarket = "YAHOO" | "MERCARI_SHOPS";
 export type EconveniMarketStatus = { state: "ACTIVE" | "INACTIVE" | "EXCLUDED"; listingId: string | null; listingUrl: string | null };
-export type EconveniRemoteProduct = InventoryBinding & { channels: Record<EconveniMarket, EconveniMarketStatus> };
+export type EconveniRemoteProduct = InventoryBinding & { quantity?:number; channels: Record<EconveniMarket, EconveniMarketStatus> };
 export type EconveniCommand = { channel: EconveniMarket; operation: "PUBLISH" | "STOP"; productId: string; accountId: string; url: string; title: string; price: number };
 export class EconveniHttpError extends Error {
   constructor(public readonly code: "AUTH_REQUIRED" | "ACCESS_DENIED" | "ADDITIONAL_AUTH" | "CONTRACT_CHANGED" | "NETWORK" | "UNSAFE_DESTINATION") { super(code); }
@@ -128,7 +136,9 @@ export function remoteProduct(page: HtmlPage, inventoryId: string): EconveniRemo
     return { state: status === "出" ? "ACTIVE" : status === "外" ? "EXCLUDED" : "INACTIVE", listingId: id,
       listingUrl: id ? market === "YAHOO" ? `https://auctions.yahoo.co.jp/jp/auction/${id}` : `https://jp.mercari.com/shops/product/${id}` : null };
   };
-  return { ...binding, channels: { YAHOO: channel("YAHOO"), MERCARI_SHOPS: channel("MERCARI_SHOPS") } };
+  const quantity=Number(text(cells[10]).trim());
+  if(!Number.isSafeInteger(quantity)||quantity<0)throw new EconveniHttpError('CONTRACT_CHANGED');
+  return { ...binding, quantity, channels: { YAHOO: channel("YAHOO"), MERCARI_SHOPS: channel("MERCARI_SHOPS") } };
 }
 /** Only the four observed one-product normal UI actions are allowed. No JS is executed. */
 export function readEconveniCommand(page: HtmlPage, expected: { channel: EconveniMarket; operation: "PUBLISH" | "STOP"; productId: string; accountId: string; title: string; price: number }, listDisplay = {title:expected.title,price:expected.price}): EconveniCommand {
@@ -158,6 +168,7 @@ export function readEconveniPreviewProduct(page:HtmlPage, expected:Omit<Econveni
   const forms=readForms(page).filter(f=>f.fields.some(x=>x.name==='products_name'));
   if(forms.length!==1)throw new EconveniHttpError('CONTRACT_CHANGED');
   const values=Object.fromEntries(formValues(forms[0]));
+  if(expected.channel==='YAHOO'&&expected.operation==='PUBLISH'&&values.products_quantity!=='1')throw new EconveniHttpError('CONTRACT_CHANGED');
   const title=expected.channel==='MERCARI_SHOPS'?values.mercariShops_name:values.products_name;
   const price=expected.channel==='MERCARI_SHOPS'?values.mercariShops_price:values.products_price;
   if(values.products_id!==expected.productId||values.users_id!==expected.accountId||title!==expected.title||!/^\d+$/.test(price??'')||Number(price)!==expected.price||!values.products_name||!/^\d+$/.test(values.products_price??''))throw new EconveniHttpError('CONTRACT_CHANGED');
@@ -425,10 +436,15 @@ export class EconveniHttpSession {
       if(n>1)await new Promise(r=>setTimeout(r,1000));
       const found=externalCatalogPage(await this.request(SMART+'/products.php?'+encodeForm([['scop','products_name'],['query',fields.products_name],['radioquery','and'],['attribute_page',String(n)]])));
       const matches=found.products.filter(p=>p.productId===productId);
-      if(matches.length===1)return matches[0];
+      if(matches.length===1)return {...matches[0],publicationQuantities:publicationQuantities(fields)};
       if(matches.length>1||!found.products.length||found.total<=n*found.products.length)break;
     }
     throw new EconveniHttpError('CONTRACT_CHANGED');
+  }
+
+  /** Anonymous exact-ID readback only; it never authorizes an external write. */
+  async verifyYahooPublication(auctionId:string):Promise<boolean>{
+    try{const e=await readYahooPublicSaleEvidence(auctionId,{fetchImpl:this.transport});return e.auctionId===auctionId&&e.quantity===1&&(e.status==='open'||e.status==='closed');}catch{return false;}
   }
 
   async manualStopPreview(productId:string,channel:EconveniMarket):Promise<EconveniCommand>{
@@ -443,12 +459,15 @@ export class EconveniHttpSession {
 
   async nativePreview(productId:string,channel:EcChannel,operation:NativeOperation):Promise<NativeCommand>{
     const {values}=await this.saleProductFields(productId);
+    if(channel==='YAHOO'&&operation==='PUBLISH'&&values.products_quantity!=='1')throw new EconveniHttpError('CONTRACT_CHANGED');
     const accountId=values.users_id,title=values.products_name,price=Number(values.products_price);
     if(!/^\d+$/.test(accountId??'')||!title||!Number.isSafeInteger(price)||price<0)throw new EconveniHttpError('CONTRACT_CHANGED');
     const prefix=channel==='YAHOO'?'yahoo':channel==='BASE'?'base':'mercariShops';
     const suffix=operation==='PUBLISH'?'exhibit':operation==='CLEAR'?'clear':'stop';
     const page=await this.request(SMART+'/product_listing.php?'+new URLSearchParams({action:prefix+'_'+suffix+'_together',products_id:'T'+productId,mode:'',order_by:'',attribute_page:'',query:''}));
-    return readNativeCommand(page,{productId,channel,operation,accountId,title,price});
+    const quantity=publicationQuantities(values)[channel];
+    if(operation==='PUBLISH'&&(typeof quantity!=='number'||!Number.isSafeInteger(quantity)||quantity<1))throw new EconveniHttpError('CONTRACT_CHANGED');
+    return {...readNativeCommand(page,{productId,channel,operation,accountId,title,price}),...(operation==='PUBLISH'?{quantity}:{})};
   }
   async executeNative(command:NativeCommand){
     if(!this.authenticated||this.writeAttempted)throw new EconveniHttpError('CONTRACT_CHANGED');

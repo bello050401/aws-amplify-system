@@ -12,13 +12,15 @@ import {stockCountTitle} from '@/lib/inventory/stockCountTitle';
 import {getChannelListing} from '../service';
 import {readBaseItem,claimBaseManual,finishBaseManual} from '../base/manualLifecycle';
 import {setManualBaseStock} from '../base/adapter';
-import {adjustmentFingerprint,adjustmentKey,runSaleAdjustment,type SaleAdjustment,type AdjustmentReceipt} from './saleAdjustmentCore';
+import {adjustmentFingerprint,adjustmentKey,runSaleAdjustment,saleAdjustmentQuantity,closedYahooPredecessor,type SaleAdjustment,type AdjustmentReceipt} from './saleAdjustmentCore';
 import type {ExternalProduct,ExternalSnapshot} from './manualSyncModel';
 import {selectManualLink,manualLinkKey} from './manualSyncModel';
 import {readManualSync} from './manualSync';
 import type {EcChannel,EcReview} from '../ecManagement';
 import {manualLinkedStop} from './manualStop';
 import {settledYahooContinuation} from '@/lib/saleCandidates/yahooSettlementContinuationServer';
+import {readYahooPublicSaleEvidence} from '@/lib/saleCandidates/yahooPublicSaleEvidence';
+async function requireClosedYahooPredecessor(id:string){if(!closedYahooPredecessor(await readYahooPublicSaleEvidence(id),id))throw Error('元のヤフオク出品が終了していません。落札済み分を保護するため再出品を止めました。');}
 export async function saleAdjustmentStarted(request:SaleAdjustment){return !!(await db.send(new GetCommand({TableName:table,Key:{pk:adjustmentKey(request)},ConsistentRead:true}))).Item;}
 
 async function binding(id:string,channel?:EcChannel){
@@ -81,8 +83,8 @@ export async function reviewSaleAdjustment(input:{candidateId:string;inventoryId
   if(native?.externalListingId&&native.externalListingId!==input.listingId||native?.status==='PUBLISHING')throw Error('BASEの紐付けまたは処理中の操作を確認してください。');
   const actual=input.channel==='BASE'?await readBaseItem(input.listingId):null;
   if(actual?.hasVariations)throw Error('バリエーション別の数量はBASEで変更してください。');
-  const quantity=Math.floor(input.remaining/input.pack);
-  if(input.channel==='YAHOO'&&quantity<1)throw Error('残り在庫が1出品分に足りません。');
+  const quantity=saleAdjustmentQuantity(input.channel,input.remaining,input.pack);
+  if(input.channel==='YAHOO')await requireClosedYahooPredecessor(input.listingId);
   const fields:Record<string,string>={products_name:stockCountTitle(values.products_name,input.remaining),products_quantity:String(input.remaining)};
   if(input.channel==='BASE'){fields.base_stock=String(quantity);fields.base_title=stockCountTitle(values.base_title,input.remaining);}
   else fields.products_quantity=String(quantity);
@@ -104,8 +106,8 @@ export async function executeSaleAdjustment(request:SaleAdjustment){
    observe:async(r,step)=>{
     const remote=await session.readExternalProduct(r.productId),id=remote.channels[r.channel].listingId;
     if(remote.inventoryMarker&&remote.inventoryMarker!==r.inventoryId)throw Error('在庫番号が変わりました。');
-    if(step==='CLEAR')return {done:id===null&&remote.channels.YAHOO.state==='INACTIVE',safe:id===r.listingId};
-    if(step==='PUBLISH')return {done:!!id&&id!==r.listingId&&remote.channels.YAHOO.state==='ACTIVE',safe:!id&&remote.channels.YAHOO.state==='INACTIVE',newListingId:id??undefined,newListingUrl:remote.channels.YAHOO.listingUrl??undefined};
+    if(step==='CLEAR'){await requireClosedYahooPredecessor(r.listingId);return {done:id===null&&remote.channels.YAHOO.state==='INACTIVE',safe:id===r.listingId};}
+    if(step==='PUBLISH'){await requireClosedYahooPredecessor(r.listingId);return {done:!!id&&id!==r.listingId&&remote.channels.YAHOO.state==='ACTIVE'&&remote.quantity===1&&await session.verifyYahooPublication(id),safe:!id&&remote.channels.YAHOO.state==='INACTIVE',newListingId:id??undefined,newListingUrl:remote.channels.YAHOO.listingUrl??undefined};}
     if(r.channel==='BASE'&&id!==r.listingId||r.channel==='YAHOO'&&id!==null)throw Error('対象の出品IDが変わりました。');
     if(step==='EDIT'){const {values}=await session.saleProductFields(r.productId);return {done:Object.entries(r.fields).every(([k,v])=>values[k]===v),safe:Object.entries(r.beforeFields).every(([k,v])=>values[k]===v||values[k]===r.fields[k])};}
     const base=await readBaseItem(r.listingId);
@@ -113,7 +115,7 @@ export async function executeSaleAdjustment(request:SaleAdjustment){
    },
    commit:(old,next,reserve)=>store.commitSaleAdjustment(old,next,b.checks,reserve),
    send:async(r,step)=>{
-    if(step==='CLEAR'){await session.clearSoldYahooId(r.productId,r.listingId);return;}
+    if(step==='CLEAR'){await requireClosedYahooPredecessor(r.listingId);await session.clearSoldYahooId(r.productId,r.listingId);return;}
     if(step==='EDIT'){const {values}=await session.saleProductFields(r.productId);if(!Object.entries(r.beforeFields).every(([k,v])=>values[k]===v||values[k]===r.fields[k]))throw Error('保存直前に商品情報が変わりました。');await session.updateSaleFields(r.productId,Object.fromEntries(Object.keys(r.fields).map(k=>[k,values[k]])),r.fields);return;}
     if(step==='STOCK'){
      const native=await getChannelListing(r.inventoryId,'BASE');
@@ -122,6 +124,7 @@ export async function executeSaleAdjustment(request:SaleAdjustment){
      try{try{await setManualBaseStock(r.listingId,r.quantity,r.title);}catch{/* Read back a possibly successful request; never resend. */}const actual=await readBaseItem(r.listingId);if(actual.quantity!==r.quantity||actual.title!==r.title)throw Error('BASEの更新を確認できません。');if(native&&lock)await finishBaseManual(native,lock,{status:actual.visible?'ACTIVE':'PAUSED'});}
      catch(e){if(native&&lock)await finishBaseManual(native,lock,{status:'ERROR',lastError:'売却後の数量を確認してください。'}).catch(()=>{});throw e;}return;
     }
+    await requireClosedYahooPredecessor(r.listingId);
     const remote=await session.readExternalProduct(r.productId);
     if(remote.channels.YAHOO.listingId||remote.channels.YAHOO.state!=='INACTIVE')throw Error('古い出品IDが残っています。');
     const {values}=await session.saleProductFields(r.productId);if(remote.price!==r.price||!Object.entries(r.fields).every(([k,v])=>values[k]===v))throw Error('出品前に金額・数量・商品名が変更されています。');

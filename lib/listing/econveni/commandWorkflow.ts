@@ -5,7 +5,7 @@ import {EconveniWorkflowError,type EconveniWorkflowStore,reserveEconveniOperatio
 import {reconcileEconveniChannel} from "./reconciliation";
 
 type Store=Pick<EconveniWorkflowStore,"read"|"commit"|"stop">;
-type Session=Pick<EconveniHttpSession,"readInventory"|"publicationPreview"|"executeCommand">;
+type Session=Pick<EconveniHttpSession,"readInventory"|"publicationPreview"|"executeCommand"|"verifyYahooPublication">;
 
 /** The shared account lease must be held for this bounded step. The durable reservation
  * is committed BEFORE the external command, including when the command uses GET.
@@ -14,10 +14,15 @@ type Session=Pick<EconveniHttpSession,"readInventory"|"publicationPreview"|"exec
 export async function runEconveniCommand(store:Store,session:Session,input:{inventoryId:string;channel:EconveniMarket;operation:"PUBLISH"|"STOP";fingerprint:string;title:string;price:number;allowMercariRemoval?:boolean}):Promise<EconveniWorkflow> {
   let current=await store.read();
   if(!current||current.inventoryId!==input.inventoryId||!current.save.productId) throw new EconveniWorkflowError("INVALID_TRANSITION");
+  const verifyResult=async(state:EconveniWorkflow,remote:Awaited<ReturnType<Session['readInventory']>>)=>{
+    const result=reconcileEconveniChannel(state,remote,input.channel),own=result.channels[input.channel];
+    if(input.channel==='YAHOO'&&input.operation==='PUBLISH'&&own.state==='SUCCEEDED'&&(!own.listingId||!await session.verifyYahooPublication(own.listingId)))return {...result,channels:{...result.channels,YAHOO:{...own,state:'VERIFY_REQUIRED' as const,errorCode:'REMOTE_RESULT_UNCONFIRMED'}}};
+    return result;
+  };
   const own=current.channels[input.channel];
   if(["PENDING","VERIFY_REQUIRED"].includes(own.state)){
     const remote=await session.readInventory(input.inventoryId);
-    const reconciled=reconcileEconveniChannel(current,remote,input.channel);
+    const reconciled=await verifyResult(current,remote);
     return store.commit(current,reconciled);
   }
   const reserved=reserveEconveniOperation(current,input.channel,input.fingerprint,randomUUID(),input.operation);
@@ -30,6 +35,7 @@ export async function runEconveniCommand(store:Store,session:Session,input:{inve
   // Guard against stale external status before sending, not only against stale BELLO state.
   const remote=await session.readInventory(input.inventoryId);
   if(!remote||remote.productId!==current.save.productId||remote.channels[input.channel].state==="EXCLUDED") throw new EconveniWorkflowError("VERIFY_REQUIRED");
+  if(input.channel==='YAHOO'&&input.operation==='PUBLISH'&&remote.quantity!==1)throw new EconveniWorkflowError('VERIFY_REQUIRED');
   const observed=remote.channels[input.channel];
   if(input.operation==="PUBLISH"&&observed.state!=="INACTIVE"||input.operation==="STOP"&&(observed.state!=="ACTIVE"||observed.listingId!==own.listingId)) throw new EconveniWorkflowError("VERIFY_REQUIRED");
   const command=await session.publicationPreview({channel:input.channel,operation:input.operation,productId:current.save.productId,title:input.title,price:input.price});
@@ -37,7 +43,7 @@ export async function runEconveniCommand(store:Store,session:Session,input:{inve
   try {
     await session.executeCommand(command);
     const result=await session.readInventory(input.inventoryId);
-    const reconciled=reconcileEconveniChannel(current,result,input.channel);
+    const reconciled=await verifyResult(current,result);
     return await store.commit(current,reconciled);
   }catch(error){
     const code=error instanceof EconveniHttpError?error.code:"REMOTE_RESULT_UNCONFIRMED";

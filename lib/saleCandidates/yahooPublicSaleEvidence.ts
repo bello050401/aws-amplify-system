@@ -1,7 +1,8 @@
 import {parse,type DefaultTreeAdapterMap} from 'parse5';
+import {yahooAuctionIdValid} from '../listing/yahooAuction/auctionId';
 export type YahooPublicSaleEvidence={kind:'PUBLIC_LISTING';auctionId:string;title:string;priceYen:number;quantity:number;status:'open'|'closed'|'cancelled';bids:number;bidders:number;highestBidders:number;checkedAt:string};
 const MAX_HTML_BYTES=2*1024*1024;
-const validId=(id:string)=>/^[a-z][0-9]{8,12}$/.test(id);
+const validId=yahooAuctionIdValid;
 /** Public read proof has no seller privileges and can never authorize a write. */
 export function parseYahooPublicSaleEvidence(html:string,auctionId:string,now=Date.now()):YahooPublicSaleEvidence|null{
  if(!validId(auctionId)||Buffer.byteLength(html)>MAX_HTML_BYTES)return null;
