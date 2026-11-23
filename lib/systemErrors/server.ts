@@ -7,6 +7,7 @@ export function getSystemErrorQueue(): SystemErrorQueue | null {
   // Shared Lambda imports must never depend on generated frontend outputs.
   const env = process.env;
   const resolved = errorQueueConfig({
+    NODE_ENV: env.NODE_ENV,
     BELLO_SYSTEM_ERRORS_ENABLED: env.BELLO_SYSTEM_ERRORS_ENABLED || process.env.BELLO_SYSTEM_ERRORS_BUILD_ENABLED || "0",
     BELLO_SYSTEM_ERRORS_TABLE: env.BELLO_SYSTEM_ERRORS_TABLE || process.env.BELLO_SYSTEM_ERRORS_BUILD_TABLE,
     BELLO_SYSTEM_ERRORS_RELEASE: env.BELLO_SYSTEM_ERRORS_RELEASE || process.env.BELLO_SYSTEM_ERRORS_BUILD_RELEASE || "unknown",
