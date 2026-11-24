@@ -59,7 +59,7 @@ test('no personal data, raw reason, business identity or instructions are forwar
  const value=saleFailureSignal('EC','EC_RESULT_UNCONFIRMED');assert.deepEqual(value,{code:'SALE_EC_UNCONFIRMED',surface:'server',operation:'adjust',component:'sale-automation',errorClass:'Error'});
  assert.throws(()=>saleErrorReceipt('a'.repeat(64),'EC','customer@example.com password=secret'));
  assert.equal(saleErrorReceipt('a'.repeat(64),'EC','EC_RESULT_UNCONFIRMED').includes('a'.repeat(64)),false);
- for(const reason of ['WAITING_PAYMENT','QUANTITY_UNKNOWN','UNTRUSTED_MAIL','HISTORICAL','STOCK_CHANGED'])assert.equal(saleFailureSignal('WAITING',reason),null);
+ for(const reason of ['WAITING_PAYMENT','QUANTITY_UNKNOWN','UNTRUSTED_MAIL','HISTORICAL','STOCK_CHANGED','MERCARI_ORDER_ALREADY_RECORDED'])assert.equal(saleFailureSignal('WAITING',reason),null);
 });
 test('authentication and rate limits stay diagnosable without becoming code-repair requests',async()=>{
  for(const reason of ['YAHOO_SALE_AUTH_REQUIRED','BASE_ORDERS_AUTH_REQUIRED','YAHOO_SALE_ACCESS_DENIED','SESSION_EXPIRED'])assert.equal(saleFailureSignal('IDENTIFY',reason)?.code,'SALE_AUTH_REQUIRED');

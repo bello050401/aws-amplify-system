@@ -25,7 +25,8 @@ import {processNativeQueue} from '../../../lib/listing/econveni/nativeQueue';
 import {runCatalogMaintenance} from './maintenance';
 import {ensureAutomaticSaleBinding} from '../../../lib/saleCandidates/saleBinding';
 import {claimAutomationStock,releaseAutomationStock,automationStockGuard} from '../../../lib/saleCandidates/automationStockLock';
-import {resolveMercariSale,verifyMercariSale,postSaleMercari,postSaleMercariComplete} from '../../../lib/saleCandidates/desktopJobs';
+import {resolveMercariSale,verifyMercariSale,postSaleMercari,postSaleMercariComplete,holdRecordedMercariIdentification} from '../../../lib/saleCandidates/desktopJobs';
+import {createRecordedMercariSaleGuard,MERCARI_RECORDED_SALE_REASON} from '../../../lib/saleCandidates/recordedMercariSale';
 import {completeYahooSaleFacts} from '../../../lib/saleCandidates/yahooSaleFactsServer';
 import {reportSaleAutomationFailure} from '../../../lib/saleCandidates/errorReporting';
 
@@ -34,7 +35,7 @@ const table=()=>required('SALE_CANDIDATES_TABLE');
 const actor='BELLO_SALE_AUTOMATION';
 const ec:PostSalePorts={automatic:true,automaticYahooStop,releaseStock:(id,candidate)=>releaseAutomationStock(db,table(),id,candidate),desktopMercari:postSaleMercari,desktopMercariComplete:postSaleMercariComplete,catalog:id=>getEcListingCatalogCore('ADMIN',id),reviewStop:stopListing,executeStop:(r,a)=>stopListing(r.inventoryId,r.channel,a,r.token)};
 const confirmedEc:PostSalePorts={...ec,automatic:false,background:true};
-const machineErrors=new Set(['BASE_ORDER_VERIFY_FAILED','BASE_ORDER_CHANGED','YAHOO_SALE_AUTH_REQUIRED','YAHOO_SALE_ACCESS_DENIED','YAHOO_SALE_RATE_LIMITED','YAHOO_SALE_FORM_CHANGED','YAHOO_SALE_READ_UNAVAILABLE','SALE_RESULT_UNCONFIRMED','SALE_SKU_FAILED','SALE_CONFIGURATION_MISSING','AUTH_REQUIRED','ADDITIONAL_AUTH','SESSION_EXPIRED','RATE_LIMITED','VERIFY_REQUIRED','STATE_UNAVAILABLE','WAIT_INTERVAL','BUSY_OR_STOPPED']);
+const machineErrors=new Set(['MERCARI_ORDER_ALREADY_RECORDED','MERCARI_RECORDED_SALE_CHECK_UNAVAILABLE','BASE_ORDER_VERIFY_FAILED','BASE_ORDER_CHANGED','YAHOO_SALE_AUTH_REQUIRED','YAHOO_SALE_ACCESS_DENIED','YAHOO_SALE_RATE_LIMITED','YAHOO_SALE_FORM_CHANGED','YAHOO_SALE_READ_UNAVAILABLE','SALE_RESULT_UNCONFIRMED','SALE_SKU_FAILED','SALE_CONFIGURATION_MISSING','AUTH_REQUIRED','ADDITIONAL_AUTH','SESSION_EXPIRED','RATE_LIMITED','VERIFY_REQUIRED','STATE_UNAVAILABLE','WAIT_INTERVAL','BUSY_OR_STOPPED']);
 const safeCode=(e:unknown)=>{const error=e as {code?:string;name?:string;message?:string};if(error?.message&&machineErrors.has(error.message))return error.message;const v=error?.code||error?.name;return v&&/^[A-Za-z0-9_]{1,64}$/.test(v)?v:'UNCONFIRMED';};
 async function get(id:string){return (await db.send(new GetCommand({TableName:table(),Key:{id},ConsistentRead:true}))).Item;}
 async function freshBase(c:SaleCandidate):Promise<SaleCandidate>{
@@ -52,13 +53,18 @@ async function freshBase(c:SaleCandidate):Promise<SaleCandidate>{
 export async function handler(event?:{mode?:string}){
  if(event?.mode==='CATALOG_MAINTENANCE')return runCatalogMaintenance();
  const started=Date.now(),config=await get('AUTOMATION_CONFIG');
+ const recordedMercariSale=createRecordedMercariSaleGuard(db,inventoryTable('Inventory'));
+ const recordedSale=async(c:SaleCandidate,beforeMutation=false)=>{
+  if(!await recordedMercariSale(c,beforeMutation))return false;
+  await holdRecordedMercariIdentification(c);return true;
+ };
  if(event?.mode==='PREVIEW'){
   // Private IAM invocation for deployment checks; no sale, EC command, or journal writes.
   const store=createCandidateStore(db,table()),fees=await store.config();
   const page=await db.send(new QueryCommand({TableName:table(),IndexName:'ByState',KeyConditionExpression:'#s=:s',ExpressionAttributeNames:{'#s':'state'},ExpressionAttributeValues:{':s':'PENDING'},Limit:20}));
   const rows=[];
   for(const row of page.Items??[]){try{const c=await freshBase(row as SaleCandidate),ids=c.channel!=='DIRECT'?await exactListingInventoryIds(c.channel==='MERCARI'?'MERCARI_SHOPS':c.channel,c.externalListingId??''):[];
-   const decision=automaticSaleDecision(c,ids,ids.length===1?(await getInventoryRaw(ids[0])??null):null,fees,config?.enabledAt??new Date().toISOString());
+   const decision=await recordedMercariSale(c)?{kind:'REVIEW' as const,reason:MERCARI_RECORDED_SALE_REASON}:automaticSaleDecision(c,ids,ids.length===1?(await getInventoryRaw(ids[0])??null):null,fees,config?.enabledAt??new Date().toISOString());
    rows.push({candidateId:c.id,channel:c.channel,matches:ids.length,decision:decision.kind,reason:'reason'in decision?decision.reason:null});
   }catch(e){rows.push({candidateId:row.id,error:safeCode(e)});}}
   return {mode:'PREVIEW',enabled:config?.enabled===true,rows,more:!!page.LastEvaluatedKey,photoStorageConfigured:!!process.env.PHOTO_REGISTRATION_TABLE_NAME&&!!process.env.PHOTO_REGISTRATION_BUCKET_NAME};
@@ -128,6 +134,7 @@ export async function handler(event?:{mode?:string}){
     }
     const result=await runAutomaticSale(job,{now:Date.now,candidate:()=>store.get(job.candidateId),save,decide:async current=>{
      let c=await freshBase(current);
+     if(await recordedSale(c))return {kind:'REVIEW',reason:MERCARI_RECORDED_SALE_REASON};
      if(c.channel==='YAHOO'&&Date.parse(c.yahooAuthenticatedWonAt??'')>=Date.parse(config.enabledAt))c=await completeYahooSaleFacts(c,db,table());
      const ids=c.channel!=='DIRECT'?await exactListingInventoryIds(c.channel==='MERCARI'?'MERCARI_SHOPS':c.channel,c.externalListingId??''):[];
      if(c.yahooSaleEvidence?.source==='TRUSTED_NOTICE_LINKED_CLOSED_LISTING'){
@@ -136,6 +143,7 @@ export async function handler(event?:{mode?:string}){
      }
      return automaticSaleDecision(c,ids,ids.length===1?(await getInventoryRaw(ids[0])??null):null,fees,config.enabledAt);
     },identify:resolveMercariSale,prepare:async(c,request)=>{
+     if(await recordedSale(c,true))return {status:'REVIEW',reason:MERCARI_RECORDED_SALE_REASON};
      if(!await claimAutomationStock(db,table(),request.inventoryId,c.id))return {status:'WAIT',reason:'PREVIOUS_SALE_PENDING'};
      job.inventoryId=request.inventoryId;await save(job);
      const channel=c.channel==='MERCARI'?'MERCARI_SHOPS':c.channel;
@@ -144,13 +152,13 @@ export async function handler(event?:{mode?:string}){
      if(!inventory||inventory.updatedAt!==request.expectedUpdatedAt)return {status:'REVIEW',reason:'STOCK_CHANGED'};
      if(c.channel==='MERCARI'){const verified=await verifyMercariSale(c,inventory);return {...verified,reason:verified.status==='DONE'?undefined:'MERCARI_DESKTOP_VERIFICATION'};}
      return {status:'DONE'};
-    },sell:async(c,request)=>createSoldOutService({db,table:inventoryTable,...stock,yahooPayment:yahooPaymentPlan(c),saleCommit:(result,now)=>[...automationStockGuard(table(),request.inventoryId,c.id),...store.commit(c,actor,result,now)]})(request,actor),review:id=>reviewPostSaleCore(ec,id,actor),execute:p=>executePostSaleCore(ec,p.candidateId,actor,p.token,true,config.yahooRelistTerms===true)});
+    },sell:async(c,request)=>{if(await recordedSale(c,true))throw Error(MERCARI_RECORDED_SALE_REASON);return createSoldOutService({db,table:inventoryTable,...stock,yahooPayment:yahooPaymentPlan(c),saleCommit:(result,now)=>[...automationStockGuard(table(),request.inventoryId,c.id),...store.commit(c,actor,result,now)]})(request,actor);},review:id=>reviewPostSaleCore(ec,id,actor),execute:p=>executePostSaleCore(ec,p.candidateId,actor,p.token,true,config.yahooRelistTerms===true)});
     if(result.state==='SALE_AUTO_COMPLETE'&&result.inventoryId)await releaseAutomationStock(db,table(),result.inventoryId,result.candidateId);
     if(result.state==='SALE_AUTO_ATTENTION'&&result.reason)await reportSaleAutomationFailure(result.candidateId,result.phase,result.reason);
     processed++;if(result.state==='SALE_AUTO_COMPLETE')complete++;if(result.state==='SALE_AUTO_ATTENTION')attention++;
    }catch(e){
     job.attempts++;job.reason=safeCode(e);job.updatedAt=new Date().toISOString();
-    job.state=job.attempts>=3?'SALE_AUTO_ATTENTION':'SALE_AUTO_ACTIVE';job.nextAt=Date.now()+300000;
+    job.state=job.reason===MERCARI_RECORDED_SALE_REASON||job.attempts>=3?'SALE_AUTO_ATTENTION':'SALE_AUTO_ACTIVE';if(job.reason===MERCARI_RECORDED_SALE_REASON)job.phase='REVIEW';job.nextAt=Date.now()+300000;
     await save(job);await reportSaleAutomationFailure(job.candidateId,job.phase,job.reason);attention++;
    }
   }

@@ -52,5 +52,9 @@ export function createDesktopJobStore(db:Db,table:string,now=()=>Date.now()) {
   return cas(old,{...old,...request,snapshot:desktopSnapshot(request),state:'WAITING',actor:undefined,lease:undefined,leaseUntil:undefined,version:randomUUID(),updatedAt:new Date(now()).toISOString()});
  };
  const recordIssue=async(id:string,actor:string,lease:string,code:unknown)=>{const old=await get(id);if(!old)throw Error('DESKTOP_NOT_FOUND');return cas(old,recordDesktopIssue(old,actor,lease,code,now()));};
- return {get,ensure,claim,startWrite,finish,list,rebase,recordIssue,id:desktopJobId};
+ const holdRecordedSale=async(id:string)=>{
+  const old=await get(id);if(!old||old.purpose!=='IDENTIFY_SALE'||old.state==='COMPLETE'||old.state==='WRITE_STARTED'||old.writeStartedAt||old.reason==='MERCARI_ORDER_ALREADY_RECORDED')return old;
+  return cas(old,{...old,state:'ATTENTION',reason:'MERCARI_ORDER_ALREADY_RECORDED',version:randomUUID(),updatedAt:new Date(now()).toISOString()});
+ };
+ return {get,ensure,claim,startWrite,finish,list,rebase,recordIssue,holdRecordedSale,id:desktopJobId};
 }

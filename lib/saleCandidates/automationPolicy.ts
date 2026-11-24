@@ -3,8 +3,9 @@ import {allocateFee,calculateFee,CHANNELS,type FeeConfig,type SaleCandidate} fro
 import {yahooPaymentPlan} from './yahooPaymentModel';
 import type {SoldOutRequest} from '../inventory/soldOutInput';
 
-export type AutomationReason='NOT_UNIQUE'|'NO_ITEM_ID'|'QUANTITY_UNKNOWN'|'SET_REVIEW'|'ORDER_REVIEW'|'UNTRUSTED_MAIL'|'STOCK_CHANGED'|'WAITING_PAYMENT'|'CANCELLED'|'HISTORICAL'|'CHANNEL_UNSUPPORTED';
+export type AutomationReason='NOT_UNIQUE'|'NO_ITEM_ID'|'QUANTITY_UNKNOWN'|'SET_REVIEW'|'ORDER_REVIEW'|'UNTRUSTED_MAIL'|'STOCK_CHANGED'|'WAITING_PAYMENT'|'CANCELLED'|'HISTORICAL'|'CHANNEL_UNSUPPORTED'|'MERCARI_ORDER_ALREADY_RECORDED';
 export const AUTOMATION_REASONS:Record<AutomationReason,string>={
+ MERCARI_ORDER_ALREADY_RECORDED:'同じメルカリ注文の売却登録が既にあります。重複する在庫変更を停止しています。売却済み記録を確認してください。',
  NOT_UNIQUE:'出品IDに対応する在庫が一意ではありません。商品を選択してください。',NO_ITEM_ID:'通知には商品IDがありません。画像と商品名を確認して紐付けてください。',
  QUANTITY_UNKNOWN:'売却点数を通知から確定できません。数量を確認してください。',SET_REVIEW:'セット販売の構成点数を確認してください。',ORDER_REVIEW:'注文状態・送料・金額を確認してください。',
  UNTRUSTED_MAIL:'受信元の認証を確認できない通知です。自動処理しません。',STOCK_CHANGED:'在庫・販売情報が変更されています。確認してください。',WAITING_PAYMENT:'入金待ちです。在庫数量は変更していません。',

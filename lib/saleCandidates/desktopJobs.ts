@@ -14,6 +14,10 @@ import {postSaleJobId} from './postSaleQueueCore';
 export {desktopImageKeys} from './desktopImages';
 
 export const desktopJobs=createDesktopJobStore(econveniDatabase,ECONVENI_WORKFLOW_TABLE);
+/** Metadata hold only: an existing manual sale is never converted into a new stock/EC command. */
+export async function holdRecordedMercariIdentification(c:SaleCandidate){
+ return desktopJobs.holdRecordedSale(desktopJobs.id({purpose:'IDENTIFY_SALE',candidateId:c.id,externalId:'ORDER:'+c.orderId}));
+}
 export async function resolveMercariSale(c:SaleCandidate):Promise<{status:'DONE'|'WAIT'|'REVIEW';nextAt?:number;reason?:string}> {
  if(c.externalListingId)return {status:'DONE'};
  const data=c as SaleCandidate&{mercariOrderUrl?:string;mercariShopId?:string};
@@ -21,7 +25,7 @@ export async function resolveMercariSale(c:SaleCandidate):Promise<{status:'DONE'
  let url:URL;try{url=new URL(data.mercariOrderUrl);}catch{return {status:'REVIEW'};}
  if(url.origin!=='https://mercari-shops.com'||url.pathname!==`/seller/shops/${data.mercariShopId}/orders/${c.orderId.replace(/^order_/,'')}`||url.search||url.hash)return {status:'REVIEW',reason:'MERCARI_ORDER_URL_INVALID'};
  const {job,matches}=await desktopJobs.ensure({purpose:'IDENTIFY_SALE',candidateId:c.id,inventoryId:'UNRESOLVED',inventoryVersion:'UNRESOLVED',externalId:'ORDER:'+c.orderId,title:c.name,imageKeys:[],orderId:c.orderId,orderLineId:c.orderLineId??'',orderUrl:data.mercariOrderUrl,shopId:data.mercariShopId,soldQuantity:c.quantity,unitPrice:c.unitPrice});
- return !matches||job.state==='ATTENTION'?{status:'REVIEW',reason:'MERCARI_IDENTIFICATION_REVIEW'}:job.state==='COMPLETE'?{status:'DONE'}:{status:'WAIT',nextAt:job.state==='WAITING'?job.nextAt:Date.now()+60000};
+ return !matches||job.state==='ATTENTION'?{status:'REVIEW',reason:job.lastIssue?job.reason:'MERCARI_IDENTIFICATION_REVIEW'}:job.state==='COMPLETE'?{status:'DONE'}:{status:'WAIT',nextAt:job.state==='WAITING'?job.nextAt:Date.now()+60000};
 }
 export async function verifyMercariSale(c:SaleCandidate,inventory:Record<string,unknown>):Promise<{status:'DONE'|'WAIT'|'REVIEW';nextAt?:number}> {
  if(c.channel!=='MERCARI'||!c.externalListingId||!c.orderId||!inventory.updatedAt)return {status:'REVIEW'};

@@ -33,10 +33,11 @@ export function newDesktopJob(r:DesktopRequest,now:number):DesktopJob {
  return {...r,id,pk:'SALE_DESKTOP#'+id,snapshot:desktopSnapshot(r),version:randomUUID(),state:'WAITING',createdAt:at,updatedAt:at,nextAt:now+DESKTOP_RETRY_MS,attempts:1};
 }
 export function ageDesktopJob(job:DesktopJob,now:number):DesktopJob {
+ if(job.state==='ATTENTION'&&job.lastIssue&&job.reason==='DESKTOP_UNAVAILABLE')return {...job,reason:desktopIssueDiagnostic(job.lastIssue.code),updatedAt:new Date(now).toISOString(),version:randomUUID()};
  if(job.state==='COMPLETE'||job.state==='ATTENTION'||job.state==='WRITE_STARTED')return job;
  if(job.state==='CLAIMED') {
   if((job.leaseUntil??0)>now)return job;
-  job={...job,state:'WAITING',actor:undefined,lease:undefined,leaseUntil:undefined,updatedAt:new Date(now).toISOString(),version:randomUUID(),reason:'DESKTOP_CLAIM_EXPIRED'};
+  job={...job,state:'WAITING',actor:undefined,lease:undefined,leaseUntil:undefined,updatedAt:new Date(now).toISOString(),version:randomUUID(),reason:job.lastIssue?desktopIssueDiagnostic(job.lastIssue.code):'DESKTOP_CLAIM_EXPIRED'};
  }
  // A restarted PC/expired claim must not move the four availability windows.
  // Also normalize older receipts whose previous claim already shifted nextAt.
@@ -47,7 +48,7 @@ export function ageDesktopJob(job:DesktopJob,now:number):DesktopJob {
  // Each due window is one availability attempt; no new instruction ID is created.
  const windows=Math.floor((now-job.nextAt)/DESKTOP_RETRY_MS)+1;
  const attempts=job.attempts+windows;
- return {...job,attempts:Math.min(attempts,DESKTOP_MAX_ATTEMPTS),state:attempts>DESKTOP_MAX_ATTEMPTS?'ATTENTION':'WAITING',nextAt:job.nextAt+windows*DESKTOP_RETRY_MS,reason:attempts>DESKTOP_MAX_ATTEMPTS?'DESKTOP_UNAVAILABLE':undefined,updatedAt:new Date(now).toISOString(),version:randomUUID()};
+ return {...job,attempts:Math.min(attempts,DESKTOP_MAX_ATTEMPTS),state:attempts>DESKTOP_MAX_ATTEMPTS?'ATTENTION':'WAITING',nextAt:job.nextAt+windows*DESKTOP_RETRY_MS,reason:job.lastIssue?desktopIssueDiagnostic(job.lastIssue.code):attempts>DESKTOP_MAX_ATTEMPTS?'DESKTOP_UNAVAILABLE':undefined,updatedAt:new Date(now).toISOString(),version:randomUUID()};
 }
 export function claimDesktopJob(job:DesktopJob,actor:string,now:number):DesktopJob {
  if(!actor||job.state==='COMPLETE'||job.state==='ATTENTION')throw Error('DESKTOP_NOT_CLAIMABLE');
@@ -79,17 +80,32 @@ export function finishDesktopJob(job:DesktopJob,actor:string,lease:string,e:Desk
  if(job.purpose==='STOCK'&&(e.observedQuantity!==job.targetQuantity||job.targetQuantity===0&&e.observedState!=='STOPPED'||!['ACTIVE','STOPPED'].includes(e.observedState??'')||job.writeStartedAt&&(observed<Date.parse(job.writeStartedAt)||e.observedEvidenceRef===job.preWriteEvidence?.observedEvidenceRef)))throw Error('DESKTOP_READBACK_REQUIRED');
  return {...job,state:'COMPLETE',evidence:e,completedAt:new Date(now).toISOString(),updatedAt:new Date(now).toISOString(),version:randomUUID()};
 }
-export const DESKTOP_ISSUE_CODES=['AUTH_REQUIRED','RATE_LIMITED','REMOTE_FORMAT_CHANGED','DESKTOP_OPERATION_FAILED'] as const;
+export const DESKTOP_ISSUE_CODES=['AUTH_REQUIRED','RATE_LIMITED','REMOTE_FORMAT_CHANGED','DESKTOP_OPERATION_FAILED','TITLE_MISMATCH','IMAGE_CHANGED','INVENTORY_CHANGED','ORDER_CHANGED','BINDING_REQUIRED','SAVE_CONFLICT','RECORDED_SALE_CHECK_FAILED'] as const;
 export type DesktopIssueCode=typeof DESKTOP_ISSUE_CODES[number];
 export function recordDesktopIssue(job:DesktopJob,actor:string,lease:string,code:unknown,now:number):DesktopJob {
  assertDesktopLease(job,actor,lease,now);
  if(!(DESKTOP_ISSUE_CODES as readonly unknown[]).includes(code))throw Error('DESKTOP_ISSUE_INVALID');
- return {...job,lastIssue:{code:code as DesktopIssueCode,actor,at:new Date(now).toISOString()},version:randomUUID(),updatedAt:new Date(now).toISOString()};
+ return {...job,lastIssue:{code:code as DesktopIssueCode,actor,at:new Date(now).toISOString()},reason:desktopIssueDiagnostic(code as DesktopIssueCode),version:randomUUID(),updatedAt:new Date(now).toISOString()};
 }
 export function desktopIssueDiagnostic(code:DesktopIssueCode):string {
- return code==='AUTH_REQUIRED'?'DESKTOP_AUTH_REQUIRED':code==='RATE_LIMITED'?'DESKTOP_RATE_LIMITED':code==='REMOTE_FORMAT_CHANGED'?'DESKTOP_REMOTE_FORM_CHANGED':'DESKTOP_OPERATION_FAILED';
+ return code==='REMOTE_FORMAT_CHANGED'?'DESKTOP_REMOTE_FORM_CHANGED':code==='DESKTOP_OPERATION_FAILED'?code:'DESKTOP_'+code;
+}
+/** Safe finite diagnostics only; stale/foreign leases and completed receipts do not create repair work. */
+export function desktopSaveFailureIssue(error:unknown):DesktopIssueCode|null {
+ const e=error as {name?:string;message?:string;code?:string},code=e?.message;
+ if(['AUTH_REQUIRED','ACCESS_DENIED','ADDITIONAL_AUTH'].includes(e?.code??''))return 'AUTH_REQUIRED';
+ if(e?.code?.startsWith('SALE_BINDING_'))return 'BINDING_REQUIRED';
+ if(['ConditionalCheckFailedException','TransactionCanceledException'].includes(e?.name??''))return 'SAVE_CONFLICT';
+ if(code==='DESKTOP_TITLE_MISMATCH')return 'TITLE_MISMATCH';
+ if(code==='DESKTOP_IMAGE_CHANGED')return 'IMAGE_CHANGED';
+ if(code==='DESKTOP_STALE_INVENTORY')return 'INVENTORY_CHANGED';
+ if(code==='DESKTOP_ORDER_CHANGED')return 'ORDER_CHANGED';
+ if(code==='MERCARI_RECORDED_SALE_CHECK_UNAVAILABLE')return 'RECORDED_SALE_CHECK_FAILED';
+ if(code==='DESKTOP_BINDING_REQUIRED'||code==='DESKTOP_BINDING_CHANGED')return 'BINDING_REQUIRED';
+ if(code==='DESKTOP_EVIDENCE_MISMATCH'||code==='DESKTOP_IDENTITY_CHANGED'||code==='DESKTOP_IDENTIFICATION_CHANGED')return 'DESKTOP_OPERATION_FAILED';
+ return null;
 }
 export function expectedDesktopBoundaryError(error:unknown):boolean {
  const e=error as {name?:string;message?:string};
- return ['ConditionalCheckFailedException','TransactionCanceledException'].includes(e?.name??'')||/^DESKTOP_(?:INPUT_REQUIRED|ID_INVALID|CURSOR_INVALID|NOT_FOUND|NOT_CLAIMABLE|BUSY|LEASE_CHANGED|RECONCILE_ONLY|EVIDENCE_MISMATCH|RECEIPT_CHANGED|READBACK_REQUIRED|STALE_INVENTORY|IDENTITY_CHANGED|ORDER_CHANGED|BINDING_CHANGED|BINDING_REQUIRED|IDENTIFICATION_CHANGED|ISSUE_INVALID|REBASE_FORBIDDEN)$/.test(e?.message??'');
+ return ['ConditionalCheckFailedException','TransactionCanceledException'].includes(e?.name??'')||/^DESKTOP_(?:INPUT_REQUIRED|ID_INVALID|CURSOR_INVALID|NOT_FOUND|NOT_CLAIMABLE|BUSY|LEASE_CHANGED|RECONCILE_ONLY|EVIDENCE_MISMATCH|RECEIPT_CHANGED|READBACK_REQUIRED|STALE_INVENTORY|IDENTITY_CHANGED|ORDER_CHANGED|ORDER_ALREADY_COMPLETED|TITLE_MISMATCH|IMAGE_CHANGED|BINDING_CHANGED|BINDING_REQUIRED|IDENTIFICATION_CHANGED|ISSUE_INVALID|REBASE_FORBIDDEN)$/.test(e?.message??'');
 }

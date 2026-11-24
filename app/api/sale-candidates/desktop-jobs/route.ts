@@ -2,19 +2,22 @@ import {NextResponse} from 'next/server';
 import {desktopExpectedBoundary} from '@/lib/saleCandidates/desktopBoundary';
 import type {TransactWriteCommandInput} from '@aws-sdk/lib-dynamodb';
 import {inventoryMutationSession} from '@/lib/inventory/mutationSession';
-import {getInventoryRaw,inventoryTable} from '@/lib/inventory/categoryPersistence';
+import {getInventoryRaw,inventoryTable,inventoryDdb} from '@/lib/inventory/categoryPersistence';
 import {econveniStore,ECONVENI_WORKFLOW_TABLE} from '@/lib/listing/econveni/runtimeStore';
 import {readManualSync} from '@/lib/listing/econveni/manualSync';
 import {selectManualLink,manualLinkKey} from '@/lib/listing/econveni/manualSyncModel';
 import {reviewSaleBinding} from '@/lib/listing/econveni/saleAdjustment';
 import {signDesktopImage} from '@/lib/saleCandidates/desktopImagePreviews';
 import {bridgePostHeaderFailure} from '@/lib/listing/mercariBridge/postGuard';
-import {desktopImageKeys,desktopJobs,desktopCompletionWakes,refreshDesktopJobAfterYahooPayment} from '@/lib/saleCandidates/desktopJobs';
+import {desktopImageKeys,desktopJobs,desktopCompletionWakes,refreshDesktopJobAfterYahooPayment,holdRecordedMercariIdentification} from '@/lib/saleCandidates/desktopJobs';
+import {createRecordedMercariSaleGuard} from '@/lib/saleCandidates/recordedMercariSale';
 import {candidateStore,candidateConfig,candidateBuildRelease} from '@/lib/saleCandidates/store';
 import {bodyLimited,NO_STORE} from '@/lib/invoicing/gateway';
-import {assertDesktopIdentity,assertDesktopLease,comparableDesktopTitle,desktopIssueDiagnostic,type DesktopIssueCode,type DesktopJob,type DesktopEvidence} from '@/lib/saleCandidates/desktopJobModel';
+import {assertDesktopIdentity,assertDesktopLease,comparableDesktopTitle,desktopIssueDiagnostic,desktopSaveFailureIssue,type DesktopIssueCode,type DesktopJob,type DesktopEvidence} from '@/lib/saleCandidates/desktopJobModel';
+import {assertDesktopIdentificationOrder,assertDesktopIdentificationInventory} from '@/lib/saleCandidates/desktopIdentification';
 import {ensureAutomaticSaleBinding} from '@/lib/saleCandidates/saleBinding';
 import {reportSaleAutomationFailure} from '@/lib/saleCandidates/errorReporting';
+import type {SaleCandidate} from '@/lib/saleCandidates/model';
 export const dynamic='force-dynamic';
 const reply=(data:unknown,status=200)=>NextResponse.json(data,{status,headers:NO_STORE});
 async function present(job:DesktopJob,actor:string){
@@ -67,23 +70,31 @@ async function currentIdentity(job:DesktopJob,allowOldReadback:boolean,actor:str
 }
 export async function POST(request:Request){
  let trustedJob:DesktopJob|undefined;
+ let trustedActor:string|undefined,trustedLease:string|undefined,action:string|undefined;
  try{
   const session=await inventoryMutationSession();if(session?.role!=='ADMIN')return reply({error:'管理者のみ利用できます。'},403);
   const failure=bridgePostHeaderFailure({origin:request.headers.get('origin'),requestOrigin:new URL(request.url).origin,configuredPublicOrigin:process.env.BELLO_MOBILE_PUBLIC_ORIGIN,contentType:request.headers.get('content-type'),hasNextAction:request.headers.has('next-action')});
   if(failure||request.headers.get('x-bello-sale-desktop')!=='1')return reply({error:'同じBELLO画面から操作してください。'},403);
   const b=await bodyLimited(request);
+  trustedActor=session.owner;action=typeof b.action==='string'?b.action:undefined;
   if(typeof b.id!=='string'||!/^([a-f0-9]{64})$/.test(b.id))return reply({error:'受付番号を確認してください。'},400);
   let job=await desktopJobs.get(b.id);if(!job)return reply({error:'受付がありません。'},404);
   trustedJob=job;
+  const recordedSale=createRecordedMercariSaleGuard(inventoryDdb,inventoryTable('Inventory'));
+  const assertNoRecordedSale=async(c:SaleCandidate)=>{
+   if(await recordedSale(c)){await holdRecordedMercariIdentification(c);throw Error('DESKTOP_ORDER_ALREADY_RECORDED');}
+  };
   if(b.action==='claim'){
    job=await refreshDesktopJobAfterYahooPayment(job);
    if(job.purpose==='IDENTIFY_SALE'){
     const c=await candidateStore().get(job.candidateId);
-    if(c?.state!=='PENDING'||c.channel!=='MERCARI'||!c.senderAuthenticated||c.orderId!==job.orderId||c.mercariOrderUrl!==job.orderUrl||c.mercariShopId!==job.shopId||c.name!==job.title||c.quantity!==job.soldQuantity||c.unitPrice!==job.unitPrice)throw Error('DESKTOP_ORDER_CHANGED');
+    assertDesktopIdentificationOrder(job,c);
+    await assertNoRecordedSale(c);
    }else await currentIdentity(job,!!job.writeStartedAt,session.owner);
    return reply({job:await present(await desktopJobs.claim(job.id,session.owner),session.owner)});
   }
   if(typeof b.lease!=='string')return reply({error:'受付を取得し直してください。'},400);
+  trustedLease=b.lease;
   if(b.action==='report-error'){
    const saved=await desktopJobs.recordIssue(job.id,session.owner,b.lease,b.code);
    const diagnostic=desktopIssueDiagnostic(b.code as DesktopIssueCode);
@@ -100,7 +111,12 @@ export async function POST(request:Request){
    if(job.state!=='COMPLETE'&&job.purpose==='IDENTIFY_SALE'){
     assertDesktopLease(job,session.owner,b.lease,Date.now());assertDesktopIdentity(job,e,Date.now());
     const [c,item]=await Promise.all([candidateStore().get(job.candidateId),getInventoryRaw(e.inventoryId)]);
-    if(c?.state!=='PENDING'||c.channel!=='MERCARI'||!c.senderAuthenticated||c.orderId!==job.orderId||c.mercariOrderUrl!==job.orderUrl||c.mercariShopId!==job.shopId||c.name!==job.title||c.quantity!==job.soldQuantity||c.unitPrice!==job.unitPrice||c.externalListingId&&c.externalListingId!==e.externalId||!item||item.isDeleted||item.deletedAt||item.updatedAt!==e.inventoryVersion||!((await desktopImageKeys(item)).includes(e.expectedImageKey))||comparableDesktopTitle(String(item.name))!==comparableDesktopTitle(e.observedTitle))throw Error('DESKTOP_IDENTIFICATION_CHANGED');
+    assertDesktopIdentificationOrder(job,c);
+    await assertNoRecordedSale(c);
+    // A separator-only inventory title difference requires a PRE-EXISTING current exact binding.
+    // It may not create a new link from a title/photo alone.
+    const bound=item&&comparableDesktopTitle(String(item.name))!==comparableDesktopTitle(e.observedTitle)?(await reviewSaleBinding(e.inventoryId,session.owner)).remote?.channels.MERCARI_SHOPS.listingId:undefined;
+    assertDesktopIdentificationInventory(c,item,item?await desktopImageKeys(item):[],e,bound);
     if(!await ensureAutomaticSaleBinding(e.inventoryId,'MERCARI_SHOPS',e.externalId,session.owner))throw Error('DESKTOP_BINDING_REQUIRED');
     checks=await bindingChecks(e.inventoryId,e.externalId,session.owner);
     checks.push(inventoryCheck(e.inventoryId,e.inventoryVersion!));
@@ -117,7 +133,16 @@ export async function POST(request:Request){
   return reply({error:'操作を確認してください。'},400);
  }catch(error){
   const expected=desktopExpectedBoundary(error);
-  if(expected)return reply({...expected,reported:false},409);
+  if(expected){
+   const issue=action==='finish'||action==='start-write'?desktopSaveFailureIssue(error):null;
+   let reported=false;
+   if(issue&&trustedJob&&trustedActor&&trustedLease){
+    // Only a still-owned lease can publish a diagnostic. No browser/stock action is retried here.
+    const recorded=await desktopJobs.recordIssue(trustedJob.id,trustedActor,trustedLease,issue).catch(()=>null);
+    if(recorded)reported=await reportSaleAutomationFailure(trustedJob.candidateId,trustedJob.purpose==='STOCK'?'EC':'IDENTIFY',desktopIssueDiagnostic(issue),candidateConfig().tableName,candidateBuildRelease());
+   }
+   return reply({...expected,reported},409);
+  }
   const reported=trustedJob?await reportSaleAutomationFailure(trustedJob.candidateId,trustedJob.purpose==='STOCK'?'EC':'IDENTIFY','DESKTOP_RUNTIME_FAILED',candidateConfig().tableName,candidateBuildRelease()):false;
   return reply({error:'照合記録の保存先を確認できませんでした。変更を繰り返さず、受付を保持して管理者に確認してください。',code:'DESKTOP_STORAGE_FAILED',reported},500);
  }

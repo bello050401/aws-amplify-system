@@ -7,6 +7,7 @@ import type {SystemErrorSignal} from '../systemErrors/contract';
 /** Reasons are classified locally; error messages, order/customer data, URLs,
  * access tokens and photos never enter the repair intake. */
 export function saleFailureSignal(phase:string,reason:string):SystemErrorSignal|null {
+ if(reason==='MERCARI_ORDER_ALREADY_RECORDED')return null;
  if(['WAITING_PAYMENT','MERCARI_DESKTOP_WAITING','MERCARI_DESKTOP_VERIFICATION','MERCARI_ORDER_CONTEXT_REQUIRED','MERCARI_IDENTIFICATION_REVIEW','PRE_SALE_WAITING','PREVIOUS_SALE_PENDING','STOCK_LOCKED','HISTORICAL','CANDIDATE_REMOVED','QUANTITY_UNKNOWN','SET_REVIEW','ORDER_REVIEW','NOT_UNIQUE','NO_ITEM_ID','UNTRUSTED_MAIL','STOCK_CHANGED','CANCELLED','CHANNEL_UNSUPPORTED'].includes(reason))return null;
  const code=/AUTH_REQUIRED|ACCESS_DENIED|SESSION_EXPIRED|ADDITIONAL_AUTH|PERMISSION/.test(reason)?'SALE_AUTH_REQUIRED':/RATE_LIMITED|CAPACITY|WAIT_INTERVAL/.test(reason)?'SALE_RATE_LIMITED':/FORM_CHANGED/.test(reason)?'SALE_REMOTE_FORMAT_CHANGED':/ECONVENI|BINDING|LINK/.test(reason)?'SALE_LINK_FAILED':/DESKTOP|MERCARI_IDENTITY/.test(reason)?'SALE_DESKTOP_FAILED':/EC_RESULT|VERIFY_REQUIRED|UNCONFIRMED/.test(reason)?'SALE_EC_UNCONFIRMED':'SALE_AUTOMATION_FAILED';
  return {code,surface:'server',operation:phase==='IDENTIFY'?'identify':phase==='SALE'?'sell':phase==='EC'?'adjust':'verify',component:code==='SALE_DESKTOP_FAILED'?'sale-desktop':'sale-automation',errorClass:'Error'};

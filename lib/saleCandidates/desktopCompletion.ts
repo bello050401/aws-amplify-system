@@ -3,6 +3,7 @@ import type {TransactWriteCommandInput} from '@aws-sdk/lib-dynamodb';
 import type {SaleCandidate} from './model';
 import {assertDesktopIdentity,comparableDesktopTitle,desktopCausalSnapshotMatches,desktopJobId,desktopSnapshot,type DesktopJob,type DesktopRequest} from './desktopJobModel';
 import {postSaleJobId} from './postSaleQueueCore';
+import {sameBoundDesktopTitle} from './desktopIdentification';
 
 export type DesktopSuccessor={id:string;candidateId:string;state:string;version?:string;token?:string;updatedAt?:string};
 /** Existing active successors only. Completion and waking commit in one transaction. */
@@ -21,7 +22,7 @@ export function desktopSuccessorWakeWrites(candidateId:string,rows:readonly (Des
 export function canReuseMercariIdentification(c:SaleCandidate,inventory:Record<string,unknown>,imageKeys:readonly string[],job:DesktopJob|undefined,now:number):boolean {
  const m=c.mercariDesktopIdentity,e=job?.evidence;
  if(!m||!job||!e||c.state!=='PENDING'||c.channel!=='MERCARI'||c.source!=='GMAIL'||c.senderAuthenticated!==true||job.purpose!=='IDENTIFY_SALE'||job.state!=='COMPLETE'||job.id!==m.jobId||job.id!==desktopJobId(job)||job.snapshot!==m.snapshot||job.snapshot!==desktopSnapshot(job)||job.candidateId!==c.id||job.orderId!==c.orderId||job.orderLineId!==(c.orderLineId??'')||job.orderUrl!==c.mercariOrderUrl||job.shopId!==c.mercariShopId||job.title!==c.name||job.soldQuantity!==c.quantity||job.unitPrice!==c.unitPrice)return false;
- if(c.externalListingId!==e.externalId||c.suggestedInventoryId!==inventory.id||e.inventoryId!==inventory.id||e.inventoryVersion!==inventory.updatedAt||m.inventoryVersion!==inventory.updatedAt||m.actor!==job.actor||m.evidenceRef!==e.observedEvidenceRef||!imageKeys.includes(e.expectedImageKey)||comparableDesktopTitle(String(inventory.name))!==comparableDesktopTitle(e.observedTitle))return false;
+ if(c.externalListingId!==e.externalId||c.suggestedInventoryId!==inventory.id||e.inventoryId!==inventory.id||e.inventoryVersion!==inventory.updatedAt||m.inventoryVersion!==inventory.updatedAt||m.actor!==job.actor||m.evidenceRef!==e.observedEvidenceRef||!imageKeys.includes(e.expectedImageKey)||!sameBoundDesktopTitle(String(inventory.name),e.observedTitle))return false;
  const observed=Date.parse(e.observedAt),completed=Date.parse(job.completedAt??''),verified=Date.parse(m.verifiedAt);
  if(!Number.isFinite(observed)||observed>now||now-observed>30*60000||!Number.isFinite(completed)||completed<observed||completed>now||!Number.isFinite(verified)||verified<observed||verified>now)return false;
  try{assertDesktopIdentity(job,e,now);return true;}catch{return false;}
