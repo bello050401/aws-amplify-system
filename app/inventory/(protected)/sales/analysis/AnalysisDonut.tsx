@@ -5,16 +5,16 @@ import {
   arcPath,displayRows,formatMetric,graphSegments,metricLabel,type Bucket,type Dimension,type DisplayRow,type Metric,type Target,
 } from '../../../../../lib/inventory/analysisUi/model';
 
-export function AnalysisDonut({title,target,metric,dimension,buckets,total,gross,records,missingAmount,note,denominator,onSelect}:{
+export function AnalysisDonut({title,target,metric,dimension,buckets,total,gross,records,missingAmount,note,denominator,onSelect,comparison=false}:{
   title:string; target:Target; metric:Metric; dimension:Dimension; buckets:Bucket[]; total:number; gross:boolean;
-  note?:string; denominator?:string;
+  note?:string; denominator?:string; comparison?:boolean;
   records:number; missingAmount:number; onSelect:(row:DisplayRow)=>void;
 }) {
   const [showAll,setShowAll] = useState(false);
   const [other,setOther] = useState<DisplayRow[]|null>(null);
   const legendId = useId();
   const category = dimension === 'category' || dimension === 'skuCategory';
-  const {rows,expandable} = displayRows(buckets,metric,gross,showAll,category,target,dimension);
+  const {rows,expandable} = displayRows(buckets,metric,gross,showAll || comparison,category,target,dimension);
   const label = metricLabel(target,metric) + (gross ? '（返品前）' : '');
   const unknown = metric === 'amount' && records > 0 && missingAmount >= records;
   const value = unknown ? '—' : formatMetric(total,metric);

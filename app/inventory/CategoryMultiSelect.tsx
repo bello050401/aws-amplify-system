@@ -1,13 +1,17 @@
 'use client';
 import { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { stableCategoryChoices, type PickerChoice } from '@/lib/inventory/stableCategoryChoices';
 
 export function CategoryMultiSelect({ value, onChange, options, compact = false, disabled = false, label = "カテゴリ（複数選択）" }: {
-  value: string[]; onChange: (ids: string[]) => void; options: { id: string; name: string }[]; compact?: boolean; disabled?: boolean; label?:string;
+  value: string[]; onChange: (ids: string[]) => void; options: { id: string; name: string; sortOrder?: number }[]; compact?: boolean; disabled?: boolean; label?:string;
 }) {
   const [open, setOpen] = useState(false), [query, setQuery] = useState(''), [draft, setDraft] = useState<string[]>([]);
   const trigger = useRef<HTMLButtonElement>(null), panel = useRef<HTMLDivElement>(null), search = useRef<HTMLInputElement>(null), id = useId();
   const [position, setPosition] = useState({ top: 0, left: 0, width: 340, height: 450 });
+  const previousChoices = useRef<PickerChoice[]>([]);
+  const choices = stableCategoryChoices(previousChoices.current, options.map(option => ({value:option.id,label:option.name,sortOrder:option.sortOrder})));
+  previousChoices.current = choices;
   const dirty = JSON.stringify(draft) !== JSON.stringify(value);
   const close = () => { setOpen(false); setQuery(''); trigger.current?.focus(); };
   useEffect(() => {
@@ -45,10 +49,10 @@ export function CategoryMultiSelect({ value, onChange, options, compact = false,
         }
       }}>
       <h3 id={id + '-title'} className="mb-3 font-semibold">カテゴリを選択</h3>
-      <div className="mb-3 max-h-24 overflow-auto">{chips(draft, toggle)}</div>
+      <div aria-label="選択中のカテゴリ" className="mb-3 h-20 shrink-0 overflow-auto">{chips(draft, toggle)}</div>
       <input ref={search} aria-label="カテゴリを検索" value={query} onChange={e => setQuery(e.target.value)} placeholder="カテゴリを検索" className="mb-2 min-h-11 w-full rounded border px-3 text-base" />
-      <div className="min-h-0 flex-1 overflow-y-auto">{options.filter(o => o.name.normalize('NFKC').toLowerCase().includes(query.normalize('NFKC').toLowerCase())).map(o =>
-        <label key={o.id} className="flex min-h-11 cursor-pointer items-center gap-3 rounded px-2 hover:bg-teal-50"><input type="checkbox" checked={draft.includes(o.id)} onChange={() => toggle(o.id)} className="h-4 w-4 accent-teal-700" />{o.name}</label>)}</div>
+      <div className="min-h-0 flex-1 overflow-y-auto">{choices.filter(o => o.label.normalize('NFKC').toLowerCase().includes(query.normalize('NFKC').toLowerCase())).map(o =>
+        <label key={o.value} className="flex min-h-11 cursor-pointer items-center gap-3 rounded px-2 hover:bg-teal-50"><input type="checkbox" checked={draft.includes(o.value)} onChange={() => toggle(o.value)} className="h-4 w-4 accent-teal-700" />{o.label}</label>)}</div>
       <div className="mt-3 flex items-center justify-between gap-2 border-t pt-3"><span className="text-xs text-gray-500">{draft.length}件選択</span>
         <button type="button" className="min-h-11 rounded border px-3 text-sm" onClick={close}>キャンセル</button>
         <button type="button" disabled={draft.length > 20} className="min-h-11 rounded bg-teal-800 px-5 text-sm text-white disabled:opacity-50" onClick={() => { onChange([...draft]); close(); }}>保存</button>

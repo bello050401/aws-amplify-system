@@ -17,6 +17,7 @@ export function AnalysisDetail({slice,drill,onClose,metric,productHref,managemen
     <button type="button" className="analysis-button" onClick={onClose}>← グラフに戻る</button>
     <h2 id="analysis-detail-title" tabIndex={-1} ref={header}>{slice.label}の内訳</h2>
     <p className="analysis-note">{metricLabel(slice.request.target,metric)}{slice.request.start && slice.request.end ? ' · '+slice.request.start.replaceAll('-','/')+' ～ '+slice.request.end.replaceAll('-','/') : ''}</p>
+    {slice.request.daily && <p className="analysis-note">{slice.request.daily.replaceAll('-','/')}時点の内訳</p>}
     <DetailList slice={slice} drill={drill} productHref={productHref} management={management}/>
   </section>;
 }

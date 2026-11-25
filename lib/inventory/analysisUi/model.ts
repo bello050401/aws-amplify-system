@@ -1,4 +1,5 @@
 import type {AnalysisRequest, AnalysisResult, Bucket, DetailItem as CoreDetailItem, DetailRecord, DetailResult as CoreDetailResult, Dimension, DrilldownRequest, Fact, Metric, Target, Totals} from '../analysis/types';
+import {dateOnly, jstDay as capturedJstDay} from '../analysis/period';
 
 export type {AnalysisRequest, AnalysisResult, Bucket, DetailItem as CoreDetailItem, DetailRecord, DetailResult as CoreDetailResult, Dimension, DrilldownRequest, Fact, Metric, Target, Totals};
 
@@ -45,6 +46,7 @@ export const PERIODS = [
   {key:'custom', label:'期間指定'},
 ] as const;
 export type Preset = typeof PERIODS[number]['key'];
+export type InventoryCompareWeeks = 0|2|3|4;
 
 export interface Slice {
   dimension: Dimension;
@@ -59,6 +61,7 @@ export interface AnalysisState {
   start: string;
   end: string;
   inventoryMonth: string;
+  inventoryCompareWeeks: InventoryCompareWeeks;
   breakdown: 'inventory'|'acquisitions';
   stockUnit: 'quantity'|'kinds';
   acquisitionUnit: 'amount'|'quantity'|'lots';
@@ -98,7 +101,7 @@ export function monthChoices(today:string) {
 
 export const initialAnalysisState = (today:string):AnalysisState => ({
   tab:'sales', preset:'current', saleMonth:today.slice(0,7), start:today.slice(0,7)+'-01', end:today,
-  inventoryMonth:'', breakdown:'inventory', stockUnit:'quantity', acquisitionUnit:'amount',
+  inventoryMonth:'', inventoryCompareWeeks:0, breakdown:'inventory', stockUnit:'quantity', acquisitionUnit:'amount',
   detailed:{sales:false,inventory:false,breakdown:false,acquisitions:false}, reference:false, slice:null,
 });
 
@@ -119,6 +122,8 @@ export function stateFromQuery(query:URLSearchParams, today:string):AnalysisStat
   if (validDay(get('start'))) state.start = get('start');
   if (validDay(get('end'))) state.end = get('end');
   if (monthFormat.test(get('month'))) state.inventoryMonth = get('month');
+  const compareWeeks = get('compareWeeks');
+  if (compareWeeks === '2' || compareWeeks === '3' || compareWeeks === '4') state.inventoryCompareWeeks = Number(compareWeeks) as InventoryCompareWeeks;
   if (get('breakdown') === 'acquisitions') state.breakdown = 'acquisitions';
   if (get('stockUnit') === 'kinds') state.stockUnit = 'kinds';
   const unit = get('acquisitionUnit');
@@ -135,9 +140,11 @@ export function stateFromQuery(query:URLSearchParams, today:string):AnalysisStat
       ? {target:'retailReference' as const}
       : analysisRequest(state,today);
   if (request && generation && key && isDimension(dimension)) {
-    const start = get('detailStart'), end = get('detailEnd');
+    const start = get('detailStart'), end = get('detailEnd'), daily = get('detailDaily');
+    if (request.target === 'inventory' && daily && !validDay(daily)) return state;
     const exact = request.target === 'sales' && validDay(start) && validDay(end) && start <= end ? {...request,start,end} : request;
-    state.slice = {dimension,key,label:get('sliceLabel').slice(0,160) || key,request:{...exact,generation}};
+    const historical = exact.target === 'inventory' && validDay(daily) ? {...exact,daily} : exact;
+    state.slice = {dimension,key,label:get('sliceLabel').slice(0,160) || key,request:{...historical,generation}};
   }
   return state;
 }
@@ -151,11 +158,13 @@ export function writeQuery(query:URLSearchParams, state:AnalysisState) {
     view:state.tab === 'sales' ? '' : state.tab,
     period:state.preset, salesMonth:state.saleMonth, start:state.start, end:state.end,
     month:state.inventoryMonth, breakdown:state.breakdown, stockUnit:state.stockUnit, acquisitionUnit:state.acquisitionUnit,
+    compareWeeks:state.inventoryCompareWeeks ? String(state.inventoryCompareWeeks) : '',
     reference:state.reference ? '1' : '',
     dimension:state.slice?.dimension ?? '', slice:state.slice?.key ?? '', sliceLabel:state.slice?.label ?? '',
     generation:state.slice?.request.generation ?? '',
     detailTarget:state.slice?.request.target === 'retailReference' ? 'retailReference' : '',
     detailStart:state.slice?.request.start ?? '', detailEnd:state.slice?.request.end ?? '',
+    detailDaily:state.slice?.request.daily ?? '',
   };
   for (const [key,value] of Object.entries(state.detailed)) fields['bands-'+key] = value ? '1' : '';
   for (const [key,value] of Object.entries(fields)) {
@@ -198,6 +207,25 @@ export function analysisRequest(state:AnalysisState,today:string):AnalysisReques
 export function summaryRequest(request:AnalysisRequest|null,salesGeneration?:string|null):AnalysisRequest|null {
   if (!request || request.target !== 'sales' || salesGeneration === undefined) return request;
   return salesGeneration ? {...request,generation:salesGeneration} : null;
+}
+
+/** Compare captured inventory on exact JST calendar days, never a reconstructed current balance. */
+export function comparisonDay(anchorDay:string,weeks:Exclude<InventoryCompareWeeks,0>):string {
+  dateOnly(anchorDay);
+  if (weeks !== 2 && weeks !== 3 && weeks !== 4) throw new Error('INVALID_COMPARISON_WEEKS');
+  return shiftDay(anchorDay,-7*weeks);
+}
+
+export function inventoryComparisonRequest(asOf:string,weeks:Exclude<InventoryCompareWeeks,0>):AnalysisRequest {
+  return {target:'inventory',daily:comparisonDay(capturedJstDay(asOf),weeks)};
+}
+
+/** Refuse a transport response for a different capture rather than mixing periods. */
+export function matchingAnalysisResult(request:AnalysisRequest,result:AnalysisResult):AnalysisResult {
+  if (result.status !== 'ok') return result;
+  if (request.generation && result.metadata.generation !== request.generation) return {status:'expired'};
+  if (result.target !== request.target || (request.daily && result.metadata.coverageEnd !== request.daily)) return {status:'error'};
+  return result;
 }
 
 export function unknownAmount(totals:Totals,target:Target) {

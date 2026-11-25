@@ -62,3 +62,13 @@
 .analysis-product-image{display:grid;width:100%;height:auto;aspect-ratio:1;place-content:center;text-align:center;border-radius:7px;background:#eef2ef;object-fit:cover;color:#586961;font-size:.7rem}
 .analysis-product .analysis-details{margin-top:10px}
 @media(max-width:360px){.analysis-product-row{grid-template-columns:62px minmax(0,1fr)}.analysis-button,.analysis-choice{padding-inline:8px}}
+
+.analysis-comparison-controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:12px}
+.analysis-comparison{display:grid;gap:20px;min-width:0}
+.analysis-comparison>section{display:grid;gap:10px;align-content:start;min-width:0}
+.analysis-comparison-heading{font-size:1rem;margin:0;color:#214d41}
+@media(min-width:1000px){
+  .analysis-comparison{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .analysis-comparison .analysis-chart-body{grid-template-columns:minmax(0,1fr);gap:10px}
+  .analysis-comparison .analysis-ring{width:min(100%,14rem)}
+}

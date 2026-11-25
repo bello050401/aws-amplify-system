@@ -1,5 +1,6 @@
 import {useEffect,useState} from 'react';
 import type {AnalysisPorts, AnalysisRequest, AnalysisResult, DetailGroup, DetailItem, DetailResult, Slice} from './model';
+import {matchingAnalysisResult} from './model';
 
 export function useAnalysis(load:AnalysisPorts['load']|undefined, request:AnalysisRequest|null, available=true) {
   const key = request ? JSON.stringify(request) : '';
@@ -12,8 +13,7 @@ export function useAnalysis(load:AnalysisPorts['load']|undefined, request:Analys
     void load(requested).then(
       value=>{
         if (!active) return;
-        const mismatch = value.status==='ok' && requested.generation && value.metadata.generation!==requested.generation;
-        setResult({key,value:mismatch ? {status:'expired'} : value});
+        setResult({key,value:matchingAnalysisResult(requested,value)});
       },
       ()=>{if (active) setResult({key,value:{status:'error'}});},
     );

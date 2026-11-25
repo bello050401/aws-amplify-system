@@ -189,7 +189,7 @@ function periodFor(target:Target,request:AnalysisRequest):AnalysisResponse['peri
 
 export function createFixtures(mode:string|null = null):{ports:AnalysisPorts} {
   let failureCount = 0;
-  const inventory = rowsFor({target:'inventory'},mode);
+  const inventory = rowsFor({target:'inventory'},mode?.startsWith('comparison') ? 'exact-counts' : mode);
   const metadata:AnalysisBuild['metadata'] = {
     version:1,generation,asOf,timezone:'Asia/Tokyo',scopeId:'synthetic-fixture',
     amountBasis:'集計基準：検証用データ',metadataVersions:{},coverageStart:'2026-10-01',coverageEnd:previewToday,
@@ -202,8 +202,21 @@ export function createFixtures(mode:string|null = null):{ports:AnalysisPorts} {
     categories:[...new Map(inventory.filter(row=>row.category!=='__unknown__').map(row=>[row.category,{id:row.category,label:row.categoryLabel}])).values()],
     sales:[],acquisitions:[],retailReference:[],
   };
+  const comparisonMode = mode?.startsWith('comparison');
+  const historicDay = '2026-10-31';
+  const historicGeneration = 'synthetic-inventory-'+historicDay;
+  const historicInventory = stockWithCurrentCounts(inventory.filter(row=>row.id!=='bench-b' && row.id!=='three').map(row=>({...row,quantity:row.id==='bench-a'?2:row.quantity,amount:row.id==='bench-a'?20000:row.amount})));
+  const historicBuild:AnalysisBuild = {...build,inventory:historicInventory,inventoryValue:stockView(historicInventory),metadata:{...metadata,
+    generation:historicGeneration,asOf:historicDay+'T02:17:00.000Z',coverageStart:historicDay,coverageEnd:historicDay,
+    inventorySkuVersion:mode==='comparison-legacy'?undefined:1,
+  }};
   const ports:AnalysisPorts = {
     async load(request) {
+      if (comparisonMode && request.target==='inventory' && request.daily) {
+        if(request.daily==='2026-10-17') return {status:'error'};
+        if(request.daily!==historicDay) return {status:'missing'};
+        return queryAnalysis(historicBuild,request);
+      }
       if (mode==='error' && failureCount++===0) return {status:'error'};
       if (mode==='wrong-generation' && request.generation===generation) {
         const wrong = await createFixtures('published-sale').ports.load({target:'sales'});
@@ -223,6 +236,10 @@ export function createFixtures(mode:string|null = null):{ports:AnalysisPorts} {
       };
     },
     async drill(request:DrilldownRequest):Promise<DetailResult> {
+      if (comparisonMode && request.daily) {
+        if(request.daily!==historicDay) return {status:'missing'};
+        return drilldownAnalysis(historicBuild,request);
+      }
       if (request.generation!==generation) return {status:'expired'};
       let rows = rowsFor(request,mode);
       const {dimension,key,groupKindId} = request;

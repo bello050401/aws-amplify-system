@@ -3,9 +3,10 @@ import {ActivityIndicator,Image,Pressable,StyleSheet,Text,useWindowDimensions,Vi
 import Svg,{Circle,Path,Text as SvgText} from 'react-native-svg';
 import {formatJstDateTime} from '../../../lib/inventory/sales';
 import {
-  analysisRequest,arcPath,categoryBasisLabel,chartBasis,chartContent,detailItemKey,detailMetricFor,displayRows,formatMetric,graphSegments,groupingFor,holdingBasisLabel,skuHoldingNote,inventoryCompositionNote,jstDay,metricFor,metricLabel,
+  analysisRequest,inventoryComparisonRequest,arcPath,categoryBasisLabel,chartBasis,chartContent,detailItemKey,detailMetricFor,displayRows,formatMetric,graphSegments,groupingFor,holdingBasisLabel,skuHoldingNote,inventoryCompositionNote,jstDay,metricFor,metricLabel,
   unknownAmount,type AnalysisRequest,type AnalysisPorts,type AnalysisState,type Bucket,type DetailGroup,type DetailItem,type Dimension,type DisplayRow,type Metric,type ProductFact,type Slice,type Target,
 } from '../../../lib/inventory/analysisUi/model';
+import {comparisonBuckets} from '../../../lib/inventory/analysisUi/comparison';
 import {useAnalysis,useDetail} from '../../../lib/inventory/analysisUi/useAnalysis';
 
 export interface NativeAnalysisProps {
@@ -35,23 +36,31 @@ export function NativeAnalysis({state,change,ports,offline,onOpen,today=jstDay()
   const purchaseGeneration = purchase.data?.status === 'ok' ? purchase.data.metadata.generation : null;
   const compare = acquisition && state.acquisitionUnit === 'amount' && !!purchaseGeneration;
   const reference = useAnalysis(ports?.load,state.reference && compare && purchaseGeneration ? {target:'retailReference',generation:purchaseGeneration} : null,!offline);
+  const comparing = request?.target === 'inventory' && state.inventoryCompareWeeks > 0;
+  const anchor = api.data;
+  const historicalRequest = inventoryComparisonRequest(anchor?.status==='ok' ? anchor.metadata.asOf : today+'T00:00:00+09:00',state.inventoryCompareWeeks || 2);
+  const comparisonDay = historicalRequest.daily!;
+  const historical = useAnalysis(ports?.load,comparing && anchor?.status==='ok' && !state.slice ? historicalRequest : null,!offline);
+  const comparisonWide = useWindowDimensions().width >= 1000;
   const [showSkuNotes,setShowSkuNotes] = useState(false);
   if (state.slice) {
     const slice = state.slice;
     return <View style={s.section}>{button('← グラフに戻る',()=>change({slice:null}))}
       <Text accessibilityRole="header" style={s.heading}>{slice.label}の内訳</Text>
+      {slice.request.daily && <Text style={s.note}>{slice.request.daily.replace(/-/g,'/')}時点の内訳</Text>}
       <Text style={s.note}>{metricLabel(slice.request.target,detailMetricFor(slice,state))}{slice.request.start && slice.request.end ? ' · '+slice.request.start.replace(/-/g,'/')+' ～ '+slice.request.end.replace(/-/g,'/') : ''}</Text>
       {offline ? <Text style={s.note}>通信できる状態で内訳を確認してください。</Text> : <NativeDetails key={slice.request.generation+':'+slice.dimension+':'+slice.key} slice={slice} drill={ports?.drill} onOpen={onOpen}/>}
     </View>;
   }
-  function renderResult({data,retry}:ReturnType<typeof useAnalysis>, selected:Metric, selection:AnalysisRequest) {
+  function renderResult({data,retry}:ReturnType<typeof useAnalysis>, selected:Metric, selection:AnalysisRequest, isHistorical=false,onlyDimension?:Dimension,showNotes=true) {
     if (!data) return <ActivityIndicator accessibilityLabel="集計を読み込み中"/>;
     if (data.status !== 'ok') return <View style={s.card}>
-      <Text accessibilityRole="alert" style={s.note}>{data.status==='missing' ? '集計データなし' : data.status==='expired' ? 'この集計版は参照期限を過ぎました。' : '集計を取得できませんでした。'}</Text>
+      <Text accessibilityRole="alert" style={s.note}>{data.status==='missing' ? isHistorical ? 'この日の在庫データはありません。' : '集計データなし' : data.status==='expired' ? 'この集計版は参照期限を過ぎました。' : '集計を取得できませんでした。'}</Text>
       {data.status!=='missing' && button('集計を再試行',retry)}
     </View>;
     const {summary,target,period,metadata} = data;
-    if (selected === 'skus' && summary.skus === undefined) return <Text style={s.note}>この時点のデータにSKU集計がありません。次の集計後に表示します。</Text>;
+    const counterpart = isHistorical ? api.data : historical.data;
+    if (selected === 'skus' && summary.skus === undefined) return <Text style={s.note}>この時点のSKU内訳の記録はありません。</Text>;
     const isReference = target === 'retailReference';
     const {gross,total,returned,net} = chartBasis(summary,selected);
     const inventory = target === 'inventory';
@@ -65,7 +74,7 @@ export function NativeAnalysis({state,change,ports,offline,onOpen,today=jstDay()
     ] as const;
     return <View style={s.section}>
       {selected === 'skus' && <View>
-        <Text accessibilityRole="header" style={s.heading}>現在庫のSKU</Text>
+        {!comparing && <Text accessibilityRole="header" style={s.heading}>{isHistorical || selection.daily ? 'この時点のSKU' : '現在庫のSKU'}</Text>}
         <Text style={s.total}>{formatMetric(total,'skus')}</Text>
         <Text style={s.note}>{formatJstDateTime(metadata.asOf)} JST 時点</Text>
       </View>}
@@ -84,14 +93,14 @@ export function NativeAnalysis({state,change,ports,offline,onOpen,today=jstDay()
         {isReference && <Text style={s.note}>確認済みの小売実績の参考配分。販路未確認 {data.referenceExclusions.unknownChannel}件 · 原価未確認 {data.referenceExclusions.unknownCost}件 · 取得元未確認 {data.referenceExclusions.unverifiedOrigin}件 · その他の対象外 {data.referenceExclusions.excluded}件（対象外の売上 {formatMetric(data.referenceExclusions.salesAmount,'amount')}）</Text>}
       </View>}
       {!inventory && !isReference && button(detailed ? '単品・複数に戻す' : '数量帯を詳しく',()=>change({detailed:{...state.detailed,[key]:!detailed}}),detailed)}
-      {chartContent(target,selected,detailed).map(({title,dimension})=><NativeDonut
-        key={metadata.generation+':'+target+':'+selected+':'+dimension} title={title} target={target} metric={selected} dimension={dimension}
+      {chartContent(target,selected,detailed).filter(chart=>!onlyDimension || chart.dimension===onlyDimension).map(({title,dimension})=><NativeDonut
+        comparison={comparing} key={metadata.generation+':'+target+':'+selected+':'+dimension} title={title} target={target} metric={selected} dimension={dimension}
         note={dimension === 'skuHoldingCount' ? skuHoldingNote : inventory ? '商品名による分類を含みます。' : undefined}
         denominator={inventory && selected === 'amount' ? inventoryCompositionNote(selected) : undefined}
-        buckets={summary.dimensions[dimension]??[]} total={total} gross={gross} records={summary.records} unknown={unknown && selected==='amount'}
+        buckets={comparing && counterpart?.status==='ok' ? comparisonBuckets(summary.dimensions[dimension]??[],counterpart.summary.dimensions[dimension]??[],dimension,isHistorical ? counterpart.summary.dimensions[dimension]??[] : summary.dimensions[dimension]??[]) : summary.dimensions[dimension]??[]} total={total} gross={gross} records={summary.records} unknown={unknown && selected==='amount'}
         select={row=>change({slice:{dimension,key:row.key,label:row.label,request:{...selection,generation:metadata.generation}}})}
       />)}
-      {selected === 'skus' && <View style={s.section}>
+      {selected === 'skus' && showNotes && <View style={s.section}>
         <Pressable accessibilityRole="button" aria-expanded={showSkuNotes} accessibilityState={{expanded:showSkuNotes}} onPress={()=>setShowSkuNotes(value=>!value)} style={s.button}>
           <Text style={s.buttonText}>SKUの集計方法</Text>
         </Pressable>
@@ -103,9 +112,26 @@ export function NativeAnalysis({state,change,ports,offline,onOpen,today=jstDay()
     </View>;
   }
 
+  const comparisonDimensions = api.data?.status==='ok' && historical.data?.status==='ok' && (metric!=='skus' || historical.data.summary.skus!==undefined)
+    ? chartContent('inventory',metric,detailed).map(chart=>chart.dimension) : [undefined];
   if (offline) return <Text style={s.note}>通信できる状態で集計を確認してください。</Text>;
   return <View style={s.section}>
-    {request && renderResult(api,metric,request)}
+    {request?.target === 'inventory' && <View style={s.section}>
+      {button('過去の在庫と比較',()=>change({inventoryCompareWeeks:comparing?0:2}),comparing)}
+      {comparing && <Choices label="在庫の比較期間" value={String(state.inventoryCompareWeeks)} options={[{key:'2',label:'2週間前'},{key:'3',label:'3週間前'},{key:'4',label:'4週間前'}] as const} select={weeks=>change({inventoryCompareWeeks:Number(weeks) as 2|3|4})}/>}
+    </View>}
+    {comparing ? comparisonDimensions.map((dimension,index)=><View key={dimension || 'unavailable'} style={[s.section,comparisonWide && s.comparisonWide]}>
+      <View accessibilityLabel="比較・基準の在庫" style={[s.section,comparisonWide && s.comparisonColumn]}>
+        <Text accessibilityRole="header" style={s.heading}>{request?.daily ? request.daily.replace(/-/g,'/')+'の在庫' : '現在の在庫'}</Text>
+        {metric!=='skus' && api.data?.status==='ok' && <Text style={s.note}>{formatJstDateTime(api.data.metadata.asOf)} JST 時点</Text>}
+        {request && renderResult(api,metric,request,false,dimension,index===0)}
+      </View>
+      <View accessibilityLabel="比較・過去の在庫" style={[s.section,comparisonWide && s.comparisonColumn]}>
+        <Text accessibilityRole="header" style={s.heading}>{state.inventoryCompareWeeks}週間前{anchor?.status==='ok' ? ' · '+comparisonDay.replace(/-/g,'/') : ''}</Text>
+        {metric!=='skus' && historical.data?.status==='ok' && <Text style={s.note}>{formatJstDateTime(historical.data.metadata.asOf)} JST 時点</Text>}
+        {anchor?.status!=='ok' ? <Text style={s.note}>基準の在庫データを取得すると比較できます。</Text> : renderResult(historical,metric,historicalRequest,true,dimension,index===0)}
+      </View>
+    </View>) : request && renderResult(api,metric,request)}
     {skuTab && <View style={s.section}>
       <Pressable accessibilityRole="button" aria-expanded={acquisition} accessibilityState={{expanded:acquisition}} onPress={()=>change({breakdown:acquisition?'inventory':'acquisitions'})} style={s.button}>
         <Text style={s.buttonText}>直近30日の仕入れ</Text>
@@ -130,14 +156,15 @@ function Choices<K extends string>({label,value,options,select}:{
   </React.Fragment>)}</View>;
 }
 
-function NativeDonut({title,target,metric,dimension,buckets,total,gross,records,unknown,note,denominator,select}:{
+function NativeDonut({title,target,metric,dimension,buckets,total,gross,records,unknown,note,denominator,select,comparison=false}:{
   title:string; target:Target; metric:Metric; dimension:Dimension; buckets:Bucket[]; total:number; gross:boolean; records:number;
-  unknown:boolean; note?:string; denominator?:string; select:(row:DisplayRow)=>void;
+  unknown:boolean; comparison?:boolean; note?:string; denominator?:string; select:(row:DisplayRow)=>void;
 }) {
   const [showAll,setShowAll] = useState(false);
   const [other,setOther] = useState<DisplayRow[]|null>(null);
-  const wide = useWindowDimensions().width >= 700;
-  const {rows,expandable} = displayRows(buckets,metric,gross,showAll,dimension==='category' || dimension==='skuCategory',target,dimension);
+  const viewport = useWindowDimensions().width;
+  const wide = viewport >= 700 && !(comparison && viewport >= 1000);
+  const {rows,expandable} = displayRows(buckets,metric,gross,showAll || comparison,dimension==='category' || dimension==='skuCategory',target,dimension);
   const label = metricLabel(target,metric)+(gross ? '（返品前）' : '');
   const radius = 88;
   function open(row:DisplayRow) {
@@ -229,6 +256,7 @@ function NativeProduct({record,amount,quantity,action,date,sales,dimension}:{
 }
 
 const s=StyleSheet.create({
+  comparisonWide:{flexDirection:'row',alignItems:'flex-start',gap:20},comparisonColumn:{flex:1},
   section:{gap:10,minWidth:0},controls:{flexDirection:'row',flexWrap:'wrap',gap:5,alignItems:'flex-end'},
   card:{borderRadius:15,borderWidth:1,borderColor:'#e0e8e2',backgroundColor:'white',padding:12,gap:7,minWidth:0},
   summary:{backgroundColor:'#f1f6f2'},total:{color:'#214d41',fontSize:29,fontWeight:'700',fontVariant:['tabular-nums']},

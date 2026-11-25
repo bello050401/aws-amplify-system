@@ -5,10 +5,11 @@ import {usePathname,useSearchParams} from 'next/navigation';
 import {useRef,useState,type FormEvent,type ReactNode} from 'react';
 import {formatJstDateTime} from '../../../../../lib/inventory/sales';
 import {
-  analysisRequest,chartBasis,chartContent,detailMetricFor,firstMonth,formatMetric,groupingFor,inventoryCompositionNote,skuHoldingNote,jstDay,metricFor,metricLabel,monthChoices,
+  analysisRequest,inventoryComparisonRequest,chartBasis,chartContent,detailMetricFor,firstMonth,formatMetric,groupingFor,inventoryCompositionNote,skuHoldingNote,jstDay,metricFor,metricLabel,monthChoices,
   PERIODS,stateFromQuery,summaryRequest,TABS,unknownAmount,writeQuery,type AnalysisPorts,type AnalysisResult,type AnalysisState,
-  type DisplayRow,type Metric,type Slice,
+  type DisplayRow,type Metric,type Slice,type Dimension,
 } from '../../../../../lib/inventory/analysisUi/model';
+import {comparisonBuckets} from '../../../../../lib/inventory/analysisUi/comparison';
 import {useAnalysis} from '../../../../../lib/inventory/analysisUi/useAnalysis';
 import {AnalysisDetail} from './AnalysisDetail';
 import {AnalysisDonut} from './AnalysisDonut';
@@ -49,6 +50,11 @@ export function SalesAnalysis({ports,today=jstDay(),productLinks=false,managemen
   const purchaseGeneration = purchase.data?.status === 'ok' ? purchase.data.metadata.generation : null;
   const compare = acquisition && state.acquisitionUnit === 'amount' && !!purchaseGeneration;
   const reference = useAnalysis(ports?.load,state.reference && compare && purchaseGeneration ? {target:'retailReference',generation:purchaseGeneration} : null);
+  const comparing = request?.target === 'inventory' && state.inventoryCompareWeeks > 0;
+  const anchor = data;
+  const historicalRequest = inventoryComparisonRequest(anchor?.status==='ok' ? anchor.metadata.asOf : today+'T00:00:00+09:00',state.inventoryCompareWeeks || 2);
+  const comparisonDay = historicalRequest.daily!;
+  const historical = useAnalysis(ports?.load,comparing && anchor?.status==='ok' && !state.slice ? historicalRequest : null);
   const source = useRef<HTMLElement | SVGElement | null>(null);
   const content = useRef<HTMLDivElement>(null);
 
@@ -75,9 +81,29 @@ export function SalesAnalysis({ports,today=jstDay(),productLinks=false,managemen
     return '/inventory/'+encodeURIComponent(id)+'?salesFrom='+encodeURIComponent(query.toString());
   }
 
-  const graphs = request && <AnalysisResultView data={data} retry={retry} metric={metric} detailed={detailed}
+  const currentGraphs = request && <AnalysisResultView data={data} retry={retry} metric={metric} detailed={detailed}
     toggleBands={()=>update({detailed:{...state.detailed,[key]:!detailed}})} select={select} request={request}
     showSummaryTotal={state.tab !== 'inventory'}/>;
+  const comparisonDimensions = data?.status==='ok' && historical.data?.status==='ok' && (metric!=='skus' || historical.data.summary.skus!==undefined)
+    ? chartContent('inventory',metric,detailed).map(chart=>chart.dimension) : [undefined];
+  const graphs = <>
+    {request?.target === 'inventory' && <div className="analysis-comparison-controls">
+      <button type="button" className="analysis-button" aria-expanded={comparing} onClick={()=>update({inventoryCompareWeeks:comparing ? 0 : 2})}>過去の在庫と比較</button>
+      {comparing && <Choices label="在庫の比較期間" value={String(state.inventoryCompareWeeks)}
+        options={[{key:'2',label:'2週間前'},{key:'3',label:'3週間前'},{key:'4',label:'4週間前'}] as const}
+        select={weeks=>update({inventoryCompareWeeks:Number(weeks) as 2|3|4})}/>}
+    </div>}
+    {comparing ? comparisonDimensions.map((dimension,index)=><div key={dimension || 'unavailable'} className="analysis-comparison">
+      <section aria-label="比較・基準の在庫"><h2 className="analysis-comparison-heading">{request?.daily ? request.daily.replaceAll('-','/')+'の在庫' : '現在の在庫'}</h2>
+        {metric !== 'skus' && data?.status==='ok' && <p className="analysis-note">{formatJstDateTime(data.metadata.asOf)} JST 時点</p>}
+        {dimension ? <AnalysisResultView data={data} retry={retry} metric={metric} detailed={detailed} select={select} request={request!} comparison counterpart={historical.data} onlyDimension={dimension} showSkuNotes={index===0}/> : currentGraphs}
+      </section>
+      <section aria-label="比較・過去の在庫"><h2 className="analysis-comparison-heading">{state.inventoryCompareWeeks}週間前{anchor?.status==='ok' ? ' · '+comparisonDay.replaceAll('-','/') : ''}</h2>
+        {metric !== 'skus' && historical.data?.status==='ok' && <p className="analysis-note">{formatJstDateTime(historical.data.metadata.asOf)} JST 時点</p>}
+        {anchor?.status!=='ok' ? <p className="analysis-note">基準の在庫データを取得すると比較できます。</p> : <AnalysisResultView data={historical.data} retry={historical.retry} metric={metric} detailed={detailed} select={select} request={historicalRequest} historical comparison counterpart={data} onlyDimension={dimension} showSkuNotes={index===0}/> }
+      </section>
+    </div>) : currentGraphs}
+  </>;
   return <div ref={content} className="analysis-content">
     <div hidden={Boolean(state.slice && ports)}>
       {state.tab==='sales' && <>
@@ -139,18 +165,18 @@ function Choices<K extends string>({label,options,value,select}:{
   </div>;
 }
 
-function AnalysisResultView({data,retry,request,metric,detailed,toggleBands,select,showSummaryTotal=true}:{
+export function AnalysisResultView({data,retry,request,metric,detailed,toggleBands,select,showSummaryTotal=true,historical=false,comparison=false,onlyDimension,showSkuNotes=true,counterpart}:{
   data:AnalysisResult|null; retry:()=>void; request:NonNullable<ReturnType<typeof analysisRequest>>;
-  metric:Metric; detailed:boolean; toggleBands?:()=>void; select:(slice:Slice)=>void; showSummaryTotal?:boolean;
+  metric:Metric; detailed:boolean; toggleBands?:()=>void; select:(slice:Slice)=>void; showSummaryTotal?:boolean; historical?:boolean; comparison?:boolean; onlyDimension?:Dimension; showSkuNotes?:boolean; counterpart?:AnalysisResult|null;
 }) {
   if (!data) return <p className="analysis-note" role="status">集計を読み込み中…</p>;
   if (data.status !== 'ok') return <div className="analysis-card" role="status">
-    <p>{data.status === 'missing' ? '集計データなし' : data.status === 'expired' ? 'この集計版は参照期限を過ぎました。' : '集計を取得できませんでした。'}</p>
+    <p>{data.status === 'missing' ? historical ? 'この日の在庫データはありません。' : '集計データなし' : data.status === 'expired' ? 'この集計版は参照期限を過ぎました。' : '集計を取得できませんでした。'}</p>
     {data.status !== 'missing' && <button type="button" className="analysis-button" onClick={retry}>集計を再試行</button>}
   </div>;
 
   const {summary,target,period,metadata} = data;
-  if (metric === 'skus' && summary.skus === undefined) return <p className="analysis-note" role="status">この時点のデータにSKU集計がありません。次の集計後に表示します。</p>;
+  if (metric === 'skus' && summary.skus === undefined) return <p className="analysis-note" role="status">この時点のSKU内訳の記録はありません。</p>;
   const {gross,total:chartTotal,returned,net} = chartBasis(summary,metric);
   const acquisition = target === 'acquisitions';
   const missingAmount = unknownAmount(summary,target);
@@ -160,7 +186,7 @@ function AnalysisResultView({data,retry,request,metric,detailed,toggleBands,sele
   ];
   if (acquisition) totals.push({label:'確認できた仕入数量',value:formatMetric(summary.quantity,'quantity')},{label:'仕入ロット数',value:formatMetric(summary.lots,'lots')});
   const inventory = target === 'inventory';
-  const prefix = target === 'retailReference' ? '直近90日の小売実績' : acquisition ? '直近30日の仕入れ' : target === 'sales' ? '選択期間の売上' : metric === 'skus' ? '現在庫のSKU' : '在庫原価の配分';
+  const prefix = target === 'retailReference' ? '直近90日の小売実績' : acquisition ? '直近30日の仕入れ' : target === 'sales' ? '選択期間の売上' : metric === 'skus' ? historical || request.daily ? 'この時点のSKU' : '現在庫のSKU' : '在庫原価の配分';
   const unknownList = [
     ...(target==='sales' ? [['売上金額未登録',missingAmount] as const] : []),
     ['原価未登録',summary.unknown.cost],['数量未確認',summary.unknown.quantity],['未分類',summary.unknown.category],
@@ -168,7 +194,7 @@ function AnalysisResultView({data,retry,request,metric,detailed,toggleBands,sele
   ] as const;
   return <section className="analysis-result" aria-label={prefix}>
     {metric === 'skus' && <div className="analysis-sku-total">
-      <h2>現在庫のSKU</h2>
+      {!comparison && <h2>{historical || request.daily ? 'この時点のSKU' : '現在庫のSKU'}</h2>}
       <strong>{formatMetric(chartTotal,'skus')}</strong>
       <p className="analysis-note">{formatJstDateTime(metadata.asOf)} JST 時点</p>
     </div>}
@@ -185,14 +211,14 @@ function AnalysisResultView({data,retry,request,metric,detailed,toggleBands,sele
     </div>}
     {!inventory && toggleBands && <button type="button" className="analysis-button" aria-pressed={detailed} onClick={toggleBands}>{detailed ? '単品・複数に戻す' : '数量帯を詳しく'}</button>}
     <div className="analysis-charts">
-      {chartContent(target,metric,detailed).map(({title,dimension})=><AnalysisDonut key={metadata.generation+':'+target+':'+metric+':'+dimension}
-        title={title} target={target} metric={metric} dimension={dimension} buckets={summary.dimensions[dimension] ?? []}
+      {chartContent(target,metric,detailed).filter(chart=>!onlyDimension || chart.dimension===onlyDimension).map(({title,dimension})=><AnalysisDonut key={metadata.generation+':'+target+':'+metric+':'+dimension}
+        title={title} target={target} metric={metric} dimension={dimension} comparison={comparison} buckets={counterpart?.status==='ok' ? comparisonBuckets(summary.dimensions[dimension] ?? [],counterpart.summary.dimensions[dimension] ?? [],dimension,historical ? counterpart.summary.dimensions[dimension] ?? [] : summary.dimensions[dimension] ?? []) : summary.dimensions[dimension] ?? []}
         note={dimension === 'skuHoldingCount' ? skuHoldingNote : inventory ? '商品名による分類を含みます。' : undefined}
         denominator={inventory && metric === 'amount' ? inventoryCompositionNote(metric) : undefined}
         total={chartTotal} gross={gross} records={summary.records} missingAmount={missingAmount}
         onSelect={(row:DisplayRow)=>select({dimension,key:row.key,label:row.label,request:{...request,generation:metadata.generation}})}/>)}
     </div>
-    {metric === 'skus' && <details className="analysis-sku-notes">
+    {metric === 'skus' && showSkuNotes && <details className="analysis-sku-notes">
       <summary>SKUの集計方法</summary>
       <p>管理SKUごとに1 SKUとして集計します。</p>
       {(summary.unknownSkuRecords ?? 0) > 0 && <p>管理SKUが未登録の在庫 {summary.unknownSkuRecords?.toLocaleString('ja-JP')}件は集計の対象外です。</p>}
