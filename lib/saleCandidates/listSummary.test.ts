@@ -8,15 +8,15 @@ import type {SaleCandidate} from './model';
 
 const built=build({entryPoints:[fileURLToPath(new URL('./listSummary.ts',import.meta.url))],bundle:true,platform:'node',format:'cjs',packages:'external',external:['*'],write:false});
 async function harness(read:(id:string,options:unknown)=>Promise<unknown>){
- const module={exports:{} as {withCurrentSaleSummary:(items:SaleCandidate[])=>Promise<SaleCandidate[]>}};
+ const testModule={exports:{} as {withCurrentSaleSummary:(items:SaleCandidate[])=>Promise<SaleCandidate[]>}};
  const auth={authMode:'userPool'};
- runInNewContext((await built).outputFiles[0].text,{module,exports:module.exports,require:(name:string)=>{
+ runInNewContext((await built).outputFiles[0].text,{module:testModule,exports:testModule.exports,require:(name:string)=>{
   if(name==='server-only')return {};
   if(name==='../amplify/dataClient')return {inventoryAuthMode:auth,serverDataClient:{models:{Inventory:{get:({id}:{id:string},options:unknown)=>read(id,options)}}}};
   if(name==='./yahooReservationIntegrity')return {yahooReservationWarning};
   throw Error('Unexpected dependency '+name);
  }});
- return module.exports.withCurrentSaleSummary;
+ return testModule.exports.withCurrentSaleSummary;
 }
 const candidate={id:'candidate',state:'DONE',channel:'YAHOO',source:'GMAIL',name:'商品',orderId:'g1247424811',yahooPaymentState:'WAITING',
  result:{sourceId:'source',soldId:'source',quantityDeferred:true,sourceQuantity:3,soldQuantity:1,remainingQuantity:2}} as SaleCandidate;

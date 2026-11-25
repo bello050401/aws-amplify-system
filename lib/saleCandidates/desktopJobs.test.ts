@@ -61,7 +61,7 @@ test('changed inventory version ages an expired claim without extending its avai
 });
 
 test('aging a stale receipt cannot clear a concurrently renewed claim',async()=>{
- let clock=now,replaceOnAge=false;const db=memoryDb();let replacement:DesktopJob;
+ let clock=now,replaceOnAge=false;const db=memoryDb();
  const store=createDesktopJobStore({send:async command=>{
   if(replaceOnAge&&command instanceof PutCommand&&command.input.Item?.state==='WAITING'){
    replaceOnAge=false;db.rows.set('jobs:'+replacement.pk,structuredClone(replacement));
@@ -69,7 +69,7 @@ test('aging a stale receipt cannot clear a concurrently renewed claim',async()=>
   return db.send(command);
  }},'jobs',()=>clock);
  const {job}=await store.ensure(request),claimed=await store.claim(job.id,'first');clock=claimed.leaseUntil!+1;
- replacement=claimDesktopJob(ageDesktopJob(claimed,clock),'second',clock);replaceOnAge=true;
+ const replacement=claimDesktopJob(ageDesktopJob(claimed,clock),'second',clock);replaceOnAge=true;
  const result=await store.ensure({...request,inventoryVersion:'v2'});
  assert.equal(result.matches,false);assert.equal(result.job.state,'CLAIMED');assert.equal(result.job.actor,'second');assert.equal(result.job.lease,replacement.lease);
  await assert.rejects(()=>store.age(claimed));
