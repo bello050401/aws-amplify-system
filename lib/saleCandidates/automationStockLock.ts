@@ -18,6 +18,10 @@ export async function claimAutomationStock(db:DynamoDBDocumentClient,table:strin
 export function automationStockGuard(table:string,inventoryId:string,candidateId:string):InventoryTransaction{
  return [{Update:{TableName:table,Key:key(inventoryId),UpdateExpression:'SET saleStarted=:yes',ConditionExpression:'candidateId=:id',ExpressionAttributeValues:{':id':candidateId,':yes':true}}}];
 }
+/** Unlisted direct sales have no external continuation; release in the sale commit. */
+export function unlistedSaleStockGuard(table:string,inventoryId:string,candidateId?:string):InventoryTransaction{
+ return candidateId?[{Update:{TableName:table,Key:key(inventoryId),UpdateExpression:'SET saleStarted=:yes REMOVE candidateId',ConditionExpression:'candidateId=:id',ExpressionAttributeValues:{':id':candidateId,':yes':true}}}]:[{ConditionCheck:{TableName:table,Key:key(inventoryId),ConditionExpression:'attribute_not_exists(candidateId)'}}];
+}
 export async function releaseAutomationStock(db:DynamoDBDocumentClient,table:string,inventoryId:string,candidateId:string){
  try{await db.send(new UpdateCommand({TableName:table,Key:key(inventoryId),UpdateExpression:'REMOVE candidateId',ConditionExpression:'candidateId=:id',ExpressionAttributeValues:{':id':candidateId}}));}
  catch(e){if((e as Error).name!=='ConditionalCheckFailedException')throw e;}

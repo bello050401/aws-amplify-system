@@ -19,7 +19,7 @@ const {build}=require('esbuild'),vm=require('node:vm'),assert=require('node:asse
   if(mode==='lost-ack')throw Error('Connection closed after commit');
   return {};
  }};
- const modules={'server-only':{},'@aws-sdk/lib-dynamodb':Object.fromEntries(['GetCommand','BatchGetCommand','TransactWriteCommand'].map(k=>[k,make(k)])),
+ const modules={'server-only':{},'node:crypto':require('node:crypto'),'@aws-sdk/lib-dynamodb':Object.fromEntries(['GetCommand','BatchGetCommand','TransactWriteCommand'].map(k=>[k,make(k)])),
   '@aws-sdk/client-lambda':{InvokeCommand:make('InvokeCommand'),LambdaClient:class{async send(){wakes++;throw Error('Wake unavailable');}}},
   '../../amplify_outputs.json':{custom:{saleAutomation:{functionName:'fixture'}}},
   '../listing/econveni/runtimeStore':{econveniDatabase:db,ECONVENI_WORKFLOW_TABLE:'plans'},
@@ -35,5 +35,6 @@ const {build}=require('esbuild'),vm=require('node:vm'),assert=require('node:asse
  reset();mode='lost-ack';assert.equal((await enqueue()).state,'QUEUED');await enqueue();assert.equal(transactions,1);assert.equal(wakes,0);
  reset();const both=await Promise.all([enqueue(),enqueue()]);assert(both.every(x=>x.state==='QUEUED'));assert.equal(transactions,1);
  reset();candidateState='PENDING';await assert.rejects(enqueue);assert.equal(transactions,0);
- console.log('PASS: atomic enqueue; failed transaction; lost acknowledgement; concurrent confirmation; no duplicate job; failed wake recovered by schedule; uncommitted sale rejected.');
+ reset();plan={...plan,state:'COMPLETE',rows:[],withoutEconveniListing:true};assert.equal((await enqueue()).state,'COMPLETE');assert.equal(job,undefined);assert.equal(transactions,0);assert.equal(wakes,0);
+ console.log('PASS: atomic enqueue; failed transaction; lost acknowledgement; concurrent confirmation; no duplicate job; failed wake recovered by schedule; uncommitted sale rejected; unlisted sale completion never queues an EC job.');
 })().catch(e=>{console.error(e);process.exitCode=1;});

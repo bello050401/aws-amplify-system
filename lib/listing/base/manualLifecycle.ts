@@ -14,6 +14,7 @@ import {commonCategory,commonChannelPrice} from '../commonSettings';
 import type { EcReview } from "../ecManagement";
 import type { ChannelListingRecord } from "../types";
 import { classifyBaseHttpStatus } from './errors';
+import {baseCreateInventoryIsCurrent,BASE_CREATE_INVENTORY_CHANGED} from './createInventoryGuard';
 
 export type BaseManualItem = {
   id: string;
@@ -131,6 +132,13 @@ export async function reviewBaseListing(id: string, operation: "PUBLISH" | "STOP
       if (!row) throw Error("ROW");
     }
     const token = await claimBaseManual(row);
+    let current=false;
+    try{current=await baseCreateInventoryIsCurrent(inventory);}catch{}
+    if(!current){
+      // This is a known pre-send cancellation, never an unknown remote result.
+      await finishBaseManual(row,token,{status:row.status,lastError:row.lastError??null});
+      return {status:'BLOCKED',message:BASE_CREATE_INVENTORY_CHANGED};
+    }
     try {
       const created = await createBaseProduct({
         draft,

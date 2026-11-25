@@ -1,14 +1,19 @@
 const {build}=require('esbuild'),vm=require('node:vm'),assert=require('node:assert/strict'),fs=require('node:fs');
 (async()=>{
+const inputBundle=await build({entryPoints:['lib/inventory/soldOutInput.ts'],bundle:true,platform:'node',format:'cjs',write:false});
+const inputModule={exports:{}};vm.runInNewContext(inputBundle.outputFiles[0].text,{module:inputModule,exports:inputModule.exports,Date});
+let unlisted=false,unlistedMarker=true,unlistedGuardFailure=false,unlistedChecks=0;
 const built=await build({stdin:{contents:"export * from './lib/saleCandidates/postSale';export {reviewPostSaleCore,executePostSaleCore} from './lib/saleCandidates/postSaleCore';",resolveDir:process.cwd(),loader:'ts'},bundle:true,platform:'node',format:'cjs',write:false,plugins:[{name:'isolate-ports',setup(b){b.onResolve({filter:/.*/},a=>a.kind==='entry-point'||['./postSaleCore','./lib/saleCandidates/postSale','./lib/saleCandidates/postSaleCore'].includes(a.path)?undefined:{path:a.path,external:true});}}]});
 let blankFromSync=false,soldCategory=false,deferred=false,paymentState,plans=new Map(),calls=[],stock=5,title='【在庫5】椅子',remaining=3,market='MERCARI',version='v1',remoteFailure=false,sourceCount=null,soldCount=2,saleIdentity=true,fullSale=false,soldOrder='order',soldVersion=null,selling=false,deleted=false,observation={remote:null,reviews:{}},reviewFailure=false;
-const candidate=()=>({id:'c',state:'DONE',yahooPaymentState:paymentState,channel:market,orderId:'order',result:{sourceId:'source',soldId:fullSale||deferred?'source':'sold',soldQuantity:2,...(deferred?{quantityDeferred:true,sourceQuantity:remaining+2}:{}),remainingQuantity:remaining,updatedAt:'v1'}});
+const candidate=()=>({id:'c',state:'DONE',yahooPaymentState:paymentState,channel:market,orderId:'order',result:{sourceId:'source',soldId:fullSale||deferred?'source':'sold',soldQuantity:2,...(unlisted?{withoutEconveniListing:true}:{}),...(deferred?{quantityDeferred:true,sourceQuantity:remaining+2}:{}),remainingQuantity:remaining,updatedAt:'v1'}});
 const db={send:async c=>{const x=c.input,k=x.Key?.pk??x.Item?.pk;if(c.kind==='GetCommand')return{Item:plans.has(k)?structuredClone(plans.get(k)):undefined};if(c.kind==='PutCommand'){plans.set(k,structuredClone(x.Item));return{};}const old=plans.get(k);if(old.state!==x.ExpressionAttributeValues[':review']||old.token!==x.ExpressionAttributeValues[':token'])throw Error('Concurrent');old.state='EXECUTING';return{};}};
 const make=k=>class{constructor(input){this.input=input;this.kind=k;}};
 const mods={
  './yahooSettlementContinuationServer':{settledYahooContinuation:async()=>false},'server-only':{},'node:crypto':require('node:crypto'),'@aws-sdk/lib-dynamodb':Object.fromEntries(['GetCommand','PutCommand','UpdateCommand'].map(k=>[k,make(k)])),
+ '@/lib/inventory/soldOutInput':inputModule.exports,
+ '@/lib/inventory/unlistedSaleGuard':{verifyUnlistedSale:async()=>{unlistedChecks++;if(unlistedGuardFailure)throw Error('local EC evidence remains');return []; }},
  '@/lib/saleCandidates/store':{candidateConfig:()=>({tableName:'candidates'}),candidateStore:()=>({get:async()=>candidate()})},
- './desktopJobs':{postSaleMercariComplete:async()=>false},'./automationStockLock':{releaseAutomationStock:async()=>{}},'@/lib/inventory/categoryPersistence':{inventoryDdb:{},getInventoryRaw:async id=>({id,updatedBy:blankFromSync?'ZAICO暫定同期':'owner',quantity:blankFromSync?undefined:id==='source'?(sourceCount??(fullSale?2:remaining)):soldCount,deletedAt:deleted?'2026-10-31':null,updatedAt:id==='sold'?(soldVersion??version):version,market:'メルカリSHOP',externalProductId:soldOrder,customFields:{...(deferred?{__belloYahooPayment:{state:'WAITING',quantityDeferred:true,candidateId:'c',auctionId:'order',request:{quantity:2}}}:{}),__belloSale:{sourceInventoryId:saleIdentity?'source':'wrong',physicalQuantity:2}}})},
+ './desktopJobs':{postSaleMercariComplete:async()=>false},'./automationStockLock':{releaseAutomationStock:async()=>{}},'@/lib/inventory/categoryPersistence':{inventoryDdb:{},getInventoryRaw:async id=>({id,updatedBy:blankFromSync?'ZAICO暫定同期':'owner',quantity:blankFromSync?undefined:id==='source'?(sourceCount??(fullSale?2:remaining)):soldCount,deletedAt:deleted?'2026-10-31':null,updatedAt:id==='sold'?(soldVersion??version):version,market:unlisted?'直接取引':'メルカリSHOP',externalProductId:soldOrder,customFields:{...(deferred?{__belloYahooPayment:{state:'WAITING',quantityDeferred:true,candidateId:'c',auctionId:'order',request:{quantity:2}}}:{}),__belloSale:{sourceInventoryId:saleIdentity?'source':'wrong',physicalQuantity:2,...(unlisted&&unlistedMarker?{withoutEconveniListing:true}:{})}}})},
  '@/lib/listing/econveni/saleAdjustment':{reviewSaleBinding:async()=>{if(reviewFailure)throw Object.assign(Error('fixture'),{code:'BUSY_OR_STOPPED'});return observation;},reviewSaleAdjustment:async()=>null,saleAdjustmentStarted:async()=>false},
  '@/lib/inventory/categories':{inventoryCategoryIds:()=>selling?['selling']:soldCategory?['sold']:[]},'@/lib/inventory/queries':{listCategories:async()=>[{id:'selling',name:'販売中'},{id:'sold',name:'売り切れ'}]},
  '@/lib/inventory/stockCountTitle':{stockCountTitle:(title,q)=>title.replace(/在庫[0-9]+/, '在庫'+q)},
@@ -119,7 +124,34 @@ reset();market='YAHOO';remaining=0;observation=observeAll();observation.remote.c
 reset();market='YAHOO';remaining=0;deferred=true;paymentState='WAITING';sourceCount=2;observation=observeAll();p=await module.exports.reviewPostSaleCore(background,'c','owner');Object.assign(plans.get('SALE_EC#c'),{state:'QUEUED',queuedAt:new Date().toISOString()});
 deferred=false;fullSale=true;paymentState='APPLIED';version='v2';mods['./yahooSettlementContinuationServer'].settledYahooContinuation=async(id,source,oldVersion,count)=>id==='c'&&source==='source'&&oldVersion==='v1'&&count===0;
 const rebased=await module.exports.executePostSaleCore(background,'c','owner',p.token,true);assert.equal(rebased.sourceVersion,'v2');assert.equal(rebased.quantityDeferred,false);assert.equal(rebased.state,'COMPLETE');
-const resultText='PASS: automatic Yahoo STOP fee HOLD including persisted/unknown plans; six seller/stock branches; absolute BASE stock; Yahoo relist authorization and old-page retention; unsold Yahoo untouched; desktop six-hour WAIT; exact payment successor rebase; background queue and stale/unknown outcome safety.';
+// Explicitly unlisted direct sales complete locally, including older clients
+// that still invoke post-sale review. Every external review/operation is denied.
+const resetUnlisted=()=>{reset();deferred=false;paymentState=undefined;market='DIRECT';remaining=3;unlisted=true;unlistedMarker=true;unlistedGuardFailure=false;unlistedChecks=0;reviewFailure=true;};
+let localReleases=0;
+const externalDenied=async()=>{throw Error('unlisted sale attempted external work');};
+const directPorts={catalog:externalDenied,reviewStop:externalDenied,executeStop:externalDenied,releaseStock:async(id,candidateId)=>{assert.equal(id,'source');assert.equal(candidateId,'c');localReleases++;}};
+for(const isFull of [false,true]){
+ resetUnlisted();fullSale=isFull;remaining=isFull?0:3;localReleases=0;
+ const plan=await module.exports.reviewPostSaleCore(directPorts,'c','owner');
+ assert.equal(plan.state,'COMPLETE');assert.equal(plan.withoutEconveniListing,true);assert.equal(plan.rows.length,0);assert.equal(plan.soldChannel,null);assert.equal(plan.queuedAt,undefined);assert.equal(unlistedChecks,1);assert.equal(localReleases,1);
+ assert.equal(plans.get('SALE_EC#c').withoutEconveniListing,true);
+ const done=await module.exports.executePostSaleCore(directPorts,'c','owner',plan.token,true);
+ assert.equal(done.state,'COMPLETE');assert.equal(done.rows.length,0);assert.equal(calls.length,0);
+ const reviewedAgain=await module.exports.reviewPostSaleCore(directPorts,'c','owner');
+ assert.equal(reviewedAgain.state,'COMPLETE');assert.equal(plans.size,1);assert.equal(calls.length,0);
+}
+for(const invalid of ['marker','channel','identity','quantity']){
+ resetUnlisted();if(invalid==='marker')unlistedMarker=false;if(invalid==='channel')market='BASE';if(invalid==='identity')saleIdentity=false;if(invalid==='quantity')soldCount=3;
+ await assert.rejects(()=>module.exports.reviewPostSaleCore(directPorts,'c','owner'));
+ assert.equal(plans.size,0);assert.equal(unlistedChecks,0);assert.equal(calls.length,0);
+}
+resetUnlisted();unlistedGuardFailure=true;
+await assert.rejects(()=>module.exports.reviewPostSaleCore(directPorts,'c','owner'),/local EC evidence/);assert.equal(plans.size,0);assert.equal(calls.length,0);
+resetUnlisted();plans.set('SALE_EC#c',{state:'REVIEW',rows:[{channel:'BASE',state:'VERIFY_REQUIRED'}],token:'existing'});
+await assert.rejects(()=>module.exports.reviewPostSaleCore(directPorts,'c','owner'),/受付済みのEC処理/);assert.equal(plans.get('SALE_EC#c').token,'existing');assert.equal(calls.length,0);
+resetUnlisted();plans.set('SALE_EC#c',{state:'QUEUED',rows:[{channel:'BASE',state:'READY'}],token:'queued',queuedAt:'2026-11-25T00:00:00Z'});
+assert.equal((await module.exports.reviewPostSaleCore(directPorts,'c','owner')).token,'queued');assert.equal(plans.get('SALE_EC#c').state,'QUEUED');assert.equal(unlistedChecks,0);assert.equal(calls.length,0);
+const resultText='PASS: automatic Yahoo STOP fee HOLD including persisted/unknown plans; six seller/stock branches; absolute BASE stock; Yahoo relist authorization and old-page retention; unsold Yahoo untouched; desktop six-hour WAIT; exact payment successor rebase; background queue and stale/unknown outcome safety; unlisted full/partial local completion, no EC review/write, provenance rejection, linkage guard and preservation of existing EC plans.';
 fs.mkdirSync('artifacts/sale-shipping-link-20261031',{recursive:true});fs.writeFileSync('artifacts/sale-shipping-link-20261031/post-sale-safety.txt',resultText);console.log(resultText);
 })().catch(e=>{console.error(e);process.exitCode=1;});
 

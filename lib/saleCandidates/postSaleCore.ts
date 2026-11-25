@@ -13,6 +13,8 @@ import {reviewSaleBinding,reviewSaleAdjustment,executeSaleAdjustment,saleAdjustm
 import {stockCountTitle} from '@/lib/inventory/stockCountTitle';
 import {inventoryCategoryIds} from '@/lib/inventory/categories';
 import {listCategories} from '@/lib/inventory/queries';
+import {UNLISTED_SALE_MARKETS} from '@/lib/inventory/soldOutInput';
+import {verifyUnlistedSale} from '@/lib/inventory/unlistedSaleGuard';
 import {settledYahooContinuation} from './yahooSettlementContinuationServer';
 import type {EcChannel} from '@/lib/listing/ecManagement';
 import type {PostSaleRow as Row,PostSalePlan} from './postSaleModel';
@@ -37,6 +39,7 @@ async function context(candidateId:string){
  }
  let sale:Record<string,unknown>|undefined;
  try{const value=typeof sold.customFields==='string'?JSON.parse(sold.customFields):sold.customFields;sale=value?.__belloSale;}catch{}
+ if(c.result.withoutEconveniListing===true&&(c.channel!=='DIRECT'||sale?.withoutEconveniListing!==true||sale.sourceInventoryId!==c.result.sourceId||sale.physicalQuantity!==c.result.soldQuantity||!(UNLISTED_SALE_MARKETS as readonly string[]).includes(String(sold.market??''))))throw new PostSaleError('eコンビニに出品しない売却記録を確認できません。');
  const expectedSource=c.result.sourceId===c.result.soldId?c.result.soldQuantity:c.result.remainingQuantity;
  const changed=source.updatedAt!==c.result.updatedAt||sold.updatedAt!==c.result.updatedAt;
  const identityMatches=sale?.sourceInventoryId===c.result.sourceId&&sale?.physicalQuantity===c.result.soldQuantity&&
@@ -70,6 +73,14 @@ export async function reviewPostSaleCore(ports:PostSalePorts,candidateId:string,
   return old;
  }
  const {c,source,soldChannel,soldPack}=await context(candidateId);
+ if(c.result!.withoutEconveniListing===true){
+  if(old?.rows.length||old?.queuedAt)throw new PostSaleError('受付済みのEC処理があります。処理結果を確認してください。');
+  await verifyUnlistedSale(source.id);
+  const plan:PostSalePlan={id:candidateId,candidateId,sourceId:source.id,sourceVersion:source.updatedAt,soldChannel:null,remaining:c.result!.remainingQuantity,actor,expiresAt:Date.now()+600000,rows:[],state:'COMPLETE',token:randomUUID(),updatedAt:new Date().toISOString(),withoutEconveniListing:true};
+  await db.send(new PutCommand({TableName:table,Item:{pk:key(candidateId).pk,...plan},ConditionExpression:old?'#state=:state AND #token=:token':'attribute_not_exists(pk)',...(old?{ExpressionAttributeNames:{'#state':'state','#token':'token'},ExpressionAttributeValues:{':state':old.state,':token':old.token}}:{})}));
+  await ports.releaseStock?.(source.id,candidateId);
+  return plan;
+ }
  const started=new Set(await Promise.all((old?.rows??[]).filter(r=>r.adjustment).map(async r=>await saleAdjustmentStarted(r.adjustment!)?r.channel:null)));
  const resuming=old?.rows.some(r=>started.has(r.channel)&&r.state!=='DONE');
  const observed=await (resuming?Promise.resolve<Awaited<ReturnType<typeof reviewSaleBinding>>>({remote:null,reviews:{}}):reviewSaleBinding(source.id,actor,c.result!.remainingQuantity===0?channels.filter(channel=>channel!==soldChannel&&!(ports.automatic&&channel==='YAHOO')):[])).catch((e:unknown)=>{

@@ -11,6 +11,7 @@ import { listEcEligibleInventory } from "@/lib/inventory/ecEligibleQuery";
 import { resolveTopImage, splitImagesByType } from "@/lib/inventory/imageTypes";
 import { listAllMasterEntries } from "@/lib/inventory/masters";
 import { createBaseProduct } from "./base/adapter";
+import {baseCreateInventoryIsCurrent,BASE_CREATE_INVENTORY_CHANGED} from './base/createInventoryGuard';
 import { isBasePrivateTestEnabled } from "./base/privateTestGuard";
 import { isEcListingEligible, buildCategoryNameLookup, ecListingIneligibleReason, type CategoryNameLookup } from "./ecEligibility";
 import { isE2EFixtureModeActive } from "@/lib/inventory/e2eFixtures";
@@ -77,8 +78,8 @@ async function loadCategoryNameLookup(): Promise<CategoryNameLookup> {
  * このファイルの関数を呼ぶだけ)。
  *
  * READ ONLY境界(spec: 「Listingの変更はZAICO/Inventory Masterを一切
- * 変更しない」): このファイルはgetInventoryDetail(読み取り専用の
- * クエリ)以外、Inventoryモデルを一度も書き込まない —
+ * 変更しない」): 在庫は読み取り専用クエリと出品直前の整合確認のみ。
+ * Inventoryモデルを一度も書き込まない —
  * serverDataClient.models.Inventory.create/update/deleteの呼び出しが
  * このファイルに一つも無いことが、その境界がコード上守られている
  * ことの直接の証拠。lib/inventory以下の既存の書き込み経路
@@ -1122,12 +1123,25 @@ export async function listOnBase(inventoryId: string, who: string | null): Promi
 
   // Share the same conditional claim with list-based operations across devices.
   const claimed = await serverDataClient.graphql({
-    query: `mutation ClaimBaseCreate($input: UpdateChannelListingInput!, $condition: ModelChannelListingConditionInput) { updateChannelListing(input: $input, condition: $condition) { id } }`,
+    query: `mutation ClaimBaseCreate($input: UpdateChannelListingInput!, $condition: ModelChannelListingConditionInput) { updateChannelListing(input: $input, condition: $condition) { id updatedAt } }`,
     variables: { input: publishingPatch(channelListing.id, who), condition: {
       updatedAt: { eq: channelListing.updatedAt }, status: { ne: "PUBLISHING" },
     } }, authMode: "userPool",
-  }) as { errors?: unknown; data?: { updateChannelListing?: { id: string } } };
+  }) as { errors?: unknown; data?: { updateChannelListing?: { id: string; updatedAt?: string } } };
   if (claimed.errors || !claimed.data?.updateChannelListing) throw new Error("別の出品処理が始まっています。状態を確認してください。");
+
+  // The listing claim blocks an overlapping unlisted sale; a sale that won
+  // before the claim is detected by this strongly consistent inventory read.
+  const claimedVersion=claimed.data.updateChannelListing.updatedAt;
+  let current=false;
+  if(claimedVersion)try{current=await baseCreateInventoryIsCurrent(inventory);}catch{}
+  if(!current){
+    if(claimedVersion)try{await serverDataClient.graphql({
+      query:`mutation ReleaseUnsentBaseCreate($input:UpdateChannelListingInput!,$condition:ModelChannelListingConditionInput){updateChannelListing(input:$input,condition:$condition){id}}`,
+      variables:{input:{id:channelListing.id,status:channelListing.status,lastError:channelListing.lastError??null},condition:{updatedAt:{eq:claimedVersion},status:{eq:'PUBLISHING'}}},authMode:'userPool',
+    });}catch{}
+    throw new Error(BASE_CREATE_INVENTORY_CHANGED);
+  }
 
   try {
     const result = await createBaseProduct({

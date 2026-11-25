@@ -2,6 +2,8 @@ import { ZAICO_FIELD_CHOICES } from './zaicoFieldChoices';
 import {saleAmounts,type SalePricing} from './salePricing';
 
 export const SOLD_OUT_MARKETS = ZAICO_FIELD_CHOICES.market;
+/** Explicit internal/direct sales only; online sales keep their normal EC checks. */
+export const UNLISTED_SALE_MARKETS = ['直接取引','雑収入','トレファク業者間','リステージ業者間'] as const;
 export interface SoldOutRequest {
   mutationId: string; inventoryId: string; expectedUpdatedAt: string;
   quantity: number; name: string; saleEndDate: string;
@@ -12,9 +14,11 @@ export interface SoldOutRequest {
   sourceCandidateId?:string;
   /** UI hint only; the server derives eligibility from the stored Yahoo notification. */
   awaitingYahooPayment?:boolean;
+  /** The operator confirms this sale has no eConveni listing. Server verified. */
+  withoutEconveniListing?:boolean;
   pricing?:SalePricing;
 }
-export interface SoldOutResult { sourceId: string; soldId: string; remainingQuantity: number; soldQuantity: number; updatedAt: string; quantityDeferred?: boolean; sourceQuantity?: number }
+export interface SoldOutResult { sourceId: string; soldId: string; remainingQuantity: number; soldQuantity: number; updatedAt: string; quantityDeferred?: boolean; sourceQuantity?: number; withoutEconveniListing?:true }
 export class SoldOutError extends Error {
   constructor(public code: 'INVALID' | 'CONFLICT' | 'UNCONFIRMED', message: string) { super(message); }
 }
@@ -22,6 +26,8 @@ export function japanToday(now = new Date()): string { return new Date(now.getTi
 export function validateSoldOut(request: SoldOutRequest, available?: number, currentMarket = ''): void {
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const invalid = (message: string): never => { throw new SoldOutError('INVALID', message); };
+  if(request?.withoutEconveniListing!==undefined&&typeof request.withoutEconveniListing!=='boolean')invalid('eコンビニに出品しない設定を確認してください。');
+  if(request?.withoutEconveniListing===true&&(!(UNLISTED_SALE_MARKETS as readonly string[]).includes(request.market)||request.awaitingYahooPayment))invalid('eコンビニに出品しない登録は、直接取引・業者間販売で選択してください。');
   if (!request || !uuid.test(request.mutationId) || !uuid.test(request.inventoryId) || !Number.isFinite(Date.parse(request.expectedUpdatedAt))) invalid('商品を開き直してから登録してください。');
   if (!Number.isSafeInteger(request.quantity) || request.quantity < 1) invalid('売却数量は1以上の整数で入力してください。');
   if (available !== undefined && (!Number.isSafeInteger(available) || request.quantity > available)) invalid('売却数量が在庫数量を超えています。');
