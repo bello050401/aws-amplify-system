@@ -103,6 +103,6 @@ test('availability failure preserves a valid captured inventory summary',async()
   if(read.status==='ok'){assert.equal(read.build.inventoryValue.total,a.inventoryValue.total);assert.equal(read.build.metadata.inventoryHistoryAvailableDays,undefined);}
 });
 test('inventory reconstruction is never exposed as reconstructed sales zero',async()=>{
-  const a=build(),{dailyManifest}=makeAnalysisManifest(a),db={send:async(command:GetCommand)=>({Item:{generation:a.metadata.generation,analysisManifestJson:JSON.stringify(dailyManifest),analysisRetainUntil:Date.parse(now)/1000+86400}})};
+  const a=build(),{dailyManifest}=makeAnalysisManifest(a),db={send:async()=>({Item:{generation:a.metadata.generation,analysisManifestJson:JSON.stringify(dailyManifest),analysisRetainUntil:Date.parse(now)/1000+86400}})};
   assert.deepEqual(await loadAnalysis(db as never,'snapshots',{target:'sales',generation:a.metadata.generation},Date.parse(a.metadata.asOf)+1000),{status:'missing'});
 });
