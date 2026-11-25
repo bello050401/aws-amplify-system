@@ -1,6 +1,6 @@
-import { BatchGetCommand, GetCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { BatchGetCommand, GetCommand, QueryCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { dateOnly, jstDay } from './period';
-import { ANALYSIS_RETAIN_GENERATIONS, ANALYSIS_TARGETS, dailyKey, generationKey, isAnalysisGeneration, parseAnalysisManifest, parseAnalysisShard, shardKey } from './publicationFormat';
+import { ANALYSIS_RETAIN_GENERATIONS, ANALYSIS_RETENTION_INDEX, ANALYSIS_TARGETS, dailyKey, generationKey, isAnalysisGeneration, parseAnalysisManifest, parseAnalysisShard, shardKey } from './publicationFormat';
 import { drilldownAnalysis, queryAnalysis } from './query';
 import { isSkuDimension, isSkuGroupKey } from './skus';
 import type { AnalysisBuild, AnalysisRequest, AnalysisResult, DetailResult, Dimension, DrilldownRequest } from './types';
@@ -10,6 +10,20 @@ type ReadResult = { status: 'ok'; build: AnalysisBuild } | { status: 'missing' |
 const dimensions = new Set<Dimension>(['category', 'holding', 'holdingBand', 'holdingCount', 'lot', 'lotBand', 'skuCategory', 'skuHoldingCount']);
 const summaryKeys = ['target', 'start', 'end', 'daily', 'generation', 'rollingDays'];
 const detailKeys = [...summaryKeys, 'dimension', 'key', 'groupKindId', 'groupSku', 'cursor', 'limit'];
+
+export async function inventoryHistoryDays(db:Db,table:string,now=Date.now()):Promise<string[]> {
+  const days=new Set<string>();let key:Record<string,unknown>|undefined;
+  // The daily retention window is 90 days. Bound even a malformed/stale index.
+  for(let page=0;page<4;page++){
+    const result=await db.send(new QueryCommand({TableName:table,IndexName:ANALYSIS_RETENTION_INDEX,
+      KeyConditionExpression:'analysisRetentionGroup = :group AND analysisRetainUntil > :now',
+      ExpressionAttributeValues:{':group':'daily',':now':Math.floor(now/1000)},ProjectionExpression:'id',Limit:100,ExclusiveStartKey:key}));
+    for(const item of result.Items??[]){if(typeof item.id!=='string'||!item.id.startsWith('analysis:d:'))continue;
+      const day=item.id.slice('analysis:d:'.length);try{dateOnly(day);days.add(day);}catch{/* Ignore invalid index entries. */}}
+    key=result.LastEvaluatedKey;if(!key)return [...days].sort();
+  }
+  throw Error('ANALYSIS_HISTORY_AVAILABILITY_LIMIT');
+}
 
 export function analysisRequest(value: unknown, detail: true): DrilldownRequest | null;
 export function analysisRequest(value: unknown, detail: false): AnalysisRequest | null;
@@ -110,6 +124,7 @@ export async function loadAnalysis(db: Db, table: string, request: AnalysisReque
     }
     if (!isAnalysisGeneration(pointer.generation)) return { status: 'error' };
     const manifest = parseAnalysisManifest(pointer.analysisManifestJson, pointer.generation);
+    if(manifest.header.metadata.accuracy==='reference-reconstructed'&&request.target!=='inventory')return {status:'missing'};
     if (request.daily && manifest.header.metadata.coverageEnd !== request.daily) return { status: 'error' };
     const descriptors = manifest.targets[request.target];
     const keys = descriptors.map((_, index) => shardKey(pointer.generation, request.target, index));
@@ -118,6 +133,10 @@ export async function loadAnalysis(db: Db, table: string, request: AnalysisReque
       ...manifest.header, inventory: [], sales: [], acquisitions: [], retailReference: [],
       [request.target]: descriptors.flatMap((descriptor, index) => parseAnalysisShard(found.get(keys[index]), descriptor)),
     };
+    if(request.target==='inventory'&&!request.daily){
+      try{build.metadata={...build.metadata,inventoryHistoryAvailableDays:await inventoryHistoryDays(db,table,now)};}
+      catch{/* Availability is optional; an index failure must preserve the valid captured summary. */}
+    }
     return { status: 'ok', build };
   } catch (error) {
     // An observer cannot change the read result or expose SDK payloads to callers.

@@ -76,6 +76,17 @@ export function parseAnalysisManifest(json: unknown, generation: string): Analys
       meta.timezone !== 'Asia/Tokyo' || !Array.isArray(manifest.header.categories) || manifest.header.categories.length > 100 ||
       !manifest.header.referenceExclusions || manifest.header.inventoryValue?.asOf !== generation) throw new Error('ANALYSIS_MANIFEST_INVALID');
   parseInventoryValue(JSON.stringify(manifest.header.inventoryValue));
+  if(meta.accuracy!=='captured-current-source'&&meta.accuracy!=='reference-reconstructed')throw new Error('ANALYSIS_MANIFEST_INVALID');
+  if(meta.accuracy==='reference-reconstructed'){
+    const h=meta.inventoryHistory,integer=(n:unknown)=>Number.isSafeInteger(n)&&Number(n)>=0;
+    if(!h||h.basis!=='archived-source'||h.sourceSystem!=='ZAICO'||h.sourceCapturedAt!==generation||
+      !isAnalysisGeneration(h.reconstructedAt)||h.reconstructedAt<generation||!/^[a-f\d]{64}$/.test(h.sourceKeyDigest)||
+      h.skuBasis!=='historical-baseline-and-immutable-link'||!integer(h.sourceRecordCount)||!integer(h.unmatchedSourceRecords)||
+      !integer(h.historicalIdentityRecords)||!integer(h.currentIdentityRecords)||!integer(h.unknownQuantityRecords)||
+      h.historicalIdentityRecords+h.currentIdentityRecords+h.unmatchedSourceRecords!==h.sourceRecordCount||
+      h.unknownQuantityRecords>h.sourceRecordCount||!Array.isArray(h.limitations)||!h.limitations.length||h.limitations.length>10||
+      h.limitations.some(value=>typeof value!=='string'||!value.length||value.length>500))throw new Error('ANALYSIS_HISTORY_PROVENANCE_INVALID');
+  }
   let shardCount = 0;
   for (const target of ANALYSIS_TARGETS) {
     const entries = manifest.targets?.[target];

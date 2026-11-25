@@ -194,6 +194,7 @@ export function createFixtures(mode:string|null = null):{ports:AnalysisPorts} {
     version:1,generation,asOf,timezone:'Asia/Tokyo',scopeId:'synthetic-fixture',
     amountBasis:'集計基準：検証用データ',metadataVersions:{},coverageStart:'2026-10-01',coverageEnd:previewToday,
     accuracy:'captured-current-source',sourceRecordCount:12,unlocatedAcquisitionRecords:1,
+    ...(mode?.startsWith('comparison') ? {inventoryHistoryAvailableDays:['2026-10-31']} : {}),
     ...(mode==='legacy-sku' ? {} : {inventorySkuVersion:1}),
   };
   const referenceExclusions = {unknownChannel:1,unknownCost:1,unverifiedOrigin:0,excluded:1,salesAmount:17_500};
@@ -209,6 +210,7 @@ export function createFixtures(mode:string|null = null):{ports:AnalysisPorts} {
   const historicBuild:AnalysisBuild = {...build,inventory:historicInventory,inventoryValue:stockView(historicInventory),metadata:{...metadata,
     generation:historicGeneration,asOf:historicDay+'T02:17:00.000Z',coverageStart:historicDay,coverageEnd:historicDay,
     inventorySkuVersion:mode==='comparison-legacy'?undefined:1,
+    ...(mode==='comparison-reconstructed' ? {accuracy:'reference-reconstructed' as const,inventoryHistory:{basis:'archived-source' as const,sourceSystem:'ZAICO' as const,sourceCapturedAt:historicDay+'T02:17:00.000Z',reconstructedAt:'2026-11-14T03:00:00.000Z',sourceKeyDigest:'synthetic',sourceRecordCount:4,unmatchedSourceRecords:0,skuBasis:'historical-baseline-and-immutable-link' as const,historicalIdentityRecords:3,currentIdentityRecords:1,unknownQuantityRecords:0,limitations:['SKUは当時の保存記録と、変更のない連携情報を確認して集計しています。']}} : {}),
   }};
   const ports:AnalysisPorts = {
     async load(request) {

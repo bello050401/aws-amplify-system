@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import * as React from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {AnalysisResultView} from '../app/inventory/(protected)/sales/analysis/SalesAnalysis';
-import {AnalysisDonut} from '../app/inventory/(protected)/sales/analysis/AnalysisDonut';
+import {AnalysisComparison} from '../app/inventory/(protected)/sales/analysis/AnalysisComparison';
 import {createFixtures,previewToday} from '../lib/inventory/analysisUi/fixtures';
 import {comparisonBuckets} from '../lib/inventory/analysisUi/comparison';
 import {inventoryComparisonRequest,stateFromQuery,writeQuery,type Slice,type DisplayRow,type Bucket} from '../lib/inventory/analysisUi/model';
@@ -24,20 +24,14 @@ test('comparison uses captured date, SKU counts, consistent colors and exact his
   assert.equal(historical.summary.skus,4);
   assert.notEqual(historical.summary.skus,historical.summary.quantity);
   const chosen:Slice[]=[];
-  const element=AnalysisResultView({data:historical,retry:()=>{},request,metric:'skus',detailed:false,select:slice=>chosen.push(slice),historical:true,comparison:true});
+  const element=AnalysisComparison({current,prior:historical,currentRequest:{target:'inventory'},priorRequest:request,metric:'skus',detailed:false,select:slice=>chosen.push(slice)});
   const html=renderToStaticMarkup(element);
-  assert.match(html,/この時点のSKU/);assert.match(html,/2026\/10\/31/);assert.match(html,/11:17/);assert.match(html,/4 SKU/);
-  const charts=descendants(element).filter(item=>item.type===AnalysisDonut);
-  assert.equal(charts.length,2);
-  for(const chart of charts){
-    const props=chart.props as React.ComponentProps<typeof AnalysisDonut>;
-    for(const bucket of props.buckets){
-      const same:Bucket|undefined=current.summary.dimensions[props.dimension]?.find(row=>row.key===bucket.key);
-      if(same) assert.equal(bucket.color,same.color);
-    }
-    const row=props.buckets.find(item=>item.skus && item.skus>0)!;
-    props.onSelect({key:row.key,label:row.label} as DisplayRow);
-  }
+  assert.match(html,/2026\/10\/31/);assert.match(html,/11:17/);assert.match(html,/4 SKU/);assert.match(html,/合計の増減/);assert.match(html,/\+1 SKU/);assert.match(html,/pt/);
+  assert.equal((html.match(/analysis-paired-rings/g)??[]).length,2);
+  const buttons=descendants(element).filter(item=>item.type==='button');
+  const priorButtons=buttons.filter(item=>String((item.props as {'aria-label'?:string})['aria-label']).startsWith('過去の'));
+  assert.ok(priorButtons.length>0);
+  for(const button of priorButtons.slice(0,2)) (button.props as {onClick:()=>void}).onClick();
   for(const slice of chosen){
     assert.equal(slice.request.daily,'2026-10-31');
     assert.equal(slice.request.generation,'synthetic-inventory-2026-10-31');
@@ -94,7 +88,14 @@ test('comparison legends include one-sided categories and holding counts without
   const pastOnly=[{...currentBands[0],key:'9',label:'9点保有',skus:1}];
   const union=comparisonBuckets(currentBands,pastOnly,'skuHoldingCount',currentBands);
   assert.deepEqual(union.map(b=>b.key),['1','2','3','5','8','9']);assert.equal(union.at(-1)!.skus,0);
-  const html=renderToStaticMarkup(AnalysisResultView({data:historical,retry:()=>{},request:{target:'inventory',daily:'2026-10-31'},metric:'skus',detailed:false,select:()=>{},historical:true,comparison:true,counterpart:current}));
+  const html=renderToStaticMarkup(AnalysisComparison({current,prior:historical,currentRequest:{target:'inventory'},priorRequest:{target:'inventory',daily:'2026-10-31'},metric:'skus',detailed:false,select:()=>{}}));
   assert.match(html,/収納家具/);assert.match(html,/3点保有/);assert.match(html,/8点保有/);assert.match(html,/0 SKU/);
   assert.equal(JSON.stringify([current,historical]),original);
+});
+
+test('paired reconstruction exposes original capture time, proven SKU sources and limitations',async()=>{
+ const {ports}=createFixtures('comparison-reconstructed');const current=await ports.load({target:'inventory'}),prior=await ports.load({target:'inventory',daily:'2026-10-31'});
+ assert.equal(current.status,'ok');assert.equal(prior.status,'ok');if(current.status!=='ok'||prior.status!=='ok')return;
+ const html=renderToStaticMarkup(AnalysisComparison({current,prior,currentRequest:{target:'inventory'},priorRequest:{target:'inventory',daily:'2026-10-31'},metric:'skus',detailed:false,select:()=>{}}));
+ assert.match(html,/過去は復元データ/);assert.match(html,/当時の記録 3件/);assert.match(html,/変更のない連携情報 1件/);assert.match(html,/SKUは当時の保存記録と/);assert.ok(!html.includes('SKUは参考'));assert.match(html,/11:17/);
 });

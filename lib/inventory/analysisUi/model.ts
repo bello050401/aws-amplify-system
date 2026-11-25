@@ -62,6 +62,7 @@ export interface AnalysisState {
   end: string;
   inventoryMonth: string;
   inventoryCompareWeeks: InventoryCompareWeeks;
+  inventoryCompareDay?: string;
   breakdown: 'inventory'|'acquisitions';
   stockUnit: 'quantity'|'kinds';
   acquisitionUnit: 'amount'|'quantity'|'lots';
@@ -101,7 +102,7 @@ export function monthChoices(today:string) {
 
 export const initialAnalysisState = (today:string):AnalysisState => ({
   tab:'sales', preset:'current', saleMonth:today.slice(0,7), start:today.slice(0,7)+'-01', end:today,
-  inventoryMonth:'', inventoryCompareWeeks:0, breakdown:'inventory', stockUnit:'quantity', acquisitionUnit:'amount',
+  inventoryMonth:'', inventoryCompareWeeks:0, inventoryCompareDay:'', breakdown:'inventory', stockUnit:'quantity', acquisitionUnit:'amount',
   detailed:{sales:false,inventory:false,breakdown:false,acquisitions:false}, reference:false, slice:null,
 });
 
@@ -122,6 +123,7 @@ export function stateFromQuery(query:URLSearchParams, today:string):AnalysisStat
   if (validDay(get('start'))) state.start = get('start');
   if (validDay(get('end'))) state.end = get('end');
   if (monthFormat.test(get('month'))) state.inventoryMonth = get('month');
+  if (validDay(get('compareDay')) && get('compareDay') <= today) state.inventoryCompareDay=get('compareDay');
   const compareWeeks = get('compareWeeks');
   if (compareWeeks === '2' || compareWeeks === '3' || compareWeeks === '4') state.inventoryCompareWeeks = Number(compareWeeks) as InventoryCompareWeeks;
   if (get('breakdown') === 'acquisitions') state.breakdown = 'acquisitions';
@@ -159,6 +161,7 @@ export function writeQuery(query:URLSearchParams, state:AnalysisState) {
     period:state.preset, salesMonth:state.saleMonth, start:state.start, end:state.end,
     month:state.inventoryMonth, breakdown:state.breakdown, stockUnit:state.stockUnit, acquisitionUnit:state.acquisitionUnit,
     compareWeeks:state.inventoryCompareWeeks ? String(state.inventoryCompareWeeks) : '',
+    compareDay:state.inventoryCompareDay ?? '',
     reference:state.reference ? '1' : '',
     dimension:state.slice?.dimension ?? '', slice:state.slice?.key ?? '', sliceLabel:state.slice?.label ?? '',
     generation:state.slice?.request.generation ?? '',

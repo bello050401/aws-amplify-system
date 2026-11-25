@@ -13,6 +13,7 @@ import {comparisonBuckets} from '../../../../../lib/inventory/analysisUi/compari
 import {useAnalysis} from '../../../../../lib/inventory/analysisUi/useAnalysis';
 import {AnalysisDetail} from './AnalysisDetail';
 import {AnalysisDonut} from './AnalysisDonut';
+import {AnalysisComparison} from './AnalysisComparison';
 import {AnalysisManagement} from './AnalysisManagement';
 import type {AnalysisManagementPorts} from '../../../../../lib/inventory/analysisUi/management';
 import {InventoryValueReport} from '../InventoryValuePanel';
@@ -50,10 +51,12 @@ export function SalesAnalysis({ports,today=jstDay(),productLinks=false,managemen
   const purchaseGeneration = purchase.data?.status === 'ok' ? purchase.data.metadata.generation : null;
   const compare = acquisition && state.acquisitionUnit === 'amount' && !!purchaseGeneration;
   const reference = useAnalysis(ports?.load,state.reference && compare && purchaseGeneration ? {target:'retailReference',generation:purchaseGeneration} : null);
-  const comparing = request?.target === 'inventory' && state.inventoryCompareWeeks > 0;
+  const comparing = request?.target === 'inventory' && (state.inventoryCompareWeeks > 0 || Boolean(state.inventoryCompareDay));
   const anchor = data;
-  const historicalRequest = inventoryComparisonRequest(anchor?.status==='ok' ? anchor.metadata.asOf : today+'T00:00:00+09:00',state.inventoryCompareWeeks || 2);
+  const weeksRequest = inventoryComparisonRequest(anchor?.status==='ok' ? anchor.metadata.asOf : today+'T00:00:00+09:00',state.inventoryCompareWeeks || 2);
+  const historicalRequest = state.inventoryCompareDay ? {target:'inventory' as const,daily:state.inventoryCompareDay} : weeksRequest;
   const comparisonDay = historicalRequest.daily!;
+  const availableDays = anchor?.status==='ok' ? (anchor.metadata.inventoryHistoryAvailableDays??[]).filter(day=>day < anchor.metadata.coverageEnd).sort().reverse() : [];
   const historical = useAnalysis(ports?.load,comparing && anchor?.status==='ok' && !state.slice ? historicalRequest : null);
   const source = useRef<HTMLElement | SVGElement | null>(null);
   const content = useRef<HTMLDivElement>(null);
@@ -84,25 +87,21 @@ export function SalesAnalysis({ports,today=jstDay(),productLinks=false,managemen
   const currentGraphs = request && <AnalysisResultView data={data} retry={retry} metric={metric} detailed={detailed}
     toggleBands={()=>update({detailed:{...state.detailed,[key]:!detailed}})} select={select} request={request}
     showSummaryTotal={state.tab !== 'inventory'}/>;
-  const comparisonDimensions = data?.status==='ok' && historical.data?.status==='ok' && (metric!=='skus' || historical.data.summary.skus!==undefined)
-    ? chartContent('inventory',metric,detailed).map(chart=>chart.dimension) : [undefined];
   const graphs = <>
     {request?.target === 'inventory' && <div className="analysis-comparison-controls">
-      <button type="button" className="analysis-button" aria-expanded={comparing} onClick={()=>update({inventoryCompareWeeks:comparing ? 0 : 2})}>過去の在庫と比較</button>
-      {comparing && <Choices label="在庫の比較期間" value={String(state.inventoryCompareWeeks)}
-        options={[{key:'2',label:'2週間前'},{key:'3',label:'3週間前'},{key:'4',label:'4週間前'}] as const}
-        select={weeks=>update({inventoryCompareWeeks:Number(weeks) as 2|3|4})}/>}
+      <Choices label="在庫の比較期間" value={state.inventoryCompareDay ? 'date' : String(state.inventoryCompareWeeks)}
+        options={[{key:'0',label:'現在のみ'},{key:'2',label:'2週間前'},{key:'3',label:'3週間前'},{key:'4',label:'4週間前'}] as const}
+        select={weeks=>update({inventoryCompareWeeks:Number(weeks) as 0|2|3|4,inventoryCompareDay:''})}/>
+      {availableDays.length>0 && <label className="analysis-field">記録のある日から選ぶ<select aria-label="記録のある比較日" value={state.inventoryCompareDay??''} onChange={event=>update({inventoryCompareDay:event.target.value,inventoryCompareWeeks:0})}><option value="">日付を選択</option>{availableDays.map(day=><option key={day} value={day}>{day.replaceAll('-','/')}</option>)}</select></label>}
     </div>}
-    {comparing ? comparisonDimensions.map((dimension,index)=><div key={dimension || 'unavailable'} className="analysis-comparison">
-      <section aria-label="比較・基準の在庫"><h2 className="analysis-comparison-heading">{request?.daily ? request.daily.replaceAll('-','/')+'の在庫' : '現在の在庫'}</h2>
-        {metric !== 'skus' && data?.status==='ok' && <p className="analysis-note">{formatJstDateTime(data.metadata.asOf)} JST 時点</p>}
-        {dimension ? <AnalysisResultView data={data} retry={retry} metric={metric} detailed={detailed} select={select} request={request!} comparison counterpart={historical.data} onlyDimension={dimension} showSkuNotes={index===0}/> : currentGraphs}
+    {comparing && data?.status==='ok' && historical.data?.status==='ok' && (metric!=='skus' || historical.data.summary.skus!==undefined && data.summary.skus!==undefined) ? <AnalysisComparison current={data} prior={historical.data} currentRequest={request!} priorRequest={historicalRequest} metric={metric} detailed={detailed} select={select}/> : comparing ? <>
+      <section className="analysis-card" role="status" aria-label="過去の在庫の比較状況">
+        <h2 className="analysis-comparison-heading">{state.inventoryCompareDay ? '指定日' : state.inventoryCompareWeeks+'週間前'} · {comparisonDay.replaceAll('-','/')}</h2>
+        <p>{anchor?.status!=='ok' ? '基準の在庫データを取得すると比較できます。' : !historical.data ? '過去の在庫を読み込み中…' : historical.data.status==='ok' ? 'この時点のSKU内訳の記録はありません。' : historical.data.status==='missing' ? 'この日の在庫データはありません。記録のある日を選んでください。' : historical.data.status==='expired' ? 'この集計版は参照期限を過ぎました。' : '集計を取得できませんでした。'}</p>
+        {historical.data && ['error','expired'].includes(historical.data.status) && <button type="button" className="analysis-button" onClick={historical.retry}>集計を再試行</button>}
       </section>
-      <section aria-label="比較・過去の在庫"><h2 className="analysis-comparison-heading">{state.inventoryCompareWeeks}週間前{anchor?.status==='ok' ? ' · '+comparisonDay.replaceAll('-','/') : ''}</h2>
-        {metric !== 'skus' && historical.data?.status==='ok' && <p className="analysis-note">{formatJstDateTime(historical.data.metadata.asOf)} JST 時点</p>}
-        {anchor?.status!=='ok' ? <p className="analysis-note">基準の在庫データを取得すると比較できます。</p> : <AnalysisResultView data={historical.data} retry={historical.retry} metric={metric} detailed={detailed} select={select} request={historicalRequest} historical comparison counterpart={data} onlyDimension={dimension} showSkuNotes={index===0}/> }
-      </section>
-    </div>) : currentGraphs}
+      {currentGraphs}
+    </> : currentGraphs}
   </>;
   return <div ref={content} className="analysis-content">
     <div hidden={Boolean(state.slice && ports)}>

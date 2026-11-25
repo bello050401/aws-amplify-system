@@ -72,3 +72,16 @@
   .analysis-comparison .analysis-chart-body{grid-template-columns:minmax(0,1fr);gap:10px}
   .analysis-comparison .analysis-ring{width:min(100%,14rem)}
 }
+
+.analysis-paired-comparison {display:grid;gap:16px}
+.analysis-paired-card {min-width:0}
+.analysis-paired-rings {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;max-width:650px;margin:auto}
+.analysis-paired-period {min-width:0;text-align:center}.analysis-paired-period h4 {margin:8px 0;font-size:15px}.analysis-paired-period h4 small {display:block;color:#526359;font-size:12px;font-weight:400}
+.analysis-paired-period .analysis-ring {width:100%;max-width:210px;margin:auto}.analysis-paired-period .analysis-ring-center strong {font-size:clamp(12px,2.5vw,21px)}.analysis-paired-period .analysis-ring-center span {font-size:11px}
+.analysis-comparison-total {text-align:center;margin:8px 0 16px}.analysis-comparison-total strong {margin-left:10px;font-variant-numeric:tabular-nums}
+.analysis-paired-row {display:grid;grid-template-columns:minmax(100px,1.3fr) repeat(3,minmax(0,1fr));gap:8px;align-items:center;border-bottom:1px solid #e5ece7;padding:6px 0;font-variant-numeric:tabular-nums}
+.analysis-paired-header {font-size:12px;color:#526359;text-align:right}.analysis-paired-header span:first-child{text-align:left}
+.analysis-paired-label {display:flex;align-items:center;gap:7px;font-size:14px}.analysis-paired-label .analysis-dot {flex-shrink:0}
+.analysis-paired-value {display:flex;flex-direction:column;justify-content:center;align-items:flex-end;gap:3px;min-height:44px;width:100%;padding:4px 0;background:transparent;border:0;color:#244e42;cursor:pointer}.analysis-paired-value:hover{text-decoration:underline}.analysis-paired-value:focus-visible{outline:2px solid #245647;outline-offset:2px}
+.analysis-paired-value strong,.analysis-paired-change strong {font-size:14px;overflow-wrap:anywhere}.analysis-paired-value small,.analysis-paired-change small {font-size:11px;color:#526359}.analysis-paired-change {display:flex;flex-direction:column;align-items:flex-end;gap:3px}.analysis-paired-change[data-direction=increase] strong {color:#245647}.analysis-paired-change[data-direction=decrease] strong {color:#9b4735}
+@media(max-width:480px){.analysis-paired-row {grid-template-columns:repeat(3,minmax(0,1fr));gap:3px 8px}.analysis-paired-label{grid-column:1/-1;padding-top:4px}.analysis-paired-header span:first-child{display:none}.analysis-paired-rings{gap:6px}.analysis-paired-value strong,.analysis-paired-change strong{font-size:12px}.analysis-paired-period .analysis-ring-center strong{font-size:12px}}

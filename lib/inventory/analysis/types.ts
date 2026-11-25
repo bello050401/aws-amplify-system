@@ -71,9 +71,17 @@ export interface Fact {
 export interface AnalysisMetadata {
   version:1; generation:string; asOf:string; timezone:'Asia/Tokyo'; scopeId:string;
   amountBasis:string; metadataVersions:Record<string,number>; metadataEpoch?:number;
-  coverageStart:string; coverageEnd:string; accuracy:'captured-current-source';
+  coverageStart:string; coverageEnd:string; accuracy:'captured-current-source'|'reference-reconstructed';
+  inventoryHistory?: {
+    basis:'archived-source'; sourceSystem:'ZAICO'; sourceCapturedAt:string; reconstructedAt:string;
+    sourceKeyDigest:string; sourceRecordCount:number; unmatchedSourceRecords:number;
+    skuBasis:'historical-baseline-and-immutable-link'; historicalIdentityRecords:number; currentIdentityRecords:number;
+    unknownQuantityRecords:number; limitations:string[];
+  };
   sourceRecordCount:number; unlocatedAcquisitionRecords:number; unlocatedSalesRecords?:number;
   inventorySkuVersion?:1;
+  /** Read-time inventory availability; never changes the stored captured generation. */
+  inventoryHistoryAvailableDays?:string[];
 }
 export interface AnalysisBuild {
   metadata:AnalysisMetadata; inventoryValue:InventoryValue;
