@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {GetCommand,QueryCommand,TransactWriteCommand} from '@aws-sdk/lib-dynamodb';
+import {BatchGetCommand,GetCommand,TransactWriteCommand} from '@aws-sdk/lib-dynamodb';
 import type {ArchivedStock,InventoryWindow} from '../inventoryValueHistory';
 import {reconstructArchivedInventory,type ArchiveIdentity} from './archiveHistory';
 import {historicalPublicationItems,publishHistoricalInventory} from './historyPublication';
@@ -67,9 +67,40 @@ test('all historical writes are atomic missing-only creates and never touch curr
   assert.equal(await publishHistoricalInventory(conflict as never,'snapshots',a,'test'),false);
   assert.equal(a.metadata.asOf,'2026-11-10T18:33:17.100Z');
 });
-test('availability lists only real daily pointer dates, sorts and deduplicates pagination',async()=>{
-  let calls=0;const db={send:async(command:QueryCommand)=>{assert.equal(command.input.IndexName,'AnalysisRetention');calls++;return calls===1?{Items:[{id:'analysis:d:2026-11-11'},{id:'invalid'}],LastEvaluatedKey:{id:'next'}}:{Items:[{id:'analysis:d:2026-10-28'},{id:'analysis:d:2026-11-11'},{id:'analysis:d:2026-02-30'}]};}};
+test('availability uses only ninety consistent primary-key reads, ignoring missing, expired, future and malformed pointers',async()=>{
+  const ttl=Math.floor(Date.parse(now)/1000)+86400;let calls=0;
+  const pointer=(day:string,generation=day+'T03:00:00.000Z',until=ttl)=>({id:'analysis:d:'+day,generation,analysisRetainUntil:until});
+  const db={send:async(command:BatchGetCommand)=>{
+    assert.ok(command instanceof BatchGetCommand);const request=command.input.RequestItems!.snapshots;
+    assert.equal(request.ConsistentRead,true);assert.equal(request.ProjectionExpression,'id, generation, analysisRetainUntil');
+    assert.equal(request.Keys!.length,90);assert.equal(new Set(request.Keys!.map(k=>k.id)).size,90);
+    assert.equal(request.Keys![0].id,'analysis:d:2026-11-26');assert.equal(request.Keys!.at(-1)!.id,'analysis:d:2026-08-29');calls++;
+    return {Responses:{snapshots:[pointer('2026-11-11'),pointer('2026-10-28'),pointer('2026-11-01','bad'),pointer('2026-11-02','2026-11-03T03:00:00.000Z'),
+      pointer('2026-11-03',undefined,Math.floor(Date.parse(now)/1000)),pointer('2026-11-26','2026-11-25T23:00:00.000Z'),
+      pointer('2026-11-27'),{id:'invalid'},pointer('2026-08-28')]}};
+  }};
+  assert.deepEqual(await inventoryHistoryDays(db as never,'snapshots',Date.parse(now)),['2026-10-28','2026-11-11']);assert.equal(calls,1);
+});
+test('availability retries only unprocessed daily keys and fails after bounded retries',async()=>{
+  let calls=0;const ttl=Math.floor(Date.parse(now)/1000)+86400;
+  const db={send:async(command:BatchGetCommand)=>{calls++;const keys=command.input.RequestItems!.snapshots.Keys!;
+    if(calls===1)return {Responses:{snapshots:[{id:'analysis:d:2026-11-11',generation:'2026-11-11T03:00:00.000Z',analysisRetainUntil:ttl}]},UnprocessedKeys:{snapshots:{Keys:[{id:'analysis:d:2026-10-28'}]}}};
+    assert.deepEqual(keys,[{id:'analysis:d:2026-10-28'}]);return {Responses:{snapshots:[{id:'analysis:d:2026-10-28',generation:'2026-10-28T03:00:00.000Z',analysisRetainUntil:ttl}]}};
+  }};
   assert.deepEqual(await inventoryHistoryDays(db as never,'snapshots',Date.parse(now)),['2026-10-28','2026-11-11']);assert.equal(calls,2);
+  calls=0;const busy={send:async(command:BatchGetCommand)=>{calls++;return {UnprocessedKeys:command.input.RequestItems};}};
+  await assert.rejects(()=>inventoryHistoryDays(busy as never,'snapshots',Date.parse(now)),/INCOMPLETE/);assert.equal(calls,5);
+});
+test('availability failure preserves a valid captured inventory summary',async()=>{
+  const a=build(),{dailyManifest,shards}=makeAnalysisManifest(a);
+  const db={send:async(command:GetCommand|BatchGetCommand)=>{
+    if(command instanceof GetCommand)return {Item:{generation:a.metadata.generation,analysisManifestJson:JSON.stringify(dailyManifest)}};
+    const keys=command.input.RequestItems!.snapshots.Keys!;
+    if(keys.some(key=>String(key.id).startsWith('analysis:d:')))throw Error('availability unavailable');
+    return {Responses:{snapshots:keys.map(key=>({id:key.id,analysisShardJson:shards.find(s=>s.id===key.id)!.json}))}};
+  }};
+  const read=await loadAnalysis(db as never,'snapshots',{target:'inventory'},Date.parse(now));assert.equal(read.status,'ok');
+  if(read.status==='ok'){assert.equal(read.build.inventoryValue.total,a.inventoryValue.total);assert.equal(read.build.metadata.inventoryHistoryAvailableDays,undefined);}
 });
 test('inventory reconstruction is never exposed as reconstructed sales zero',async()=>{
   const a=build(),{dailyManifest}=makeAnalysisManifest(a),db={send:async(command:GetCommand)=>({Item:{generation:a.metadata.generation,analysisManifestJson:JSON.stringify(dailyManifest),analysisRetainUntil:Date.parse(now)/1000+86400}})};

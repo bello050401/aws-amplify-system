@@ -1,6 +1,6 @@
-import { BatchGetCommand, GetCommand, QueryCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import { dateOnly, jstDay } from './period';
-import { ANALYSIS_RETAIN_GENERATIONS, ANALYSIS_RETENTION_INDEX, ANALYSIS_TARGETS, dailyKey, generationKey, isAnalysisGeneration, parseAnalysisManifest, parseAnalysisShard, shardKey } from './publicationFormat';
+import { BatchGetCommand, GetCommand, type DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { dateOnly, jstDay, shiftDay } from './period';
+import { ANALYSIS_RETAIN_DAILY, ANALYSIS_RETAIN_GENERATIONS, ANALYSIS_TARGETS, dailyKey, generationKey, isAnalysisGeneration, parseAnalysisManifest, parseAnalysisShard, shardKey } from './publicationFormat';
 import { drilldownAnalysis, queryAnalysis } from './query';
 import { isSkuDimension, isSkuGroupKey } from './skus';
 import type { AnalysisBuild, AnalysisRequest, AnalysisResult, DetailResult, Dimension, DrilldownRequest } from './types';
@@ -12,17 +12,31 @@ const summaryKeys = ['target', 'start', 'end', 'daily', 'generation', 'rollingDa
 const detailKeys = [...summaryKeys, 'dimension', 'key', 'groupKindId', 'groupSku', 'cursor', 'limit'];
 
 export async function inventoryHistoryDays(db:Db,table:string,now=Date.now()):Promise<string[]> {
-  const days=new Set<string>();let key:Record<string,unknown>|undefined;
-  // The daily retention window is 90 days. Bound even a malformed/stale index.
-  for(let page=0;page<4;page++){
-    const result=await db.send(new QueryCommand({TableName:table,IndexName:ANALYSIS_RETENTION_INDEX,
-      KeyConditionExpression:'analysisRetentionGroup = :group AND analysisRetainUntil > :now',
-      ExpressionAttributeValues:{':group':'daily',':now':Math.floor(now/1000)},ProjectionExpression:'id',Limit:100,ExclusiveStartKey:key}));
-    for(const item of result.Items??[]){if(typeof item.id!=='string'||!item.id.startsWith('analysis:d:'))continue;
-      const day=item.id.slice('analysis:d:'.length);try{dateOnly(day);days.add(day);}catch{/* Ignore invalid index entries. */}}
-    key=result.LastEvaluatedKey;if(!key)return [...days].sort();
+  const today=jstDay(new Date(now).toISOString()),days=new Set<string>();
+  // Runtime already permits bounded primary-key reads. Do not require index Query permissions.
+  let pending=Array.from({length:ANALYSIS_RETAIN_DAILY/86400},(_,offset)=>({id:dailyKey(shiftDay(today,-offset))}));
+  for(let attempt=0;pending.length&&attempt<5;attempt++){
+    if(attempt)await new Promise(resolve=>setTimeout(resolve,25*2**(attempt-1)));
+    const expected=new Set(pending.map(key=>key.id)),returned=new Set<string>();
+    const result=await db.send(new BatchGetCommand({RequestItems:{[table]:{Keys:pending,ConsistentRead:true,
+      ProjectionExpression:'id, generation, analysisRetainUntil'}}}));
+    for(const item of result.Responses?.[table]??[]){
+      if(typeof item.id!=='string'||!expected.has(item.id))continue;
+      if(returned.has(item.id))throw Error('ANALYSIS_HISTORY_AVAILABILITY_INVALID');
+      returned.add(item.id);
+      if(!isAnalysisGeneration(item.generation)||Date.parse(item.generation)>now||
+        !Number.isSafeInteger(item.analysisRetainUntil)||item.analysisRetainUntil<=Math.floor(now/1000))continue;
+      const day=item.id.slice('analysis:d:'.length);
+      if(jstDay(item.generation)===day)days.add(day);
+    }
+    const retry=new Set<string>();
+    pending=(result.UnprocessedKeys?.[table]?.Keys??[]).map(key=>{
+      if(typeof key.id!=='string'||!expected.has(key.id)||returned.has(key.id)||retry.has(key.id))throw Error('ANALYSIS_HISTORY_AVAILABILITY_INVALID');
+      retry.add(key.id);return {id:key.id};
+    });
   }
-  throw Error('ANALYSIS_HISTORY_AVAILABILITY_LIMIT');
+  if(pending.length)throw Error('ANALYSIS_HISTORY_AVAILABILITY_INCOMPLETE');
+  return [...days].sort();
 }
 
 export function analysisRequest(value: unknown, detail: true): DrilldownRequest | null;
@@ -135,7 +149,7 @@ export async function loadAnalysis(db: Db, table: string, request: AnalysisReque
     };
     if(request.target==='inventory'&&!request.daily){
       try{build.metadata={...build.metadata,inventoryHistoryAvailableDays:await inventoryHistoryDays(db,table,now)};}
-      catch{/* Availability is optional; an index failure must preserve the valid captured summary. */}
+      catch{/* Availability is optional; its read failure must preserve the valid captured summary. */}
     }
     return { status: 'ok', build };
   } catch (error) {
