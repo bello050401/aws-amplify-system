@@ -30,10 +30,12 @@ export function createStockSplitService(p:StockSplitPorts) {
   const source=await persistence.getInventoryRaw(r.inventoryId);
   if(!source||source.deletedAt||source.updatedAt!==r.expectedUpdatedAt)throw new StockSplitError('CONFLICT','商品が更新されています。開き直してください。');
   if(source.listingPartition==='MERGED'||source.outboundBatchId||source.outboundArrivalBatchId)throw new StockSplitError('INVALID','出庫処理中・到着確認待ち・合算済みの在庫は分けられません。');
+  const custom=parseCustomFields(source.customFields);
+  if((custom?.__belloYahooPayment as {state?:string}|undefined)?.state==='WAITING')throw new StockSplitError('CONFLICT','ヤフオクの入金待ち予約があります。購入通知で注文と数量を確認し、入金確認後に在庫を分けてください。ZAICOですでに分けた場合は売却先の商品との対応を確認してください。');
   validateStockSplit(r,source.quantity,actor);
   const cats=inventoryCategoryIds(source);await persistence.validateCategoryIds(cats);
   const now=new Date(Math.max(Date.parse(p.now?.()??new Date().toISOString()),Date.parse(String(source.updatedAt))+1)).toISOString(),id=randomUUID();
-  const sku=await p.nextSku(),custom=parseCustomFields(source.customFields);
+  const sku=await p.nextSku();
   const parsed=typeof source.images==='string'?JSON.parse(source.images):source.images;
   if(parsed!=null&&!Array.isArray(parsed))throw new StockSplitError('INVALID','元の写真情報を確認できないため、分割を中止しました。');
   const originals:unknown[]=Array.isArray(parsed)?parsed:[];

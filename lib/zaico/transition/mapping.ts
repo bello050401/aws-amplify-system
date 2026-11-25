@@ -23,11 +23,18 @@ for(const [name,target] of Object.entries(ZAICO_ATTRIBUTE_MAP)){
 }
 export const SHARED_FIELDS=['name','quantity','unit','categoryIds','locationId','statusId','note','barcode',...optionalTargets.keys()];
 
+/** ZAICO reads an explicit empty clear as null. Normalize only mapped fields;
+ * names retain their existing empty-title representation, and 0/raw values stay exact. */
+export function normalizeSharedFields(fields:SharedFields):SharedFields {
+  return Object.fromEntries(Object.entries(fields).map(([field,value])=>
+    [field,field!=='name'&&SHARED_FIELDS.includes(field)&&value===''?null:value]));
+}
+
 /** Only genuinely shared fields participate. Listing settings and photo batches remain BELLO-owned. */
 export function localFields(row:Row):SharedFields {
   const custom=parseCustomFields(row.customFields)??{};
-  return Object.fromEntries(SHARED_FIELDS.map(field=>[field,field==='categoryIds'?inventoryCategoryIds(row).sort():
-    field.startsWith('custom.')?custom[field.slice(7)]??null:row[field]??null])) as SharedFields;
+  return normalizeSharedFields(Object.fromEntries(SHARED_FIELDS.map(field=>[field,field==='categoryIds'?inventoryCategoryIds(row).sort():
+    field.startsWith('custom.')?custom[field.slice(7)]??null:row[field]??null])) as SharedFields);
 }
 
 /**

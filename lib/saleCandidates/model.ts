@@ -23,6 +23,8 @@ export type SaleCandidate={
  yahooAuthenticatedWonAt?:string;
  yahooPaymentNotice?:{gmailId:string;receivedAt:string};
  yahooPaymentState?:'WAITING'|'APPLIED'; yahooPaymentAppliedAt?:string; yahooPaymentError?:string;
+ /** Derived from current inventory on an authenticated list read; never payment evidence. */
+ yahooInventoryWarning?:string;
  /** Exact prior reservation version, recorded atomically when payment settles a deferred sale. */
  yahooReservationVersion?:string;
  orderRoute?:'WEB'|'PAY_ID_APP'|'UNKNOWN';

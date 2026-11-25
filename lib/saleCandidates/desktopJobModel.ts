@@ -8,6 +8,8 @@ export type DesktopRequest = {
  purpose:'IDENTIFY_SALE'|'VERIFY_SALE'|'STOCK';candidateId:string;inventoryId:string;inventoryVersion:string;
  externalId:string;title:string;imageKeys:string[];orderId:string;orderLineId:string;
  targetQuantity?:number;orderUrl?:string;shopId?:string;soldQuantity?:number;unitPrice?:number;
+ /** Server-created stock identity proof. Absent on legacy receipts. */
+ inventoryFingerprint?:string;
 };
 export type DesktopEvidence = {
  snapshot:string;externalId:string;inventoryId:string;orderId:string;orderLineId:string;
@@ -23,10 +25,10 @@ export type DesktopJob = DesktopRequest & {
 };
 const hash=(v:unknown)=>createHash('sha256').update(JSON.stringify(v)).digest('hex');
 export const desktopJobId=(r:Pick<DesktopRequest,'purpose'|'candidateId'|'externalId'>)=>hash(['BELLO_DESKTOP_V1',r.purpose,r.candidateId,r.externalId]);
-export const desktopSnapshot=(r:DesktopRequest)=>hash([r.purpose,r.candidateId,r.inventoryId,r.inventoryVersion,r.externalId,r.title,r.imageKeys,r.orderId,r.orderLineId,r.targetQuantity??null,r.orderUrl??null,r.shopId??null,r.soldQuantity??null,r.unitPrice??null]);
+export const desktopSnapshot=(r:DesktopRequest)=>hash([r.purpose,r.candidateId,r.inventoryId,r.inventoryVersion,r.externalId,r.title,r.imageKeys,r.orderId,r.orderLineId,r.targetQuantity??null,r.orderUrl??null,r.shopId??null,r.soldQuantity??null,r.unitPrice??null,...(r.inventoryFingerprint?[r.inventoryFingerprint]:[])]);
 export const comparableDesktopTitle=(s:string)=>titleWithoutNotes(s.normalize('NFKC')).replace(/\s+/g,' ').trim();
 /** Called only together with the immutable Yahoo settlement proof. IDs/photos/quantity stay exact. */
-export const desktopCausalSnapshotMatches=(old:DesktopJob,request:DesktopRequest)=>!!comparableDesktopTitle(old.title)&&comparableDesktopTitle(old.title)===comparableDesktopTitle(request.title)&&desktopSnapshot({...request,inventoryVersion:old.inventoryVersion,title:old.title})===old.snapshot;
+export const desktopCausalSnapshotMatches=(old:DesktopJob,request:DesktopRequest)=>!!comparableDesktopTitle(old.title)&&comparableDesktopTitle(old.title)===comparableDesktopTitle(request.title)&&desktopSnapshot({...request,inventoryVersion:old.inventoryVersion,title:old.title,inventoryFingerprint:old.inventoryFingerprint})===old.snapshot;
 export function newDesktopJob(r:DesktopRequest,now:number):DesktopJob {
  if(!/^[a-f0-9]{64}$/.test(r.candidateId)||!r.inventoryId||!r.inventoryVersion||!r.title||!r.externalId||r.externalId.length>200||!r.orderId||r.purpose!=='IDENTIFY_SALE'&&!r.imageKeys.length||r.imageKeys.length>20||r.imageKeys.some(k=>!k||k.length>1000)||r.purpose==='STOCK'&&(!Number.isSafeInteger(r.targetQuantity)||r.targetQuantity!<0))throw Error('DESKTOP_INPUT_REQUIRED');
  const id=desktopJobId(r),at=new Date(now).toISOString();

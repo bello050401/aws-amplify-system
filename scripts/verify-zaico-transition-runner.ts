@@ -178,6 +178,102 @@ async function main(){
     await h.tick();assert.equal(h.remotes.get('1')!.title,'first');assert.equal(h.rows.get('one')!.name,'second');
     await h.tick();assert.equal(h.remotes.get('1')!.title,'second');
   });
+  await test('Verification preserves concurrent ZAICO fields instead of echoing older BELLO values',async()=>{
+    const h=harness();h.seed();await h.run();h.rows.get('one')!.name='BELLO name';
+    h.afterPatch=()=>{h.remotes.get('1')!.etc='ZAICO concurrent note';h.afterPatch=undefined;};
+    await h.tick();h.calls.length=0;await h.tick();
+    assert.equal(h.rows.get('one')!.note,'ZAICO concurrent note');
+    assert.equal(h.remotes.get('1')!.etc,'ZAICO concurrent note');
+    assert.equal(h.calls.filter(c=>c.method==='PATCH').length,0);
+  });
+  await test('Concurrent verification field wins later collision while independent zero edit survives',async()=>{
+    const h=harness();h.seed();await h.run();h.rows.get('one')!.name='BELLO name';
+    h.afterPatch=()=>{h.remotes.get('1')!.etc='ZAICO concurrent note';h.afterPatch=undefined;};
+    await h.tick();h.rows.get('one')!.note='BELLO later note';h.rows.get('one')!.quantity=0;
+    await h.tick();assert.equal(h.rows.get('one')!.note,'ZAICO concurrent note');
+    assert.equal(h.remotes.get('1')!.etc,'ZAICO concurrent note');assert.equal(h.remotes.get('1')!.quantity,'0');
+    assert.ok(h.states.get('one')!.conflict.fields.some((f:Row)=>f.field==='note'));
+  });
+  await test('Empty clears verify as null while zero and unknown fields remain intact',async()=>{
+    const h=harness();h.seed();h.remotes.get('1')!.optional_attributes!['⚫︎商品ID']='old';
+    h.remotes.get('1')!.optional_attributes!['未知の項目']='  unknown  ';await h.run();
+    h.rows.get('one')!.externalProductId='';h.rows.get('one')!.quantity=0;h.rows.get('one')!.purchasePrice=0;
+    await h.tick();assert.equal(h.states.get('one')!.status,'OK');
+    assert.equal(h.remotes.get('1')!.optional_attributes!['⚫︎商品ID'],'');
+    assert.equal(h.remotes.get('1')!.optional_attributes!['未知の項目'],'  unknown  ');
+    assert.equal(h.remotes.get('1')!.quantity,'0');assert.equal(h.remotes.get('1')!.optional_attributes!['⚫︎購入価格'],'0');
+    assert.equal(localFields(h.rows.get('one')!).externalProductId,null);assert.equal(localFields(h.rows.get('one')!).quantity,0);
+  });
+  await test('Legacy blank rejection recovers only with fresh verification and preserves conflict history',async()=>{
+    const h=harness();h.seed();await h.run();const state=h.states.get('one')!;
+    h.rows.get('one')!.externalProductId='';state.status='WRITE_REJECTED';state.error='old rejection';
+    state.rejectedDesired={...localFields(h.rows.get('one')!),externalProductId:''};
+    state.desired={...state.remoteBase,externalProductId:''};
+    delete state.desired['custom.outboundName'];delete state.rejectedDesired['custom.outboundName'];
+    state.conflict={at:'historical',fields:[{field:'name'}]};h.calls.length=0;
+    await h.tick();assert.equal(h.states.get('one')!.status,'OK');assert.equal(h.states.get('one')!.error,null);
+    assert.ok(h.calls.some(c=>c.method==='GET'));assert.equal(h.calls.filter(c=>c.method==='PATCH').length,0);
+    assert.equal(h.states.get('one')!.conflict.at,'historical');
+  });
+  await test('Null does not release a rejected zero write',async()=>{
+    const h=harness();h.seed();h.remotes.get('1')!.optional_attributes!['⚫︎購入価格']=null;await h.run();
+    h.rows.get('one')!.purchasePrice=0;h.refusePatch=true;await h.tick();
+    assert.equal(h.states.get('one')!.status,'WRITE_REJECTED');h.calls.length=0;await h.tick();
+    assert.equal(h.states.get('one')!.status,'WRITE_REJECTED');assert.equal(h.rows.get('one')!.purchasePrice,0);
+    assert.equal(h.calls.filter(c=>c.method==='PATCH').length,0);
+  });
+  await test('Resumed frozen window cannot roll a newer observed item back or replay an older tombstone',async()=>{
+    for(const deleted of [false,true]){
+      const h=harness();h.seed();h.remotes.get('1')!.updated_at='2026-10-21T09:00:00Z';await h.run();
+      const stale=clone(h.remotes.get('1')!);stale.deleted=deleted;
+      h.remotes.get('1')!.title='newer ZAICO';h.remotes.get('1')!.updated_at='2026-10-21T09:30:00Z';await h.tick();
+      const key='frozen-replay';const end='2026-10-21T09:10:00Z';
+      h.archives.set(key,{remote:[stale],end,initial:false,full:false});
+      h.control={...h.control,work:{key,index:0,end,initial:false,full:false}};
+      await h.run();assert.equal(h.rows.get('one')!.name,'newer ZAICO');
+      assert.equal(h.states.get('one')!.remote.updated_at,'2026-10-21T09:30:00Z');
+      assert.equal(h.states.get('one')!.status,'OK');
+    }
+  });
+  await test('Missing or invalid source dates cannot suppress genuine incoming changes',async()=>{
+    const h=harness();h.seed();await h.run();h.states.get('one')!.remote.updated_at='2026-10-21T09:30:00Z';
+    h.remotes.get('1')!.title='undated change';await h.tick();assert.equal(h.rows.get('one')!.name,'undated change');
+    h.remotes.get('1')!.title='invalid date change';h.remotes.get('1')!.updated_at='invalid';
+    await h.tick();assert.equal(h.rows.get('one')!.name,'invalid date change');
+  });
+  await test('Undated updates retain source ordering against older frozen replays',async()=>{
+    const h=harness();h.seed();h.remotes.get('1')!.updated_at='2026-10-21T09:30:00Z';await h.run();
+    const stale=clone(h.remotes.get('1')!);stale.updated_at='2026-10-21T09:00:00Z';
+    delete h.remotes.get('1')!.updated_at;h.remotes.get('1')!.title='genuine undated update';await h.tick();
+    assert.equal(h.states.get('one')!.remoteUpdatedAt,'2026-10-21T09:30:00Z');
+    const key='dated-after-undated',end='2026-10-21T09:10:00Z';
+    h.archives.set(key,{remote:[stale],end,initial:false,full:false});
+    h.control={...h.control,work:{key,index:0,end,initial:false,full:false}};await h.run();
+    assert.equal(h.rows.get('one')!.name,'genuine undated update');
+  });
+  await test('Older verification GET cannot move the confirmed remote snapshot backward',async()=>{
+    const h=harness();h.seed();h.remotes.get('1')!.updated_at='2026-10-21T09:30:00Z';await h.run();
+    const stale=clone(h.remotes.get('1')!);stale.updated_at='2026-10-21T09:00:00Z';stale.title='BELLO update';
+    h.rows.get('one')!.name='BELLO update';const get=h.port.api.get;let afterWrite=false;
+    h.afterPatch=()=>{afterWrite=true;h.afterPatch=undefined;};
+    h.port.api.get=async id=>afterWrite?clone(stale):get(id);await h.tick();
+    assert.equal(h.states.get('one')!.status,'ERROR');
+    assert.equal(h.states.get('one')!.remote.updated_at,'2026-10-21T09:30:00Z');
+    assert.equal(h.states.get('one')!.remoteBase.name,'ZAICOの商品');
+    h.port.api.get=get;await h.tick();assert.equal(h.states.get('one')!.status,'OK');
+    assert.equal(h.rows.get('one')!.name,'BELLO update');
+  });
+  await test('Unapplied invalid payload preserves evidence without advancing source ordering',async()=>{
+    const h=harness();h.seed();h.remotes.get('1')!.updated_at='2026-10-21T09:30:00Z';await h.run();
+    h.remotes.get('1')!.quantity='1.5';h.remotes.get('1')!.updated_at='2026-10-21T10:00:00Z';await h.tick();
+    assert.equal(h.states.get('one')!.status,'ERROR');
+    assert.equal(h.states.get('one')!.remoteUpdatedAt,'2026-10-21T09:30:00Z');
+    assert.equal(h.states.get('one')!.remote.updated_at,'2026-10-21T09:30:00Z');
+    assert.ok(h.archives.has(h.states.get('one')!.remoteErrorBackup));
+    h.remotes.get('1')!.quantity='3';h.remotes.get('1')!.updated_at='2026-10-21T09:45:00Z';
+    h.remotes.get('1')!.title='valid retry';await h.tick();assert.equal(h.rows.get('one')!.name,'valid retry');
+    assert.equal(h.states.get('one')!.status,'OK');
+  });
   await test('STOPPED performs zero local scans or external calls',async()=>{
     const h=harness();h.control={...h.control,phase:'STOPPED'};
     h.port.inventories=async()=>{throw Error('should not scan');};await h.run();assert.equal(h.calls.length,0);

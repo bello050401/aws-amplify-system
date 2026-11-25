@@ -1,6 +1,6 @@
 import 'server-only';
 import {GetCommand} from '@aws-sdk/lib-dynamodb';
-import {getInventoryRaw} from '../inventory/categoryPersistence';
+import {getInventoryRaw,inventoryTable} from '../inventory/categoryPersistence';
 import {econveniDatabase,ECONVENI_WORKFLOW_TABLE} from '../listing/econveni/runtimeStore';
 import {createDesktopJobStore} from './desktopJobStore';
 import type {SaleCandidate} from './model';
@@ -11,6 +11,7 @@ import {settledYahooContinuation} from './yahooSettlementContinuationServer';
 import {desktopCausalSnapshotMatches,type DesktopJob} from './desktopJobModel';
 import {canReuseMercariIdentification,completedDesktopStockReceipt,desktopSuccessorWakeWrites,type DesktopSuccessor} from './desktopCompletion';
 import {postSaleJobId} from './postSaleQueueCore';
+import {canContinueDesktopInventory,desktopInventoryFingerprint} from './desktopInventoryContinuation';
 export {desktopImageKeys} from './desktopImages';
 
 export const desktopJobs=createDesktopJobStore(econveniDatabase,ECONVENI_WORKFLOW_TABLE);
@@ -47,9 +48,11 @@ export async function desktopCompletionWakes(candidateId:string){
 export async function postSaleMercariComplete(input:{candidateId:string;inventoryId:string;inventoryVersion:string;externalId:string;title:string;targetQuantity:number}):Promise<boolean>{
  const [item,c]=await Promise.all([getInventoryRaw(input.inventoryId),candidateStore().get(input.candidateId)]);
  if(!item||item.updatedAt!==input.inventoryVersion||c?.state!=='DONE'||c.result?.sourceId!==input.inventoryId||c.result.remainingQuantity!==input.targetQuantity||!c.orderId)return false;
- const request:DesktopRequest={purpose:'STOCK',...input,imageKeys:await desktopImageKeys(item),orderId:c.orderId,orderLineId:c.orderLineId??''};
+ const request:DesktopRequest={purpose:'STOCK',...input,imageKeys:await desktopImageKeys(item),orderId:c.orderId,orderLineId:c.orderLineId??'',inventoryFingerprint:desktopInventoryFingerprint(item)};
  const job=await desktopJobs.get(desktopJobs.id(request));
+ if(job&&!job.inventoryFingerprint)delete request.inventoryFingerprint;
  if(completedDesktopStockReceipt(request,job))return true;
+ if(job&&canContinueDesktopInventory(job,request,c,item))return completedDesktopStockReceipt(request,job,true);
  return !!job&&await canRebaseDesktopAfterYahooPayment(job,request)&&completedDesktopStockReceipt(request,job,true);
 }
 export async function postSaleMercari(input:{candidateId:string;inventoryId:string;inventoryVersion:string;externalId:string;title:string;targetQuantity:number}):Promise<{status:'DONE'|'WAIT'|'REVIEW'|'VERIFY_REQUIRED';nextAt?:number;message:string}> {
@@ -57,11 +60,19 @@ export async function postSaleMercari(input:{candidateId:string;inventoryId:stri
  if(!item||item.updatedAt!==input.inventoryVersion||candidate?.state!=='DONE'||candidate.result?.sourceId!==input.inventoryId||!candidate.orderId)return {status:'REVIEW',message:'在庫と注文の対応を確認してください。'};
  const images=await desktopImageKeys(item);
  if(!images.length)return {status:'REVIEW',message:'照合に使う在庫画像がありません。'};
- const request:DesktopRequest={purpose:'STOCK',...input,imageKeys:images,orderId:candidate.orderId,orderLineId:candidate.orderLineId??''};
+ const request:DesktopRequest={purpose:'STOCK',...input,imageKeys:images,orderId:candidate.orderId,orderLineId:candidate.orderLineId??'',inventoryFingerprint:desktopInventoryFingerprint(item)};
+ const previous=await desktopJobs.get(desktopJobs.id(request));
+ // An old receipt has no historical fingerprint. Preserve its original hash;
+ // never retrofit current stock as proof of what that receipt originally saw.
+ if(previous&&!previous.inventoryFingerprint)delete request.inventoryFingerprint;
  let {job,matches}=await desktopJobs.ensure(request);
+ if(!matches&&canContinueDesktopInventory(job,request,candidate,item)){
+  if(job.state==='COMPLETE')return {status:'DONE',message:'同じ注文・商品・数量のPC確認記録を保持しています。'};
+  job=await desktopJobs.rebase(job,request,{table:inventoryTable('Inventory'),id:request.inventoryId,version:request.inventoryVersion});matches=true;
+ }
  if(!matches&&job.state!=='ATTENTION'&&await canRebaseDesktopAfterYahooPayment(job,request)){
   if(job.state==='COMPLETE')return {status:'DONE',message:'入金後も同じ注文のPC数量確認記録を保持しています。'};
-  if(!job.writeStartedAt){job=await desktopJobs.rebase(job,request);matches=true;}
+  if(job.state==='WAITING'&&!job.writeStartedAt){job=await desktopJobs.rebase(job,request,{table:inventoryTable('Inventory'),id:request.inventoryId,version:request.inventoryVersion});matches=true;}
   else return {status:'WAIT',nextAt:Date.now()+60000,message:'入金前に開始したPC変更を再送せず、実際の数量を読み直します。'};
  }
  if(!matches||job.state==='ATTENTION')return {status:'REVIEW',message:'PC照合の対象または受付状態を確認してください。'};
@@ -72,8 +83,11 @@ export async function canRebaseDesktopAfterYahooPayment(job:DesktopJob,request:D
  return job.purpose==='STOCK'&&desktopCausalSnapshotMatches(job,request)&&await settledYahooContinuation(job.candidateId,job.inventoryId,job.inventoryVersion,job.targetQuantity!);
 }
 export async function refreshDesktopJobAfterYahooPayment(job:DesktopJob):Promise<DesktopJob>{
- if(job.purpose!=='STOCK'||job.writeStartedAt||job.state==='COMPLETE'||job.state==='ATTENTION')return job;
+ job=await desktopJobs.age(job);
+ if(job.purpose!=='STOCK'||job.writeStartedAt||job.state!=='WAITING')return job;
  const item=await getInventoryRaw(job.inventoryId);if(!item||item.updatedAt===job.inventoryVersion)return job;
- const request:DesktopRequest={...job,title:String(item.name),inventoryVersion:String(item.updatedAt),imageKeys:await desktopImageKeys(item)};
- return await canRebaseDesktopAfterYahooPayment(job,request)?desktopJobs.rebase(job,request):job;
+ const request:DesktopRequest={...job,title:String(item.name),inventoryVersion:String(item.updatedAt),imageKeys:await desktopImageKeys(item),...(job.inventoryFingerprint?{inventoryFingerprint:desktopInventoryFingerprint(item)}:{})};
+ const candidate=job.inventoryFingerprint?await candidateStore().get(job.candidateId):undefined;
+ const allowed=canContinueDesktopInventory(job,request,candidate,item)||await canRebaseDesktopAfterYahooPayment(job,request);
+ return allowed?desktopJobs.rebase(job,request,{table:inventoryTable('Inventory'),id:request.inventoryId,version:request.inventoryVersion}):job;
 }

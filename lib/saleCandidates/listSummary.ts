@@ -1,11 +1,13 @@
 import 'server-only';
 import {inventoryAuthMode,serverDataClient} from '../amplify/dataClient';
 import type {SaleCandidate} from './model';
+import {yahooReservationWarning} from './yahooReservationIntegrity';
 
 // Only current sale amounts are returned to candidate cards, never full custom fields or images.
 // Keep the existing authenticated AppSync boundary and deduplicate within this request only.
 export async function withCurrentSaleSummary(candidates:SaleCandidate[]):Promise<SaleCandidate[]>{
- const selectionSet=['name','salePrice','saleCommission','saleEndDate','externalProductId','deletedAt','customFields'] as const;
+ const selectionSet=['id','name','salePrice','saleCommission','saleEndDate','externalProductId','deletedAt','customFields',
+  'quantity','market','categoryId','categoryIds','listingPartition','outboundBatchId','outboundArrivalBatchId'] as const;
  const read=(id:string)=>serverDataClient.models.Inventory.get({id},{...inventoryAuthMode,selectionSet});
  const pending=new Map<string,ReturnType<typeof read>>();
  return Promise.all(candidates.map(async candidate=>{
@@ -17,7 +19,7 @@ export async function withCurrentSaleSummary(candidates:SaleCandidate[]):Promise
   if(candidate.result?.quantityDeferred){
    let marker;try{marker=(typeof item?.customFields==='string'?JSON.parse(item.customFields):item?.customFields)?.__belloYahooPayment;}catch{}
    const request=marker?.candidateId===candidate.id?marker.request:undefined;
-   return {...candidate,...(request?{name:request.name,completedSale:{quantity:request.quantity,total:request.salePrice,commission:request.saleCommission,shippingReceived:request.saleShippingReceived??null,date:'',identifier:request.externalProductId}}:{})};
+   return {...candidate,yahooInventoryWarning:yahooReservationWarning(candidate,item),...(request?{name:request.name,completedSale:{quantity:request.quantity,total:request.salePrice,commission:request.saleCommission,shippingReceived:request.saleShippingReceived??null,date:'',identifier:request.externalProductId}}:{})};
   }
   let shippingReceived:number|null=null;
   try{const custom=typeof item?.customFields==='string'?JSON.parse(item.customFields):item?.customFields;const n=custom?.__belloSale?.shippingReceived;if(Number.isSafeInteger(n)&&n>=0)shippingReceived=n;}catch{}

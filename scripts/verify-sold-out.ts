@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {randomUUID} from 'node:crypto';
 import {GetCommand,BatchGetCommand,TransactWriteCommand,type DynamoDBDocumentClient} from '@aws-sdk/lib-dynamodb';
-import {createSoldOutService} from '../lib/inventory/soldOutCore';
+import {createSoldOutService,type SoldOutPorts} from '../lib/inventory/soldOutCore';
 import {japanToday,type SoldOutRequest} from '../lib/inventory/soldOutInput';
 import {createCandidateStore} from '../lib/saleCandidates/storeCore';
 import type {SaleCandidate} from '../lib/saleCandidates/model';
@@ -12,7 +12,7 @@ import {summarizeSales} from '../lib/inventory/sales';
 import {buildMonthlyAggregates} from '../lib/inventory/salesAggregate';
 import {stockCountTitle} from '../lib/inventory/stockCountTitle';
 
-function fixture(quantity=5,withCandidate=false) {
+function fixture(quantity=5,withCandidate=false,overrides:Partial<SoldOutPorts>={}) {
   const id=randomUUID(), time='2026-10-24T01:00:00.000Z';
   const source={id,sku:'B-SOURCE',name:'椅子（元の商品名）',quantity,updatedAt:time,createdAt:'2026-09-01T00:00:00.000Z',categoryId:'active',categoryIds:['active','other'],locationId:'location',barcode:'SHARED-CODE',purchasePrice:1234,transactionDate:'2026-09-01',counterpartyName:'仕入先',purchaseQuantity:5,dailyPurchaseTotal:6170,salePrice:10000,market:'ヤフオク',externalProductId:'old-id',note:'元の備考',customFields:JSON.stringify({seatDimensions:'40cm',__belloEditedFields:['note'],__belloZaicoUnconvertedValues:[]}),images:[{storageKey:'inventory/source.jpg',type:'NORMAL'},{storageKey:'inventory/damage.jpg',type:'DAMAGE'}],sourceSystem:'ZAICO',sourceInventoryId:'98765',listingPartition:'ACTIVE'};
   let rows=new Map<string,any>([[`Inventory/${id}`,structuredClone(source)],...['active','sold','other'].map(x=>[`Category/${x}`,{id:x}]) as [string,any][]]);
@@ -47,11 +47,28 @@ function fixture(quantity=5,withCandidate=false) {
     if(state.lost)throw Object.assign(Error('lost response'),{name:'TimeoutError'});
     return {};
   }} as unknown as DynamoDBDocumentClient;
-  const run=createSoldOutService({db,table:x=>x,categories:async()=>[{id:'active',name:'販売中'},{id:'sold',name:'売り切れ'},{id:'other',name:'業者間'}],nextSku:async()=>`NEW-${randomUUID()}`,now:()=>time,copyPhotos:async(row,child)=>{state.copies++;if(state.photoFailure)throw Error('copy failed');return (row.images as Record<string,unknown>[]).map((image:any)=>({...image,storageKey:`inventory/${child}/${image.type}.jpg`}));},discardPhotos:async()=>{state.deleted++;},...(withCandidate?{saleCommit:(result:any,now:string)=>createCandidateStore(db,'Candidates').commit(candidate,'actor',result,now)}:{})});
+  const run=createSoldOutService({db,table:x=>x,categories:async()=>[{id:'active',name:'販売中'},{id:'sold',name:'売り切れ'},{id:'other',name:'業者間'}],nextSku:async()=>`NEW-${randomUUID()}`,now:()=>time,copyPhotos:async(row,child)=>{state.copies++;if(state.photoFailure)throw Error('copy failed');return (row.images as Record<string,unknown>[]).map((image:any)=>({...image,storageKey:`inventory/${child}/${image.type}.jpg`}));},discardPhotos:async()=>{state.deleted++;},...(withCandidate?{saleCommit:(result:any,now:string)=>createCandidateStore(db,'Candidates').commit(candidate,'actor',result,now)}:{}),...overrides});
   const request:SoldOutRequest={inventoryId:id,mutationId:randomUUID(),expectedUpdatedAt:time,quantity:1,name:'売却分の商品名',saleEndDate:'2026-10-20',externalProductId:'sale-id',market:'直接取引',salePrice:5000};
   if(withCandidate){request.sourceCandidateId=candidate.id;request.saleCommission=0;}
   return {source,state,run,request,candidate,get:(key:string)=>rows.get(`Inventory/${key}`),inventory:()=>[...rows].filter(([k])=>k.startsWith('Inventory/')).map(([,v])=>v),rows:()=>rows};
 }
+test('Yahoo payment settlement tolerates only category order changes, not missing or added categories',async()=>{
+ for(const [categories,allowed] of [[['other','active'],true],[['active'],false],[['active','other','extra'],false]] as const){
+  const candidateId='a'.repeat(64),auctionId='sale-id';
+  const f=fixture(3,false,{yahooPayment:{candidateId,auctionId,waiting:false,paidAt:'2026-10-24T01:00:00.000Z'},settlingYahooPayment:true});
+  const request={...f.request,market:'ヤフオク',sourceCandidateId:candidateId,saleCommission:0};
+  const marker={state:'WAITING',quantityDeferred:true,candidateId,auctionId,sourceQuantity:3,sourceMarket:f.source.market,sourceExternalProductId:f.source.externalProductId,beforeCategoryIds:['active','other'],waitingCategoryIds:['active','other'],request};
+  f.rows().set('Inventory/'+f.source.id,{...f.source,categoryId:categories[0],categoryIds:[...categories],customFields:JSON.stringify({__belloYahooPayment:marker})});
+  if(allowed){
+   const result=await f.run(request,'actor');assert.equal(result.remainingQuantity,2);assert.equal(f.get(result.soldId).quantity,1);assert.equal(f.get(result.sourceId).quantity,2);
+   assert.deepEqual(f.get(result.soldId).categoryIds,['other','sold']);assert.equal(JSON.parse(f.get(result.soldId).customFields).__belloYahooPayment.state,'APPLIED');
+   assert.deepEqual(await f.run(request,'actor'),result);assert.equal(f.state.transactions,1);
+  }else{
+   await assert.rejects(()=>f.run(request,'actor'),/入金待ちの商品情報が変更/);assert.equal(f.state.transactions,0);assert.equal(f.state.copies,0);assert.equal(f.get(f.source.id).quantity,3);
+  }
+ }
+});
+
 for(const [available,sold] of [[1,1],[5,2],[5,5],[10,1]])test(`${available}→${sold}: quantities, split identity, values and photos`,async()=>{
   const f=fixture(available),result=await f.run({...f.request,quantity:sold},'actor');
   const product=f.get(result.soldId);assert.equal(product.quantity,sold);assert.equal(product.name,f.request.name);assert.equal(product.saleEndDate,'2026-10-20');assert.equal(product.market,'直接取引');assert.equal(product.salePrice,5000);assert.equal(product.externalProductId,'sale-id');assert.deepEqual(product.categoryIds,['other','sold']);

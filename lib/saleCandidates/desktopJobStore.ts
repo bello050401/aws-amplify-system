@@ -13,9 +13,10 @@ export function createDesktopJobStore(db:Db,table:string,now=()=>Date.now()) {
  const ensure=async(request:DesktopRequest)=>{
   const fresh=newDesktopJob(request,now());let saved=await get(fresh.id);
   if(!saved){try{await db.send(new PutCommand({TableName:table,Item:fresh,ConditionExpression:'attribute_not_exists(pk)'}));return {job:fresh,matches:true};}catch(error){saved=await get(fresh.id);if(!saved)throw error;}}
-  const matches=saved.snapshot===desktopSnapshot(request);
-  if(!matches)return {job:saved,matches:false};
-  try{return {job:await cas(saved,ageDesktopJob(saved,now())),matches:true};}catch(error){const current=await get(saved.id);if(!current)throw error;return {job:current,matches:current.snapshot===fresh.snapshot};}
+  // Aging depends only on the durable receipt, even when the inventory version
+  // changed. Otherwise an expired CLAIMED receipt can never become idle again.
+  try{saved=await cas(saved,ageDesktopJob(saved,now()));}catch(error){const current=await get(saved.id);if(!current)throw error;saved=current;}
+  return {job:saved,matches:saved.snapshot===desktopSnapshot(request)};
  };
  const claim=async(id:string,actor:string)=>{const job=await get(id);if(!job)throw Error('DESKTOP_NOT_FOUND');const aged=ageDesktopJob(job,now());if(aged.state==='ATTENTION'){await cas(job,aged);throw Error('DESKTOP_NOT_CLAIMABLE');}return cas(job,claimDesktopJob(aged,actor,now()));};
  const startWrite=async(id:string,actor:string,lease:string,evidence:DesktopEvidence,guard:{table:string;id:string;version:string},checks:Writes=[])=>{
@@ -47,14 +48,19 @@ export function createDesktopJobStore(db:Db,table:string,now=()=>Date.now()) {
   }
   throw Error('DESKTOP_SCAN_UNREACHABLE');
  };
- const rebase=async(old:DesktopJob,request:DesktopRequest)=>{
-  if(old.purpose!=='STOCK'||old.writeStartedAt||['COMPLETE','ATTENTION'].includes(old.state)||desktopJobId(request)!==old.id||!desktopCausalSnapshotMatches(old,request))throw Error('DESKTOP_REBASE_FORBIDDEN');
-  return cas(old,{...old,...request,snapshot:desktopSnapshot(request),state:'WAITING',actor:undefined,lease:undefined,leaseUntil:undefined,version:randomUUID(),updatedAt:new Date(now()).toISOString()});
+ const rebase=async(old:DesktopJob,request:DesktopRequest,guard?:{table:string;id:string;version:string})=>{
+  if(old.purpose!=='STOCK'||old.writeStartedAt||old.state!=='WAITING'||desktopJobId(request)!==old.id||!desktopCausalSnapshotMatches(old,request)||guard&&(guard.id!==request.inventoryId||guard.version!==request.inventoryVersion))throw Error('DESKTOP_REBASE_FORBIDDEN');
+  const next:DesktopJob={...old,...request,snapshot:desktopSnapshot(request),state:'WAITING',actor:undefined,lease:undefined,leaseUntil:undefined,version:randomUUID(),updatedAt:new Date(now()).toISOString()};
+  if(!guard)return cas(old,next);
+  await db.send(new TransactWriteCommand({TransactItems:[
+   {ConditionCheck:{TableName:guard.table,Key:{id:guard.id},ConditionExpression:'updatedAt=:v',ExpressionAttributeValues:{':v':guard.version}}},
+   {Put:{TableName:table,Item:next,ConditionExpression:'#v=:v',ExpressionAttributeNames:{'#v':'version'},ExpressionAttributeValues:{':v':old.version}}}
+  ]}));return next;
  };
  const recordIssue=async(id:string,actor:string,lease:string,code:unknown)=>{const old=await get(id);if(!old)throw Error('DESKTOP_NOT_FOUND');return cas(old,recordDesktopIssue(old,actor,lease,code,now()));};
  const holdRecordedSale=async(id:string)=>{
   const old=await get(id);if(!old||old.purpose!=='IDENTIFY_SALE'||old.state==='COMPLETE'||old.state==='WRITE_STARTED'||old.writeStartedAt||old.reason==='MERCARI_ORDER_ALREADY_RECORDED')return old;
   return cas(old,{...old,state:'ATTENTION',reason:'MERCARI_ORDER_ALREADY_RECORDED',version:randomUUID(),updatedAt:new Date(now()).toISOString()});
  };
- return {get,ensure,claim,startWrite,finish,list,rebase,recordIssue,holdRecordedSale,id:desktopJobId};
+ return {get,ensure,claim,startWrite,finish,list,rebase,recordIssue,holdRecordedSale,age:(job:DesktopJob)=>cas(job,ageDesktopJob(job,now())),id:desktopJobId};
 }

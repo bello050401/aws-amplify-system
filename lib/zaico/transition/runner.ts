@@ -1,5 +1,5 @@
 import {randomUUID} from 'node:crypto';
-import {applyFields,localFields,outgoingPatch,remoteFields,type Masters,type Row} from './mapping';
+import {applyFields,localFields,normalizeSharedFields,outgoingPatch,remoteFields,type Masters,type Row} from './mapping';
 import {changedFields,equal,reconcileFields,type SharedFields} from './protocol';
 import {ITEM_PREFIX,type Control} from './store';
 import type {V2Inventory} from './v2Client';
@@ -37,6 +37,16 @@ export interface TransitionPort{
 const active=(row:Row|undefined)=>row&&!row.deletedAt&&row.listingPartition!=='MERGED';
 const done=(p:TransitionPort)=>p.now()>=p.deadline-25_000;
 function message(e:unknown){return e instanceof Error?e.message:'同期に失敗しました。';}
+function observedRemoteDate(...states:(Row|undefined)[]){
+  const dates=states.flatMap(state=>[state?.remoteUpdatedAt,state?.remote?.updated_at])
+    .filter((date):date is string=>typeof date==='string'&&Number.isFinite(Date.parse(date)));
+  return dates.sort((a,b)=>Date.parse(b)-Date.parse(a))[0];
+}
+function olderRemote(remote:V2Inventory,state:Row|undefined){
+  const incoming=Date.parse(remote.updated_at??''),observed=Date.parse(observedRemoteDate(state)??'');
+  // Do not invent an ordering for absent/invalid/equal source timestamps.
+  return Number.isFinite(incoming)&&Number.isFinite(observed)&&incoming<observed;
+}
 function assignedCreateCode(state:Row|undefined,local:Row|undefined,remote:SharedFields){
   const assigned=state?.remoteBase?.barcode;
   return active(local)&&state?.desired&&Object.prototype.hasOwnProperty.call(state.desired,'barcode')&&
@@ -60,8 +70,8 @@ export async function runTransition(p:TransitionPort){
   // This field did not exist in older checkpoints. Its initial value was blank,
   // not a concurrent ZAICO deletion. Upgrade in memory without bulk API writes.
   for(const state of states){
-    for(const key of ['localBase','remoteBase'] as const){
-      if(state[key])state[key]={'custom.outboundName':null,...state[key]};
+    for(const key of ['localBase','remoteBase','desired','rejectedDesired'] as const){
+      if(state[key])state[key]=normalizeSharedFields({'custom.outboundName':null,...state[key]});
     }
   }
   const byId=new Map(rows.map(row=>[row.id,row]));
@@ -72,7 +82,12 @@ export async function runTransition(p:TransitionPort){
     bySource.set(String(row.sourceInventoryId),row);
   }
   const stateById=new Map(states.map(s=>[s.inventoryId,s]));
-  const save=async(s:Row)=>{const result=await p.saveState(s);stateById.set(s.inventoryId,result);return result;};
+  const save=async(s:Row)=>{
+    // An undated response must not discard a previously established ordering.
+    const remoteUpdatedAt=observedRemoteDate(s,stateById.get(s.inventoryId));
+    const result=await p.saveState(remoteUpdatedAt?{...s,remoteUpdatedAt}:s);
+    stateById.set(s.inventoryId,result);return result;
+  };
   const statusSummary=()=>({
     rawCount:[...stateById.values()].filter(s=>s.status!=='DELETED'&&s.rawValues&&Object.keys(s.rawValues).length).length,
     issueIds:[...stateById.values()].filter(s=>(!['OK','DELETED'].includes(s.status))||(s.conflict&&!s.conflictAcknowledgedAt))
@@ -92,6 +107,7 @@ export async function runTransition(p:TransitionPort){
     await p.api.patch(state.sourceId,{item_image:encoded});
     const verified=await p.api.get(state.sourceId);
     if(!verified||verified.deleted||!verified.item_image?.url)throw Error('ZAICOへの写真保存を確認できません。次回同期で再確認します。');
+    if(olderRemote(verified,{...state,remote}))throw Error('ZAICOの写真確認が古いため次回再確認します。');
     await save({...state,remote:verified,imageExport:{fingerprint:photo.fingerprint,url:verified.item_image.url},imageAttempt:null,status:'OK',error:null});
   }
 
@@ -99,6 +115,9 @@ export async function runTransition(p:TransitionPort){
     const sourceId=String(remote.id);
     const linked=bySource.get(sourceId);
     let state=linked?stateById.get(linked.id):[...stateById.values()].find(s=>s.sourceId===sourceId);
+    // Windows are immutable and may be replayed after a newer authoritative
+    // GET was checkpointed. Reject older snapshots before deletes or imports.
+    if(olderRemote(remote,state))return;
     // A previous successful checkpoint must not erase a user edit on replay.
     if(initial&&state?.initialRunId===control.initialRunId&&state.status==='OK')return;
     let local=linked?await p.inventory(linked.id):state?await p.inventory(state.inventoryId):undefined;
@@ -129,7 +148,9 @@ export async function runTransition(p:TransitionPort){
       local=await p.saveInventory({id:local!.id,barcode:assigned,updatedBy:'ZAICO暫定同期'},local!.updatedAt);
       state={...state,localBase:{...state.localBase,barcode:assigned}};
     }
-    if(state?.status==='WRITE_REJECTED'&&local&&equal(proposed.fields,state.remoteBase)&&equal(localFields(local),state.rejectedDesired))return;
+    // A frozen list is not evidence that a rejected write was accepted. The
+    // outbound pass verifies the original request against a fresh item GET.
+    if(state?.status==='WRITE_REJECTED'&&local&&equal(localFields(local),state.rejectedDesired))return;
     if(!active(local)&&state&&!initial){
       // A local deletion is a pending outbound operation, not a request to
       // recreate the page from every incoming delta. Reconcile in local pass.
@@ -138,7 +159,7 @@ export async function runTransition(p:TransitionPort){
     if(local?.outboundBatchId)throw Error('出庫処理中のため同期を次回に延期します。');
     let changes=proposed.fields,conflicts:unknown[]=[];
     if(!initial&&local&&state?.localBase){
-      const decision=reconcileFields(state.remoteBase,localFields(local),proposed.fields);
+      const decision=reconcileFields(state.localBase,localFields(local),proposed.fields);
       changes=decision.toBello;conflicts=decision.conflicts;
     }
     if(!local){
@@ -227,7 +248,10 @@ export async function runTransition(p:TransitionPort){
       const linked=bySource.get(String(remote.id));
       const id=linked?.id??`remote-${remote.id}`;
       const state=stateById.get(id);
-      await save({...state,id:ITEM_PREFIX+id,inventoryId:id,sourceId:String(remote.id),remote,status:'ERROR',error:message(e)});
+      // Keep failed payload evidence without replacing the confirmed source
+      // snapshot or advancing its ordering watermark from an unapplied item.
+      const remoteErrorBackup=await p.archive('remote-error',{remote,error:message(e)});
+      await save({...state,id:ITEM_PREFIX+id,inventoryId:id,sourceId:String(remote.id),remoteErrorBackup,status:'ERROR',error:message(e)});
     }
     // Item baselines make replay safe; avoid thousands of control writes.
     if((index+1)%25===0||index+1===window.remote.length)
@@ -281,7 +305,6 @@ export async function runTransition(p:TransitionPort){
     if(local?.updatedAt&&local.updatedBy!=='ZAICO暫定同期'&&p.now()-Date.parse(local.updatedAt)<15_000){pending++;continue;}
     const alive=!!active(local);
     const desired=alive?localFields(local!):{};
-    if(state?.status==='WRITE_REJECTED'&&equal(desired,state.rejectedDesired)){pending++;continue;}
     const changed=state?.localBase?changedFields(state.localBase,desired):desired;
     if(alive&&state&&Object.keys(changed).length===0&&state.status==='OK'&&(!p.readPrimaryImage||!needsPhoto(local,state)))continue;
     if(!alive&&state?.deletedConfirmed)continue;
@@ -318,6 +341,7 @@ export async function runTransition(p:TransitionPort){
       }
       // A real upstream read is mandatory immediately before every outbound write.
       const fresh=await p.api.get(state.sourceId);
+      if(fresh&&olderRemote(fresh,state)){pending++;await checkpoint();continue;}
       if(!fresh||fresh.deleted){
         await acceptRemote({id:Number(state.sourceId),deleted:true} as V2Inventory,false);
         await checkpoint();
@@ -331,6 +355,10 @@ export async function runTransition(p:TransitionPort){
         continue;
       }
       const current=await remoteFields(fresh,masters);
+      if(state.status==='WRITE_REJECTED'&&equal(desired,state.rejectedDesired)&&
+        (!state.desired||!equal(state.desired,current.fields))){
+        pending++;await checkpoint();continue;
+      }
       if(!alive){
         if(!equal(state.remoteBase,current.fields)||!equal(state.remote?.item_image,fresh.item_image)||
           (state.remote?.updated_at&&fresh.updated_at&&state.remote.updated_at!==fresh.updated_at)){
@@ -353,7 +381,10 @@ export async function runTransition(p:TransitionPort){
         state=stateById.get(id)!;local=await p.inventory(id);
       }
       if(!local)continue;
-      const decision=reconcileFields(state.remoteBase,localFields(local),current.fields);
+      // localBase is the last version actually applied/sent from BELLO. A
+      // verification GET can observe additional upstream edits in remoteBase;
+      // comparing BELLO against that newer snapshot would echo old values back.
+      const decision=reconcileFields(state.localBase,localFields(local),current.fields);
       if(Object.keys(decision.toBello).length||decision.conflicts.length){
         await acceptRemote(fresh,false);
         state=stateById.get(id)!;local=await p.inventory(id);
@@ -366,6 +397,7 @@ export async function runTransition(p:TransitionPort){
         await p.api.patch(state.sourceId,outgoingPatch(toSend,fresh,masters));
         const verified=await p.api.get(state.sourceId);
         if(!verified)throw Error('更新後のZAICO商品を確認できませんでした。');
+        if(olderRemote(verified,{...state,remote:fresh}))throw Error('更新後のZAICO確認が古いため次回再確認します。');
         const actual=await remoteFields(verified,masters);
         const refused=Object.keys(toSend).filter(key=>!equal(toSend[key],actual.fields[key]));
         if(refused.length){
@@ -375,12 +407,12 @@ export async function runTransition(p:TransitionPort){
         // Store only the version actually sent. A concurrent edit remains pending.
         const latest=await p.inventory(id);
         if(latest)await p.saveSourceDates(latest,verified,equal(localFields(latest),actual.fields));
-        state=await save({...state,remote:verified,remoteBase:actual.fields,localBase:{...state.localBase,...decision.toBello,...toSend},status:'OK',error:null,desired:null});
+        state=await save({...state,remote:verified,remoteBase:actual.fields,localBase:{...state.localBase,...decision.toBello,...toSend},status:'OK',error:null,desired:null,rejectedDesired:null});
         await fillPhoto(local,state,verified);
       }else{
         const latest=await p.inventory(id);
         if(latest)await p.saveSourceDates(latest,fresh,equal(localFields(latest),current.fields));
-        state=await save({...state,remote:fresh,remoteBase:current.fields,localBase:{...state.localBase,...decision.toBello},status:'OK',error:null});
+        state=await save({...state,remote:fresh,remoteBase:current.fields,localBase:{...state.localBase,...decision.toBello},status:'OK',error:null,desired:null,rejectedDesired:null});
         await fillPhoto(local,state,fresh);
       }
     }catch(e){

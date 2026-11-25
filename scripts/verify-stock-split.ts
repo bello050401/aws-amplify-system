@@ -46,6 +46,13 @@ test('応答消失・同じ処理の再送で二重分割しない',async()=>{co
 test('同時連打で数量を二重に減らさない',async()=>{const f=fixture();const r=await Promise.all([f.run(f.request,f.owner),f.run(f.request,f.owner)]);assert.deepEqual(r[0],r[1]);assert.equal(f.get(f.source.id).quantity,3);assert.equal(f.stocks().length,2);});
 test('別端末の同時分割は片方だけ成功',async()=>{const f=fixture();const r=await Promise.allSettled([f.run(f.request,f.owner),f.run({...f.request,mutationId:randomUUID()},f.owner)]);assert.equal(r.filter(v=>v.status==='fulfilled').length,1);assert.equal(f.get(f.source.id).quantity,3);});
 test('出庫中と到着待ちの在庫は分割しない',async()=>{for(const field of ['outboundBatchId','outboundArrivalBatchId']){const f=fixture();f.set({...f.source,[field]:'pending'});await assert.rejects(f.run(f.request,f.owner));assert.equal(f.state.transactions,0);}});
+
+test('ヤフオク入金待ち予約は数量と注文を確認するまで分割しない',async()=>{
+ const f=fixture(),pending={...f.source,customFields:JSON.stringify({material:'木',__belloYahooPayment:{state:'WAITING',quantityDeferred:true,candidateId:'order-candidate',auctionId:'g1247424811',sourceQuantity:5}})};
+ f.set(pending);
+ await assert.rejects(f.run(f.request,f.owner),/入金待ち/);
+ assert.deepEqual(f.get(f.source.id),pending);assert.equal(f.state.transactions,0);assert.equal(f.state.copies,0);
+});
 test('処理IDを変更内容や実行者のすり替えに使えない',async()=>{const f=fixture();await f.run(f.request,f.owner);await assert.rejects(f.run({...f.request,damageNotes:'変更'},f.owner));await assert.rejects(f.run({...f.request,photos:[]},randomUUID()));assert.equal(f.stocks().length,2);});
 
 

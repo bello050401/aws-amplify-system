@@ -37,6 +37,55 @@ test('stable operation identity binds changing snapshot without creating another
  assert.equal(desktopJobId(request),desktopJobId(next));assert.notEqual(j.snapshot,desktopSnapshot(next));
  for(const patch of [{externalId:'other'},{orderId:'other'},{orderLineId:'other'},{imageKeys:['inventory/other.jpg']},{targetQuantity:2}])assert.notEqual(j.snapshot,desktopSnapshot({...request,...patch}));
 });
+
+test('an active PC claim cannot be discarded by a version refresh',async()=>{
+ const db=memoryDb(),store=createDesktopJobStore(db,'jobs',()=>now);
+ const {job}=await store.ensure(request),claimed=await store.claim(job.id,'admin');
+ await assert.rejects(()=>store.rebase(claimed,{...request,inventoryVersion:'v2'}),/REBASE_FORBIDDEN/);
+ assert.equal((await store.get(job.id))?.lease,claimed.lease);
+});
+
+test('changed inventory version ages an expired claim without extending its availability window',async()=>{
+ let clock=now;const db=memoryDb(),store=createDesktopJobStore(db,'jobs',()=>clock),{job}=await store.ensure(request);
+ const claimed=await store.claim(job.id,'admin');clock=claimed.leaseUntil!+1;
+ const next={...request,inventoryVersion:'v2'},aged=await store.ensure(next);
+ assert.equal(aged.matches,false);assert.equal(aged.job.state,'WAITING');assert.equal(aged.job.lease,undefined);
+ assert.equal(aged.job.createdAt,job.createdAt);assert.equal(aged.job.attempts,job.attempts);assert.equal(aged.job.nextAt,job.nextAt);
+ db.rows.set('inventory:inventory-1',{updatedAt:'v2'});
+ const rebased=await store.rebase(aged.job,next,{table:'inventory',id:'inventory-1',version:'v2'});
+ assert.equal(rebased.id,job.id);assert.equal(rebased.nextAt,job.nextAt);assert.equal(rebased.createdAt,job.createdAt);
+ clock=now+4*DESKTOP_RETRY_MS;
+ const exhausted=await store.ensure({...next,inventoryVersion:'v3'});
+ assert.equal(exhausted.matches,false);assert.equal(exhausted.job.state,'ATTENTION');assert.equal(exhausted.job.attempts,4);
+ await assert.rejects(()=>store.rebase(exhausted.job,{...next,inventoryVersion:'v3'}),/REBASE_FORBIDDEN/);
+});
+
+test('aging a stale receipt cannot clear a concurrently renewed claim',async()=>{
+ let clock=now,replaceOnAge=false;const db=memoryDb();let replacement:DesktopJob;
+ const store=createDesktopJobStore({send:async command=>{
+  if(replaceOnAge&&command instanceof PutCommand&&command.input.Item?.state==='WAITING'){
+   replaceOnAge=false;db.rows.set('jobs:'+replacement.pk,structuredClone(replacement));
+  }
+  return db.send(command);
+ }},'jobs',()=>clock);
+ const {job}=await store.ensure(request),claimed=await store.claim(job.id,'first');clock=claimed.leaseUntil!+1;
+ replacement=claimDesktopJob(ageDesktopJob(claimed,clock),'second',clock);replaceOnAge=true;
+ const result=await store.ensure({...request,inventoryVersion:'v2'});
+ assert.equal(result.matches,false);assert.equal(result.job.state,'CLAIMED');assert.equal(result.job.actor,'second');assert.equal(result.job.lease,replacement.lease);
+ await assert.rejects(()=>store.age(claimed));
+ assert.equal((await store.get(job.id))?.lease,replacement.lease);
+});
+
+test('changed inventory version never resets an active claim or an uncertain external write',async()=>{
+ let clock=now;const db=memoryDb(),store=createDesktopJobStore(db,'jobs',()=>clock),{job}=await store.ensure(request),claimed=await store.claim(job.id,'admin');
+ const active=await store.ensure({...request,inventoryVersion:'v2'});assert.equal(active.matches,false);assert.deepEqual(active.job,claimed);
+ db.rows.set('inventory:inventory-1',{updatedAt:'v1'});
+ const started=await store.startWrite(job.id,'admin',claimed.lease!,proof(claimed),{table:'inventory',id:'inventory-1',version:'v1'});
+ clock=now+5*DESKTOP_RETRY_MS;
+ assert.deepEqual((await store.ensure({...request,inventoryVersion:'v2'})).job,started);
+ assert.deepEqual(await store.age(started),started);
+ assert.equal(db.rows.get('jobs:SALE_DESKTOP_REMOTE#mercari-1')?.state,'ACTIVE');
+});
 test('PC availability retries exactly every six hours, four windows, then attention',()=>{
  let j=newDesktopJob(request,now);assert.equal(j.attempts,1);assert.equal(ageDesktopJob(j,now+DESKTOP_RETRY_MS-1),j);
  for(let attempt=2;attempt<=4;attempt++){j=ageDesktopJob(j,now+(attempt-1)*DESKTOP_RETRY_MS);assert.equal(j.attempts,attempt);assert.equal(j.state,'WAITING');assert.equal(j.id,desktopJobId(request));}
@@ -156,14 +205,24 @@ test('IDENTIFY candidate enrichment and completion commit atomically; stale/dele
  db.rows.set('candidates:candidate-1',{id:'candidate-1',state:'PENDING',updatedAt:'v1'});
  assert.equal((await store.finish(j.id,'admin',j.lease!,e,[patch])).state,'COMPLETE');assert.equal(db.rows.get('candidates:candidate-1')?.externalListingId,'mercari-1');
 });
-test('causal rebase only changes version before write, invalidates former lease, and never clears uncertain write',async()=>{
- const db=memoryDb(),store=createDesktopJobStore(db,'jobs',()=>now),{job}=await store.ensure(request),j=await store.claim(job.id,'admin');
+test('causal rebase only changes an idle version and never clears uncertain write',async()=>{
+ const db=memoryDb(),store=createDesktopJobStore(db,'jobs',()=>now),{job:j}=await store.ensure(request);
  await assert.rejects(()=>store.rebase(j,{...request,inventoryVersion:'v2',targetQuantity:2}),/REBASE_FORBIDDEN/);
  await assert.rejects(()=>store.rebase(j,{...request,inventoryVersion:'v2',imageKeys:['inventory/other.jpg']}),/REBASE_FORBIDDEN/);
  const rebased=await store.rebase(j,{...request,inventoryVersion:'v2'});assert.equal(rebased.state,'WAITING');assert.equal(rebased.lease,undefined);assert.equal(rebased.id,j.id);
  const claimed=await store.claim(j.id,'admin');db.rows.set('inventory:inventory-1',{updatedAt:'v2'});
  const started=await store.startWrite(claimed.id,'admin',claimed.lease!,proof(claimed),{table:'inventory',id:'inventory-1',version:'v2'});
  await assert.rejects(()=>store.rebase(started,{...request,inventoryVersion:'v3'}),/REBASE_FORBIDDEN/);
+});
+
+test('refresh commits exact inventory version and idle job CAS together without extending retry windows',async()=>{
+ const db=memoryDb(),store=createDesktopJobStore(db,'jobs',()=>now),{job}=await store.ensure(request),next={...request,inventoryVersion:'v2'},guard={table:'inventory',id:'inventory-1',version:'v2'};
+ db.rows.set('inventory:inventory-1',{updatedAt:'v3'});
+ await assert.rejects(()=>store.rebase(job,next,guard));assert.equal((await store.get(job.id))?.inventoryVersion,'v1');
+ db.rows.set('inventory:inventory-1',{updatedAt:'v2'});
+ const saved=await store.rebase(job,next,guard);assert.equal(saved.inventoryVersion,'v2');assert.equal(saved.createdAt,job.createdAt);assert.equal(saved.attempts,job.attempts);assert.equal(saved.nextAt,job.nextAt);
+ const claimed=await store.claim(job.id,'admin');
+ await assert.rejects(()=>store.rebase(saved,{...next,inventoryVersion:'v3'},{...guard,version:'v3'}));assert.equal((await store.get(job.id))?.lease,claimed.lease);
 });
 test('causal Yahoo settlement stock-count title change preserves same pending/started/completed operation',async()=>{
  const before={...request,title:'【在庫5】椅子'},after={...request,title:'【在庫3】椅子',inventoryVersion:'v2'};
