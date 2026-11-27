@@ -9,9 +9,30 @@ export function stockTitleQuantity(quantity:unknown):number {
 }
 const prefixFor=(q:number)=>q>=2?`【在庫${q}】`:'';
 export const STOCK_TITLE_META='__belloStockTitle';
+const salePrefixFor=(meta:Row)=>typeof meta.salePrefix==='string'&&/^【(?:BASE|ヤフオク|メルカリショップ)】$/.test(meta.salePrefix)?meta.salePrefix:
+ typeof meta.prefix==='string'?meta.prefix.match(/^【(?:BASE|ヤフオク|メルカリショップ)】/)?.[0]??'':'';
+/** Provenance-managed count markers can move when staff prepend dates/notes.
+ * Only whole, top-level numeric markers belong to the generated title syntax. */
+function withoutManagedMarkers(title:string,meta:Row):string {
+ const salePrefix=salePrefixFor(meta);
+ let depth=0,base='',removedSalePrefix=false;
+ for(let i=0;i<title.length;){
+  // Only the first top-level generated channel marker belongs to this prefix.
+  // A nested occurrence is part of a human note, not title-management syntax.
+  if(depth===0&&salePrefix&&!removedSalePrefix&&title.startsWith(salePrefix,i)){
+   i+=salePrefix.length;removedSalePrefix=true;continue;
+  }
+  const marker=depth===0?title.slice(i).match(/^【在庫[0-9]+】/):null;
+  if(marker){i+=marker[0].length;continue;}
+  const character=title[i++];
+  if(character==='【')depth++;else if(character==='】')depth=Math.max(0,depth-1);
+  base+=character;
+ }
+ return base;
+}
 export function managedTitleBase(title:string,row:Row):string {
  const meta=titleCustomFields(titleCustomFields(row.customFields)[STOCK_TITLE_META]);
- return meta?.version===1&&typeof meta.prefix==='string'&&meta.prefix&&title.startsWith(meta.prefix)?title.slice(meta.prefix.length):title;
+ return meta?.version===1&&typeof meta.baseName==='string'&&typeof meta.prefix==='string'?withoutManagedMarkers(title,meta):title;
 }
 export function hasManagedStockTitle(row:Row):boolean{return titleCustomFields(titleCustomFields(row.customFields)[STOCK_TITLE_META]).version===1;}
 /** Only this explicit provenance grants permission to replace a prefix. */
@@ -26,9 +47,8 @@ export function managedStockTitleChange<T extends Row>(input:T,current?:Row):T &
   if(meta?.version!==1||typeof meta.baseName!=='string'||typeof meta.prefix!=='string')return input;
   const q=stockTitleQuantity(input.quantity===undefined?current?.quantity:input.quantity);
   const title=input.name===undefined?String(current?.name??meta.prefix+meta.baseName):String(input.name);
-  // A human edit is retained; only the exact previously generated prefix is removed.
-  const base=meta.prefix&&title.startsWith(meta.prefix)?title.slice(meta.prefix.length):title;
-  const salePrefix=typeof meta.salePrefix==='string'&&/^【(?:BASE|ヤフオク|メルカリショップ)】$/.test(meta.salePrefix)?meta.salePrefix:'';
+  const base=withoutManagedMarkers(title,meta);
+  const salePrefix=salePrefixFor(meta);
   const next={...meta,baseName:base,prefix:salePrefix+prefixFor(q),lastQuantity:q};
   return {...input,name:next.prefix+base,customFields:JSON.stringify({...nextCustom,[STOCK_TITLE_META]:next})};
 }
