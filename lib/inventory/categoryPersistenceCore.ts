@@ -68,10 +68,16 @@ async function persistInventoryWithCategories(input:Record<string,unknown>,expec
   const assigned=after.filter(id=>!before.includes(id));
   if(!_legacyOptions?.validatedCategories||assigned.some(id=>!_legacyOptions.validatedCategories!.includes(id)))await validateCategoryIds(assigned);
   const substantive=Object.fromEntries(Object.entries(input).filter(([key,value])=>value!==undefined&&!['id','updatedAt','listUpdatedAt','updatedBy'].includes(key)));
-  if(current&&Object.entries(substantive).every(([key,value])=>sameValue(value===null?undefined:value,current[key]))&&sameValue(before,after)&&!_legacyOptions?.extraWrites?.length)
+  // Missing-index repairs persist even when business fields are unchanged.
+  // Ordinary unchanged saves still keep their position and history untouched.
+  const missingIndexRepair=!current?.listUpdatedAt&&typeof input.listUpdatedAt==='string'&&input.listUpdatedAt.length>0;
+  if(current&&!missingIndexRepair&&Object.entries(substantive).every(([key,value])=>sameValue(value===null?undefined:value,current[key]))&&sameValue(before,after)&&!_legacyOptions?.extraWrites?.length)
     return {id,updatedAt:String(current.updatedAt),changed:false,revision:Number(current.revision??0)};
   const now=new Date(Math.max(Date.now(), Date.parse(String(current?.updatedAt??''))+1 || 0)).toISOString();
-  const values={...input,id,categoryId:after[0]??null,categoryIds:after,updatedAt:now,...(typeof input.barcode==='string'?{barcode:input.barcode.trim()}: {})};
+  // Every creation path (including authenticated workers) joins the ordered GSI.
+  // Preserve explicit timestamps used by imports and existing caller policies.
+  const indexDefaults=current?{}:{listingPartition:input.listingPartition??'ACTIVE',listUpdatedAt:input.listUpdatedAt??now};
+  const values={...input,...indexDefaults,id,categoryId:after[0]??null,categoryIds:after,updatedAt:now,...(typeof input.barcode==='string'?{barcode:input.barcode.trim()}: {})};
   const changes=categoryLinkChanges(id,before,after,now);
   changes.push(...assigned.map(categoryId=>({ConditionCheck:{TableName:inventoryTable('Category'),Key:{id:categoryId},ConditionExpression:'attribute_exists(id) AND (attribute_not_exists(isActive) OR isActive=:active)',ExpressionAttributeValues:{':active':true}}})));
   if(expectedUpdatedAt) {
