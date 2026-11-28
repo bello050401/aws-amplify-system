@@ -1,3 +1,5 @@
+import {wholesalePorts} from '../runtime/service';
+import {WholesaleRejectedError} from '../domain/wholesale';
 import {partnerCatalogPorts} from '../runtime/service';
 import {ListPreferences} from '../domain/listPreferences';
 import {readInventoryValue,readInventoryAnalysis,inventoryQuantityPlanning} from '../runtime/service';
@@ -115,6 +117,7 @@ export function LiveApp() {
     };
     return {
     snapshot,searchCatalogStore,listPhotoCache,
+    wholesale:{...wholesalePorts,newMutationId:()=>Crypto.randomUUID(),load:async()=>{try{return await wholesalePorts.load();}catch(error){if(error instanceof StaffSessionError)await revoke(error.message);throw error;}},save:async request=>{try{return await wholesalePorts.save(request);}catch(error){if(error instanceof StaffSessionError){await revoke(error.message);throw new WholesaleRejectedError(error.message);}throw error;}}},
     partnerCatalog: {
       ...partnerCatalogPorts,
       list: async () => { try { return await partnerCatalogPorts.list(); } catch (error) { if (error instanceof StaffSessionError) await revoke(error.message); throw error; } },

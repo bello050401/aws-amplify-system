@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import Link from "next/link";
 import { canEditInventory, getInventoryRole } from "@/lib/amplify/requireInventoryUser";
 import { InventoryHeader } from "../../InventoryHeader";
 import { ListingsOverviewData } from "./ListingsOverviewData";
@@ -51,6 +52,7 @@ export default async function ListingsOverviewPage() {
     <div className="flex h-full flex-col">
       <InventoryHeader role={role} center={<h1 className="text-base font-bold text-gray-900">EC出品</h1>} />
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+        <div className="mb-4 flex justify-end"><Link href="/inventory/listings/wholesale" className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-900">業販一覧を開く</Link></div>
         <Suspense fallback={<ListingsOverviewSkeleton canEdit={canEditInventory(role)} />}>
           <ListingsOverviewData canEdit={canEditInventory(role)} />
         </Suspense>

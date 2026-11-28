@@ -29,6 +29,32 @@ import type {CatalogDelta} from '../domain/catalogProtocol';
 import {singleFlight} from '../domain/singleFlight';
 import {detailTiming} from './detailTiming';
 import {validCategoryChoices,type CategoryChoice} from '../domain/categoryFilter';
+import {WholesaleRejectedError,type WholesalePorts,type WholesaleData} from '../domain/wholesale';
+import type {WholesaleSaveRequest,WholesaleSaveResult} from '../../../lib/listing/wholesale';
+
+async function wholesaleRequest(body?:WholesaleSaveRequest):Promise<{value:unknown;cookie?:string}>{
+ const session=await authenticatedSession(),controller=new AbortController(),timer=setTimeout(()=>controller.abort(),60000);
+ try{
+  const response=await monitoredFetch(API_ORIGIN+'/api/mobile/wholesale',{method:body?'POST':'GET',credentials:'same-origin',redirect:'error',signal:controller.signal,headers:{Accept:'application/json',...(session.cookie?{Cookie:session.cookie}:{}),...(body?{'Content-Type':'application/json','X-Bello-Mobile':'1'}:{})},...(body?{body:JSON.stringify(body)}:{})});
+  if(response.status===401||response.status===403)throw new StaffSessionError('業販一覧の利用権限を確認してください。');
+  if(!response.ok){if(body&&response.status>=400&&response.status<500)throw new WholesaleRejectedError('保存は受け付けられませんでした。最新情報を読み込み、権限と選択内容を確認してください。');throw new Error('WHOLESALE_UNAVAILABLE');}
+  return {value:await response.json(),cookie:session.cookie};
+ }finally{clearTimeout(timer);}
+}
+export const wholesalePorts:WholesalePorts={
+ newMutationId:()=>{throw new Error('Mutation ID must be provided by the app');},
+ load:async()=>{
+  const {value,cookie}=await wholesaleRequest(),data=value as WholesaleData;
+  if(!Array.isArray(data?.items)||typeof data.canEdit!=='boolean'||!Array.isArray(data.warnings))throw new Error('WHOLESALE_INVALID_RESPONSE');
+  return {...data,authenticatedImageOrigin:API_ORIGIN,items:data.items.map(item=>({...item,imageUrl:item.imageUrl?new URL(item.imageUrl,API_ORIGIN).href:null})),...(cookie?{imageHeaders:{Cookie:cookie}}:{})};
+ },
+ save:async request=>{
+  if(!mobileWritesEnabled())throw new WholesaleRejectedError('このアプリの保存機能は現在利用できません。');
+  const {value}=await wholesaleRequest(request),result=value as WholesaleSaveResult;
+  if(!Array.isArray(result?.results)||result.results.some(r=>!['saved','already','failed','unknown'].includes(r.status)))throw new Error('WHOLESALE_INVALID_RESULT');
+  return result;
+ },
+};
 
 const isWeb = Platform.OS === "web";
 // The web app is served by BELLO itself and uses its existing authenticated session.

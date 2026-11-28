@@ -267,7 +267,10 @@ export function ListingsOverviewTable({
             商品の状態を確認して、販売先ごとに操作できます。
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          <Link href="/inventory/listings/wholesale" className={button + " border-slate-900 font-bold"}>
+            業販
+          </Link>
           {canEdit && (
             <button className={button} onClick={() => setManualOpen(true)}>
               eコンビニ連携

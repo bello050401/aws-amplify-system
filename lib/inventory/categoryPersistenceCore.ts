@@ -49,7 +49,9 @@ async function persistInventoryWithCategories(input:Record<string,unknown>,expec
   if(expectedUpdatedAt && (!current || current.updatedAt!==expectedUpdatedAt)) throw new InventorySaveError('CONFLICT');
   if(current?.listingPartition==='MERGED') throw new InventoryMutationRejected('MERGED');
   if(current?.outboundBatchId) throw new InventoryMutationRejected('OUTBOUND_RESERVED');
-  input=managedStockTitleChange(input,current);
+  // Category-only operations must not rewrite a managed title or its provenance.
+  if(input.name!==undefined||input.quantity!==undefined||input.customFields!==undefined||!current)
+    input=managedStockTitleChange(input,current);
   if(input.name!==undefined)validateName(input.name);
   // Legacy adapter option remains compatible; every caller now allows shared codes.
   void _legacyOptions;
