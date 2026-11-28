@@ -8,6 +8,7 @@ export interface SalesTrendPoint {
   status: MonthAggregateStatus;
   totalSales: number;
   totalGrossProfit: number;
+  inventory?: { status: MonthAggregateStatus; total?: number; asOf?: string; source?: string; current?: boolean };
 }
 
 export interface SalesSummaryView {

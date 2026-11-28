@@ -2,11 +2,12 @@
 
 import { useState } from "react";
 import type { SalesTrendPoint } from "../../../../lib/inventory/salesViewTypes";
+import { inventoryTrendLabel, inventoryTrendNote } from "../../../../lib/inventory/salesInventoryTrend";
 import { salesChart } from "../../../../lib/inventory/salesChart";
 
 const WIDTH = 640;
 const HEIGHT = 220;
-const PADDING = { top: 16, right: 16, bottom: 24, left: 8 };
+const PADDING = { top: 28, right: 16, bottom: 24, left: 8 };
 
 /**
  * BELLO統合改修 master指示書(2026-08-29統合改修版) §20/§21: 売上画面の
@@ -32,7 +33,7 @@ const PADDING = { top: 16, right: 16, bottom: 24, left: 8 };
 export function SalesTrendChart({ points }: { points: SalesTrendPoint[] }) {
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
 
-  const { plotWidth, plotHeight, xFor, yFor, salesPath, profitPath } = salesChart(points, WIDTH, HEIGHT);
+  const { plotWidth, plotHeight, xFor, yFor, salesPath, profitPath, inventoryPath, inventoryYFor, inventoryMax, padding } = salesChart(points, WIDTH, HEIGHT);
 
   const hovered = hoverIndex != null ? points[hoverIndex] : null;
   const yen = (n: number) => `¥${n.toLocaleString("ja-JP")}`;
@@ -40,7 +41,7 @@ export function SalesTrendChart({ points }: { points: SalesTrendPoint[] }) {
 
   return (
     <div>
-      <div className="mb-1.5 flex items-center gap-4 text-[11px] text-gray-500">
+      <div className="mb-1.5 flex items-center flex-wrap gap-4 text-[11px] text-gray-500">
         <span className="flex items-center gap-1">
           <span className="inline-block h-0.5 w-3 bg-gray-900" aria-hidden />
           売上高
@@ -49,16 +50,17 @@ export function SalesTrendChart({ points }: { points: SalesTrendPoint[] }) {
           <span className="inline-block h-0.5 w-3 bg-emerald-500" aria-hidden />
           粗利益
         </span>
+        <span className="flex items-center gap-1"><span className="inline-block h-0.5 w-3 bg-amber-600" aria-hidden />在庫金額（右軸・円）</span>
         {hovered && (
           <span className="ml-auto font-bold text-gray-700">
             {hovered.year}年{hovered.month}月:{" "}
             {hovered.status === "ok"
               ? `売上高 ${yen(hovered.totalSales)} / 粗利益 ${yen(hovered.totalGrossProfit)}`
-              : statusLabel(hovered.status)}
+              : statusLabel(hovered.status)} / {inventoryTrendLabel(hovered)}
           </span>
         )}
       </div>
-      <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} className="w-full" role="img" aria-label="直近12ヶ月の売上高・粗利益推移">
+      <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} className="w-full" role="img" aria-label="直近12ヶ月の売上高・粗利益・在庫金額推移">
         {/* 横軸ラベル(年またぎが分かるよう、1月は「2026/1」、それ以外は「3」のように表示) */}
         {points.map((p, i) => (
           <text key={`x-${i}`} x={xFor(i)} y={HEIGHT - 6} textAnchor="middle" className="fill-gray-400" style={{ fontSize: 9 }}>
@@ -66,6 +68,10 @@ export function SalesTrendChart({ points }: { points: SalesTrendPoint[] }) {
           </text>
         ))}
 
+        <text x={padding.left} y={12} style={{fontSize:9}} fill="#6b7280">売上高・粗利益（円・共通縮尺）</text>
+        <text x={WIDTH-2} y={12} textAnchor="end" style={{fontSize:9}} fill="#b45309">在庫金額（右軸・円）</text>
+        {[0, 0.5, 1].map(ratio => <text key={ratio} x={WIDTH-2} y={inventoryYFor(inventoryMax*ratio)+3} textAnchor="end" style={{fontSize:8}} fill="#b45309">{Math.round(inventoryMax*ratio).toLocaleString('ja-JP')}</text>)}
+        <path d={inventoryPath} fill="none" stroke="#d97706" strokeWidth={2} />
         <path d={salesPath} fill="none" stroke="#111827" strokeWidth={2} />
         <path d={profitPath} fill="none" stroke="#10b981" strokeWidth={2} />
 
@@ -83,6 +89,7 @@ export function SalesTrendChart({ points }: { points: SalesTrendPoint[] }) {
                 // 値を持たない月は塗りつぶさない輪1つだけ(0円の位置に点を打たない)。
                 <circle cx={xFor(i)} cy={yFor(0)} r={3} fill="white" stroke={ringColor} strokeWidth={1.5} />
               )}
+              {p.inventory?.status === 'ok' && p.inventory.total !== undefined && <circle cx={xFor(i)} cy={inventoryYFor(p.inventory.total)} r={3} fill="#d97706" />}
               {/* ホバー/フォーカス用の透明な当たり判定列 — 点そのものは小さいため、月ごとに縦に細長い矩形を敷いて操作しやすくする。 */}
               <rect
                 x={xFor(i) - plotWidth / Math.max(points.length, 1) / 2}
@@ -92,11 +99,11 @@ export function SalesTrendChart({ points }: { points: SalesTrendPoint[] }) {
                 fill="transparent"
                 tabIndex={0}
                 role="button"
-                aria-label={
+                aria-label={`${inventoryTrendLabel(p)} / ${
                   p.status === "ok"
                     ? `${p.year}年${p.month}月: 売上高 ${yen(p.totalSales)}, 粗利益 ${yen(p.totalGrossProfit)}`
                     : `${p.year}年${p.month}月: ${label}`
-                }
+                }`}
                 onMouseEnter={() => setHoverIndex(i)}
                 onMouseLeave={() => setHoverIndex(null)}
                 onFocus={() => setHoverIndex(i)}
@@ -107,7 +114,7 @@ export function SalesTrendChart({ points }: { points: SalesTrendPoint[] }) {
                     `<title>`はHTMLのRCDATA要素でコメントが解釈されず生の
                     文字列になるため、hydrationがテキストノードを見つけられず
                     「Hydration failed」で落ちる(実際に売上画面で発生していた)。 */}
-                <title>{`${p.year}年${p.month}月: ${p.status === "ok" ? `売上高 ${yen(p.totalSales)} / 粗利益 ${yen(p.totalGrossProfit)}` : label}`}</title>
+                <title>{`${p.year}年${p.month}月: ${p.status === "ok" ? `売上高 ${yen(p.totalSales)} / 粗利益 ${yen(p.totalGrossProfit)}` : label} / ${inventoryTrendLabel(p)}`}</title>
               </rect>
             </g>
           );
@@ -117,6 +124,7 @@ export function SalesTrendChart({ points }: { points: SalesTrendPoint[] }) {
           <line x1={xFor(hoverIndex)} x2={xFor(hoverIndex)} y1={PADDING.top} y2={PADDING.top + plotHeight} stroke="#d1d5db" strokeWidth={1} />
         )}
       </svg>
+      <p className="text-[11px] text-gray-500">{inventoryTrendNote(points)}</p>
     </div>
   );
 }

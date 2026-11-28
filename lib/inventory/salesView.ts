@@ -5,6 +5,8 @@ import { getMonthlyAggregates, type MonthlyAggregatesResult } from "./salesAggre
 import { summarizeSales, shiftYearMonth, type SalesTargetItem } from "./sales";
 import { isE2EFixtureModeActive } from "./e2eFixtures";
 import { e2eLoadSalesSummary } from "./salesE2eFixtures";
+import { loadInventoryValue } from "./inventoryValueStore";
+import { inventoryTrendValue } from "./salesInventoryTrend";
 
 /**
  * 売上画面が読むデータの入口(2026-09-02 指示書§20、2026-09-11 追加修正
@@ -83,7 +85,9 @@ export async function loadSalesSummary(year: number, month: number): Promise<Sal
     return "missing";
   };
 
-  const trend: SalesTrendPoint[] = months.map((m) => {
+  // Bounded reads of existing valuation snapshots only; never scan or reconstruct on page load.
+  const inventory = await Promise.all(keys.map(key => inventoryTrendValue(key, loadInventoryValue)));
+  const trend: SalesTrendPoint[] = months.map((m, index) => {
     const ym = formatYearMonth(m.year, m.month);
     const agg = aggregates.get(ym);
     const status = statusOf(ym);
@@ -93,6 +97,7 @@ export async function loadSalesSummary(year: number, month: number): Promise<Sal
       status,
       totalSales: agg?.totalSales ?? 0,
       totalGrossProfit: agg?.totalProfit ?? 0,
+      inventory: inventory[index],
     };
   });
 
@@ -128,3 +133,4 @@ export async function loadSalesItems(year: number, month: number): Promise<Sales
   const records = await listInventoryBySaleMonth(year, month);
   return summarizeSales(records, year, month).items;
 }
+
