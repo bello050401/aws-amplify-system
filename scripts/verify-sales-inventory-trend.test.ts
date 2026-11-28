@@ -2,10 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { inventoryTrendValue, inventoryTrendLabel, inventoryTrendNote } from '../lib/inventory/salesInventoryTrend';
 import { salesChart } from '../lib/inventory/salesChart';
-import type { InventoryValueView } from '../lib/inventory/inventoryValue';
+import type { InventoryValue, InventoryValueView } from '../lib/inventory/inventoryValue';
 import type { SalesTrendPoint } from '../lib/inventory/salesViewTypes';
 const now = new Date('2026-11-28T06:23:40Z');
-const snapshot = (asOf: string, month?: string): InventoryValueView => ({status:'ok',value:{total:11416710,asOf,month,source:'記録から復元'} as any});
+const snapshot = (asOf: string, month?: string): InventoryValueView => ({status:'ok',value:{total:11416710,asOf,month,source:'記録から復元'} as InventoryValue});
 test('month-end keys, current freshness, future/error/missing remain distinct', async () => {
   const calls: (string|undefined)[]=[];
   const load = async (month?: string) => { calls.push(month); return month ? snapshot('2026-10-31T14:59:59.999Z', month) : snapshot('2026-11-28T06:23:39.388Z'); };
