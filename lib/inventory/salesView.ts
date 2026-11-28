@@ -133,4 +133,3 @@ export async function loadSalesItems(year: number, month: number): Promise<Sales
   const records = await listInventoryBySaleMonth(year, month);
   return summarizeSales(records, year, month).items;
 }
-
